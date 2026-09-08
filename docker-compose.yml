@@ -1,0 +1,15 @@
+services:
+  backend:
+    build: ./backend
+    container_name: masterview-backend
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - DB_PATH=/app/data/masterview.sqlite
+    volumes:
+      - masterview-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  masterview-data:

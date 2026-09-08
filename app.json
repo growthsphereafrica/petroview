@@ -1,0 +1,57 @@
+{
+  "expo": {
+    "name": "Master View Petroleum",
+    "slug": "master-view-forecourt",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./public/favicon.svg",
+    "scheme": "masterview",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./public/favicon.svg",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.masterview.forecourt",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Master View requires camera access to capture fuel receipt chits and scan air-gapped shift QR codes.",
+        "NSBluetoothAlwaysUsageDescription": "Master View uses Bluetooth to connect to forecourt thermal receipt belt printers."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./public/favicon.svg",
+        "backgroundColor": "#0f172a"
+      },
+      "package": "com.masterview.forecourt",
+      "permissions": [
+        "CAMERA",
+        "BLUETOOTH",
+        "BLUETOOTH_CONNECT",
+        "BLUETOOTH_SCAN",
+        "ACCESS_NETWORK_STATE",
+        "VIBRATE"
+      ]
+    },
+    "web": {
+      "favicon": "./public/favicon.svg",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Master View to access your camera for receipt capture and QR scanning."
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
+  }
+}

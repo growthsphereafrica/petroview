@@ -1,0 +1,51 @@
+{
+  "name": "master-view",
+  "private": true,
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "web": "expo start --web",
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:android": "eas build -p android",
+    "build:ios": "eas build -p ios",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2"
+  },
+  "dependencies": {
+    "@react-native-async-storage/async-storage": "^3.1.1",
+    "@react-navigation/bottom-tabs": "^7.18.18",
+    "@react-navigation/native": "^7.3.18",
+    "@react-navigation/native-stack": "^7.18.10",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
+    "@vitejs/plugin-react": "^6.1.1",
+    "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
+    "dexie": "^4.4.5",
+    "expo": "^57.0.20",
+    "expo-constants": "^57.0.17",
+    "expo-linear-gradient": "^57.0.1",
+    "expo-status-bar": "^57.0.1",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^1.41.0",
+    "lucide-react-native": "^1.41.0",
+    "qrcode": "^1.5.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-native": "^0.87.1",
+    "react-native-qrcode-svg": "^6.3.22",
+    "react-native-safe-area-context": "^5.9.1",
+    "react-native-screens": "^4.27.0",
+    "react-native-svg": "^15.15.5",
+    "react-native-web": "^0.21.2",
+    "tailwindcss": "^4.3.3"
+  }
+}

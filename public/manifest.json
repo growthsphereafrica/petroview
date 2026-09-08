@@ -1,0 +1,19 @@
+{
+  "short_name": "PetroView",
+  "name": "PetroView — Offline-First Forecourt OS",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#090d16",
+  "theme_color": "#F97316",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "categories": ["business", "productivity", "utilities"],
+  "description": "Local-First Digital Forecourt Operating System for Fuel Pump Attendants & Station Supervisors."
+}

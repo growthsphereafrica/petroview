@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
-import { View, Text, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView, Pressable } from 'react-native'
-import { Flame, KeyRound, UserCog, Zap } from 'lucide-react-native'
+import { View, Text, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView } from 'react-native'
+import { Flame, UserCog, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
-import { PrimaryButton, StyledTextInput, Card } from '../components/ui'
+import { PrimaryButton, StyledTextInput } from '../components/ui'
 import { mobileAuth, type MobileRole } from '../core/services/authService'
-import { SEED_ATTENDANTS, SEED_SUPERVISORS, seedProductionData } from '../core/infra/repositories'
+import { seedProductionData } from '../core/infra/repositories'
 
 export interface MobileSession {
   role: MobileRole
@@ -62,7 +62,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
             <StyledTextInput
               value={employeeCode}
               onChangeText={t => setEmployeeCode(t.toUpperCase())}
-              placeholder="ATT1001 or SUP1001"
+              placeholder="SUPER-ADMIN, ATT1001, SUP1001…"
               autoCapitalize="characters"
             />
 
@@ -101,48 +101,6 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
               tone="flame"
             />
           </View>
-
-          <Card style={styles.demoCard}>
-            <Text style={styles.demoTitle}>DEMO ACCOUNTS — tap to fill</Text>
-            <View style={styles.demoCols}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.demoColTitle, { color: colors.amber }]}>ATTENDANTS</Text>
-                {SEED_ATTENDANTS.slice(0, 4).map(a => (
-                  <Pressable
-                    key={a.employeeCode}
-                    onPress={() => {
-                      setEmployeeCode(a.employeeCode)
-                      setPin(a.pin)
-                      setError(null)
-                    }}
-                    style={styles.demoItem}
-                  >
-                    <Text style={[styles.demoCode, { color: colors.amber }]}>{a.employeeCode}</Text>
-                    <Text style={styles.demoPin}>PIN {a.pin}</Text>
-                    <Text style={styles.demoName} numberOfLines={1}>{a.fullName}</Text>
-                  </Pressable>
-                ))}
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.demoColTitle, { color: colors.flame }]}>SUPERVISORS</Text>
-                {SEED_SUPERVISORS.map(a => (
-                  <Pressable
-                    key={a.employeeCode}
-                    onPress={() => {
-                      setEmployeeCode(a.employeeCode)
-                      setPin(a.pin)
-                      setError(null)
-                    }}
-                    style={styles.demoItem}
-                  >
-                    <Text style={[styles.demoCode, { color: colors.flame }]}>{a.employeeCode}</Text>
-                    <Text style={styles.demoPin}>PIN {a.pin}</Text>
-                    <Text style={styles.demoName} numberOfLines={1}>{a.fullName}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          </Card>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -177,12 +135,4 @@ const styles = StyleSheet.create({
   roleBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, paddingHorizontal: 4 },
   roleText: { fontSize: 11, fontWeight: '600', flex: 1 },
   error: { color: colors.rose, fontSize: 12, fontWeight: '600', marginTop: 12 },
-  demoCard: { marginTop: 16, padding: 14 },
-  demoTitle: { color: colors.textFaint, fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 10 },
-  demoCols: { flexDirection: 'row', gap: 12 },
-  demoColTitle: { fontSize: 10, fontWeight: '800', marginBottom: 6 },
-  demoItem: { backgroundColor: colors.panel2, borderRadius: 8, borderWidth: 1, borderColor: colors.borderLight, padding: 8, marginBottom: 6 },
-  demoCode: { fontSize: 12, fontWeight: '800', fontFamily: 'monospace' },
-  demoPin: { fontSize: 10, color: colors.textDim, fontFamily: 'monospace' },
-  demoName: { fontSize: 9, color: colors.textFaint, marginTop: 2 },
 })

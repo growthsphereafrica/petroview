@@ -4,7 +4,7 @@
  * Android/iOS/web. Offline-first: all writes are local and durable.
  */
 
-import { keys, sGet, sSet } from '../store/storage'
+import { keys, sGet, sSet, sDel } from '../store/storage'
 import { randomSaltHex, hashPin as seal } from '../infra/password'
 import type { Attendant, AttendantSession, AuditEntry, Shift, Supervisor, SupervisorSession, SyncQueueItem } from '../domain/types'
 
@@ -147,69 +147,65 @@ export async function listAudit(): Promise<AuditEntry[]> {
 
 // ---- Seeds ----------------------------------------------------------------
 
+/**
+ * Bump this whenever shipping a clean-slate change. Existing installs that
+ * carried the old demo roster (ATT1001/SUP1001 etc.) are wiped once so the
+ * mobile app starts empty and only the SUPER-ADMIN is seeded again.
+ */
+const SCHEMA_VERSION = 'clean-slate-2'
+
 let seeded = false
 
 export async function seedProductionData(): Promise<void> {
   if (seeded) return
   seeded = true
 
-  const attendants = await listAttendants()
-  if (attendants.length === 0) {
-    await Promise.all(
-      SEED_ATTENDANTS.map(async seed => {
-        const salt = randomSaltHex()
-        const { hash } = await seal(seed.pin, salt)
-        await upsertAttendant({
-          id: `att-${seed.employeeCode}`,
-          employeeCode: seed.employeeCode,
-          fullName: seed.fullName,
-          pinSalt: salt,
-          pinHash: hash,
-          pumpId: seed.pumpId,
-          stationId: 'STN-GV-042',
-          active: true,
-          failedAttempts: 0,
-          lockoutUntil: null,
-          createdAt: new Date().toISOString(),
-        })
-      }),
-    )
+  const current = (await sGet<string>(keys.schemaVersion)) ?? 'none'
+  if (current !== SCHEMA_VERSION) {
+    // One-time clean slate: wipe any previously demo-seeded data from devices
+    // that ran the app before this release.
+    await Promise.all([
+      sDel(keys.attendants),
+      sDel(keys.supervisors),
+      sDel(keys.sessions),
+      sDel(keys.shifts),
+      sDel(keys.syncQueue),
+      sDel(keys.auditLog),
+      sDel(keys.sessionToken),
+      sDel(keys.cloudToken),
+    ])
+    await sSet(keys.schemaVersion, SCHEMA_VERSION)
   }
 
+  // Always guarantee the single platform SUPER-ADMIN is present (PIN 7256).
+  // No demo/clone data is ever seeded — attendants/supervisors are created by
+  // the SUPER-ADMIN through the web app or the cloud backend.
   const supervisors = await listSupervisors()
-  if (supervisors.length === 0) {
-    await Promise.all(
-      SEED_SUPERVISORS.map(async (seed, i) => {
-        const salt = randomSaltHex()
-        const { hash } = await seal(seed.pin, salt)
-        await upsertSupervisor({
-          id: `sup-${seed.employeeCode}`,
-          employeeCode: seed.employeeCode,
-          fullName: seed.fullName,
-          pinSalt: salt,
-          pinHash: hash,
-          role: i === 0 ? 'ACCOUNTANT' : 'SUPERVISOR',
-          active: true,
-          createdAt: new Date().toISOString(),
-        })
-      }),
-    )
+  const existing = supervisors.find(s => s.employeeCode.toUpperCase() === 'SUPER-ADMIN')
+  if (!existing) {
+    const salt = randomSaltHex()
+    const { hash } = await seal('7256', salt)
+    await upsertSupervisor({
+      id: 'sup-super-admin',
+      employeeCode: 'SUPER-ADMIN',
+      fullName: 'PetroView Platform Master Admin',
+      pinSalt: salt,
+      pinHash: hash,
+      role: 'SUPERVISOR',
+      active: true,
+      createdAt: new Date().toISOString(),
+    })
+  } else {
+    const salt = randomSaltHex()
+    const { hash } = await seal('7256', salt)
+    await upsertSupervisor({
+      ...existing,
+      pinSalt: salt,
+      pinHash: hash,
+      role: 'SUPERVISOR',
+      active: true,
+    })
   }
 }
 
 // hash/verify re-exported here to avoid a circular import of password directly.
-
-export const SEED_ATTENDANTS = [
-  { employeeCode: 'ATT1001', fullName: 'Kwame Mensah', pin: '2024', pumpId: 'pump-1' },
-  { employeeCode: 'ATT1002', fullName: 'Ama Serwaa', pin: '3319', pumpId: 'pump-2' },
-  { employeeCode: 'ATT1003', fullName: 'Kofi Boateng', pin: '1187', pumpId: 'pump-3' },
-  { employeeCode: 'ATT1004', fullName: 'Akosua Owusu', pin: '5520', pumpId: 'pump-4' },
-  { employeeCode: 'ATT2001', fullName: 'Yaw Darko', pin: '4726', pumpId: 'pump-2' },
-  { employeeCode: 'ATT3001', fullName: 'Efua Asante', pin: '8391', pumpId: 'pump-1' },
-]
-
-export const SEED_SUPERVISORS = [
-  { employeeCode: 'SUP1001', fullName: 'Daniel Osei', pin: '5678' },
-  { employeeCode: 'SUP1002', fullName: 'Grace Addo', pin: '5678' },
-  { employeeCode: 'SUP1003', fullName: 'Samuel Tetteh', pin: '5678' },
-]

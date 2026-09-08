@@ -12,6 +12,7 @@ import { verifyPin, hashPin } from '../infra/password'
 import { prodDb } from '../infra/db'
 import { attendantRepo, auditLogRepo, shiftRepo, supervisorRepo, supervisorSessionRepo } from '../infra/repositories'
 import { liveSyncBus } from './liveSyncBus'
+import { generateNextStaffCode } from './staffCodeService'
 import { getStationName } from '../domain/config'
 import type { AuditEntry, Attendant, Shift, ShiftStatus, Supervisor, SupervisorSession } from '../domain/types'
 
@@ -41,6 +42,25 @@ export class SupervisorService {
     assertPinShape(pin)
     const supervisor = await supervisorRepo.findByEmployeeCode(employeeCode)
     if (!supervisor) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+
+    if (supervisor.approvalStatus === 'PENDING') {
+      throw new DomainError(
+        'AUTH_ACCOUNT_DISABLED',
+        `Manager account (${supervisor.employeeCode}) is pending HQ approval. Please contact Head Office.`,
+        undefined,
+        { supervisorId: supervisor.id, approvalStatus: 'PENDING' }
+      )
+    }
+
+    if (supervisor.approvalStatus === 'REJECTED') {
+      throw new DomainError(
+        'AUTH_ACCOUNT_DISABLED',
+        `Registration for Manager ${supervisor.employeeCode} was rejected by Head Office.`,
+        undefined,
+        { supervisorId: supervisor.id, approvalStatus: 'REJECTED' }
+      )
+    }
+
     if (!supervisor.active) throw new DomainError('AUTH_ACCOUNT_DISABLED', 'Account is deactivated.')
     if (supervisor.lockoutUntil && new Date(supervisor.lockoutUntil).getTime() > Date.now()) {
       throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account is locked.', undefined, { lockoutUntil: supervisor.lockoutUntil })
@@ -69,6 +89,9 @@ export class SupervisorService {
       await supervisorRepo.updateAttempts(supervisor)
     }
 
+    const isSuperAdmin = supervisor.isSuperAdmin || employeeCode === 'SUPER-ADMIN' || employeeCode === 'PETRO-MASTER'
+    const isHQ = isSuperAdmin || supervisor.isHeadOffice || employeeCode.includes('HQ') || employeeCode.startsWith('PETRO-HQ')
+
     const session: SupervisorSession = {
       id: `ssess-${crypto.randomUUID()}`,
       token: `ssess_${crypto.randomUUID()}`,
@@ -76,6 +99,9 @@ export class SupervisorService {
       employeeCode: supervisor.employeeCode,
       fullName: supervisor.fullName,
       stationId: supervisor.stationId,
+      companyId: supervisor.companyId,
+      isHeadOffice: isHQ,
+      isSuperAdmin,
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
     }
@@ -182,8 +208,8 @@ export class SupervisorService {
     const trimmed = input.employeeCode.trim().toUpperCase()
     let code = trimmed
     if (/^\d{4,6}$/.test(trimmed)) code = `ATT${trimmed}`
-    if (!/^ATT\d{4}$/.test(code)) {
-      throw new DomainError('ATTENDANT_CODE_EXISTS', 'Employee code must be 4 digits (e.g. 1005 → ATT1005).')
+    if (!/^(?:ATT\d{4}|PETRO\d{3}[AM])$/.test(code)) {
+      throw new DomainError('ATTENDANT_CODE_EXISTS', 'Employee code format invalid (e.g. 1005 → ATT1005 or PETRO001A).')
     }
     if (!/^\d{4}$/.test(input.pin)) {
       throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
@@ -201,6 +227,10 @@ export class SupervisorService {
       pinHash: hash,
       pumpId: input.pumpId || null,
       stationId,
+      phone: '024 000 0000',
+      approvalStatus: 'APPROVED',
+      approvedAt: new Date().toISOString(),
+      approvedBy: registrar?.fullName ?? 'Supervisor',
       active: true,
       failedAttempts: 0,
       lockoutUntil: null,
@@ -222,6 +252,170 @@ export class SupervisorService {
       meta: { stationId, pumpId: attendant.pumpId },
     })
     return attendant
+  }
+
+  /**
+   * Self-registration for new attendants or managers from the public portal.
+   * Auto-generates sequential company-scoped code (e.g. GOIL001A) and sets status to PENDING.
+   */
+  async registerSelf(input: {
+    role: 'attendant' | 'supervisor'
+    fullName: string
+    phone: string
+    stationId: string
+    companyId?: string
+    companyShortCode?: string
+    pumpId?: string
+    pin: string
+    employeeCode?: string
+  }): Promise<{ employeeCode: string; fullName: string; role: 'attendant' | 'supervisor' }> {
+    if (!/^\d{4}$/.test(input.pin)) {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
+    }
+    if (!input.fullName.trim()) {
+      throw new DomainError('VALIDATION_ERROR', 'Full name is required.')
+    }
+
+    const companyPrefix = input.companyShortCode?.trim().toUpperCase() || 'PV'
+    const code = input.employeeCode?.trim().toUpperCase() || (await generateNextStaffCode(input.role, companyPrefix))
+    const { salt, hash } = await hashPin(input.pin)
+    const now = new Date().toISOString()
+    const companyId = input.companyId || 'COMP-PV'
+
+    if (input.role === 'attendant') {
+      const existing = await attendantRepo.findByEmployeeCode(code)
+      if (existing) throw new DomainError('ATTENDANT_CODE_EXISTS', `Code ${code} already exists.`)
+      const attendant: Attendant = {
+        id: `att-${crypto.randomUUID()}`,
+        employeeCode: code,
+        fullName: input.fullName.trim(),
+        pinSalt: salt,
+        pinHash: hash,
+        pumpId: input.pumpId || null,
+        stationId: input.stationId,
+        companyId,
+        companyShortCode: companyPrefix,
+        phone: input.phone.trim() || '024 000 0000',
+        approvalStatus: 'PENDING',
+        approvedAt: null,
+        approvedBy: null,
+        active: false,
+        failedAttempts: 0,
+        lockoutUntil: null,
+        createdAt: now,
+      }
+      await attendantRepo.add(attendant)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'INSERT', key: attendant.id })
+    } else {
+      const existing = await supervisorRepo.findByEmployeeCode(code)
+      if (existing) throw new DomainError('ATTENDANT_CODE_EXISTS', `Code ${code} already exists.`)
+      const supervisor: Supervisor = {
+        id: `sup-${crypto.randomUUID()}`,
+        employeeCode: code,
+        fullName: input.fullName.trim(),
+        pinSalt: salt,
+        pinHash: hash,
+        stationId: input.stationId,
+        companyId,
+        companyShortCode: companyPrefix,
+        phone: input.phone.trim() || '024 000 0000',
+        isHeadOffice: false,
+        approvalStatus: 'PENDING',
+        approvedAt: null,
+        approvedBy: null,
+        active: false,
+        failedAttempts: 0,
+        lockoutUntil: null,
+        createdAt: now,
+      }
+      await supervisorRepo.add(supervisor)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'INSERT', key: supervisor.id })
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_REGISTERED',
+      actorId: 'self-register',
+      actorName: input.fullName.trim(),
+      actorRole: 'SYSTEM',
+      targetId: code,
+      targetDescription: `New ${input.role} registration (${code}, ${input.fullName}) pending HQ approval for company ${companyPrefix}`,
+      notes: `Station: ${getStationName(input.stationId)}`,
+      timestamp: now,
+    })
+
+    return { employeeCode: code, fullName: input.fullName.trim(), role: input.role }
+  }
+
+  /** Lists all pending staff waiting for HQ Super Admin approval, optionally scoped by company. */
+  async listPendingStaff(companyId?: string): Promise<{ attendants: Attendant[]; supervisors: Supervisor[] }> {
+    const [attendants, supervisors] = await Promise.all([
+      attendantRepo.listPending(),
+      supervisorRepo.listPending(),
+    ])
+    return {
+      attendants: companyId ? attendants.filter(a => a.companyId === companyId) : attendants,
+      supervisors: companyId ? supervisors.filter(s => s.companyId === companyId) : supervisors,
+    }
+  }
+
+  /** Lists all staff across all stations with role & approval status, optionally scoped by company. */
+  async listAllStaff(companyId?: string): Promise<{ attendants: Attendant[]; supervisors: Supervisor[] }> {
+    const [attendants, supervisors] = await Promise.all([
+      attendantRepo.listAll(),
+      supervisorRepo.listAll(),
+    ])
+    const filteredAttendants = companyId ? attendants.filter(a => a.companyId === companyId) : attendants
+    const filteredSupervisors = companyId ? supervisors.filter(s => s.companyId === companyId) : supervisors
+
+    return {
+      attendants: filteredAttendants.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+      supervisors: filteredSupervisors.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+    }
+  }
+
+  /** Approves a pending staff account (Attendant or Manager). */
+  async approveStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Super Admin'): Promise<void> {
+    if (role === 'attendant') {
+      await attendantRepo.approve(id, approverName)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
+    } else {
+      await supervisorRepo.approve(id, approverName)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'UPDATE', key: id })
+    }
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_APPROVED',
+      actorId: 'hq-admin',
+      actorName: approverName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `Approved ${role} account (${id})`,
+      notes: 'Authorized by HQ Super Admin',
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /** Rejects a pending staff account. */
+  async rejectStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Super Admin', reason?: string): Promise<void> {
+    if (role === 'attendant') {
+      await attendantRepo.reject(id, approverName)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
+    } else {
+      await supervisorRepo.reject(id, approverName)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'UPDATE', key: id })
+    }
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_REJECTED',
+      actorId: 'hq-admin',
+      actorName: approverName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `Rejected ${role} account (${id})`,
+      notes: reason || 'Rejected by HQ Super Admin',
+      timestamp: new Date().toISOString(),
+    })
   }
 
   async deactivateAttendant(id: string, actor?: Pick<Supervisor, 'id' | 'fullName'>): Promise<void> {

@@ -33,6 +33,24 @@ export class AuthService {
       throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
     }
 
+    if (attendant.approvalStatus === 'PENDING') {
+      throw new DomainError(
+        'AUTH_ACCOUNT_DISABLED',
+        `Account (${attendant.employeeCode}) is pending HQ approval. Please contact your Station Manager or Head Office Administrator.`,
+        undefined,
+        { attendantId: attendant.id, approvalStatus: 'PENDING' }
+      )
+    }
+
+    if (attendant.approvalStatus === 'REJECTED') {
+      throw new DomainError(
+        'AUTH_ACCOUNT_DISABLED',
+        `Registration for ${attendant.employeeCode} was rejected by Head Office.`,
+        undefined,
+        { attendantId: attendant.id, approvalStatus: 'REJECTED' }
+      )
+    }
+
     if (!attendant.active) {
       throw new DomainError('AUTH_ACCOUNT_DISABLED', 'Account is deactivated.', undefined, { attendantId: attendant.id })
     }

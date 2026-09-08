@@ -17,6 +17,15 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   ATTENDANT_DEACTIVATED: 'Attendant Deactivated',
   SHIFT_OPENED: 'Shift Opened',
   SHIFT_CLOSED: 'Shift Closed',
+  STAFF_REGISTERED: 'Staff Self-Registered',
+  STAFF_APPROVED: 'Staff Approved (HQ)',
+  STAFF_REJECTED: 'Staff Rejected (HQ)',
+  STAFF_DEACTIVATED: 'Staff Deactivated',
+  SUPERVISOR_REGISTERED: 'Manager Registered',
+  SUPERVISOR_DEACTIVATED: 'Manager Deactivated',
+  COMPANY_CREATED: 'OMC Onboarded',
+  COMPANY_UPDATED: 'OMC Updated',
+  STATION_CREATED: 'Station Added',
 }
 
 const ACTION_TONE: Record<AuditAction, string> = {
@@ -27,6 +36,15 @@ const ACTION_TONE: Record<AuditAction, string> = {
   ATTENDANT_DEACTIVATED: 'text-rose-400',
   SHIFT_OPENED: 'text-emerald-400',
   SHIFT_CLOSED: 'text-emerald-400',
+  STAFF_REGISTERED: 'text-amber-400',
+  STAFF_APPROVED: 'text-emerald-400',
+  STAFF_REJECTED: 'text-rose-400',
+  STAFF_DEACTIVATED: 'text-rose-400',
+  SUPERVISOR_REGISTERED: 'text-blue-400',
+  SUPERVISOR_DEACTIVATED: 'text-rose-400',
+  COMPANY_CREATED: 'text-rose-400',
+  COMPANY_UPDATED: 'text-amber-400',
+  STATION_CREATED: 'text-cyan-400',
 }
 
 export const SupervisorAuditLogScreen: React.FC<{

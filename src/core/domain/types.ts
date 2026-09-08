@@ -13,7 +13,56 @@ export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED'
 
 export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT'
 
-export type AuditAction = 'REVIEW_APPROVED' | 'REJECTED' | 'PIN_RESET' | 'ATTENDANT_REGISTERED' | 'ATTENDANT_DEACTIVATED' | 'SHIFT_OPENED' | 'SHIFT_CLOSED'
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+
+export type UnifiedRole = 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
+
+export interface Company {
+  id: string
+  name: string
+  shortCode: string
+  tagline: string
+  logoText: string
+  primaryColor: string
+  primaryDark: string
+  accentColor: string
+  currency: string
+  adminCode: string
+  adminName: string
+  phone?: string
+  active: boolean
+  createdAt: string
+}
+
+export interface CompanyStation {
+  id: string
+  companyId: string
+  name: string
+  code: string
+  location: string
+  region: string
+  pumpsCount: number
+  supervisorName?: string
+  createdAt: string
+}
+
+export type AuditAction =
+  | 'REVIEW_APPROVED'
+  | 'REJECTED'
+  | 'PIN_RESET'
+  | 'ATTENDANT_REGISTERED'
+  | 'ATTENDANT_DEACTIVATED'
+  | 'SHIFT_OPENED'
+  | 'SHIFT_CLOSED'
+  | 'STAFF_REGISTERED'
+  | 'STAFF_APPROVED'
+  | 'STAFF_REJECTED'
+  | 'STAFF_DEACTIVATED'
+  | 'SUPERVISOR_REGISTERED'
+  | 'SUPERVISOR_DEACTIVATED'
+  | 'COMPANY_CREATED'
+  | 'COMPANY_UPDATED'
+  | 'STATION_CREATED'
 
 export interface MeterReading {
   fuelCode: FuelCode
@@ -43,6 +92,12 @@ export interface Attendant {
   pinHash: string
   pumpId: string | null
   stationId: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  approvalStatus: ApprovalStatus
+  approvedAt?: string | null
+  approvedBy?: string | null
   active: boolean
   failedAttempts: number
   lockoutUntil: string | null
@@ -55,6 +110,8 @@ export interface AttendantSession {
   attendantId: string
   employeeCode: string
   fullName: string
+  stationId?: string
+  companyId?: string
   createdAt: string
   expiresAt: string
 }
@@ -66,6 +123,14 @@ export interface Supervisor {
   pinSalt: string
   pinHash: string
   stationId: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  isHeadOffice?: boolean
+  isSuperAdmin?: boolean
+  approvalStatus: ApprovalStatus
+  approvedAt?: string | null
+  approvedBy?: string | null
   active: boolean
   failedAttempts: number
   lockoutUntil: string | null
@@ -79,6 +144,9 @@ export interface SupervisorSession {
   employeeCode: string
   fullName: string
   stationId: string
+  companyId?: string
+  isHeadOffice?: boolean
+  isSuperAdmin?: boolean
   createdAt: string
   expiresAt: string
 }

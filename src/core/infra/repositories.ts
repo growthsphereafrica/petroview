@@ -38,6 +38,28 @@ export const attendantRepo = {
   async listActive(): Promise<Attendant[]> {
     return prodDb.attendants.where('active').equals(1).toArray()
   },
+  async listPending(): Promise<Attendant[]> {
+    return prodDb.attendants.filter(a => a.approvalStatus === 'PENDING').toArray()
+  },
+  async listAll(): Promise<Attendant[]> {
+    return prodDb.attendants.toArray()
+  },
+  async approve(id: string, approverName: string): Promise<void> {
+    await prodDb.attendants.update(id, {
+      approvalStatus: 'APPROVED',
+      active: true,
+      approvedAt: new Date().toISOString(),
+      approvedBy: approverName,
+    })
+  },
+  async reject(id: string, approverName: string): Promise<void> {
+    await prodDb.attendants.update(id, {
+      approvalStatus: 'REJECTED',
+      active: false,
+      approvedAt: new Date().toISOString(),
+      approvedBy: approverName,
+    })
+  },
 }
 
 export const supervisorRepo = {
@@ -47,14 +69,42 @@ export const supervisorRepo = {
   async getById(id: string): Promise<Supervisor | undefined> {
     return prodDb.supervisors.get(id)
   },
+  async add(supervisor: Supervisor): Promise<void> {
+    await prodDb.supervisors.add(supervisor)
+  },
   async updateAttempts(supervisor: Supervisor): Promise<void> {
     await prodDb.supervisors.update(supervisor.id, {
       failedAttempts: supervisor.failedAttempts,
       lockoutUntil: supervisor.lockoutUntil,
     })
   },
+  async deactivate(id: string): Promise<void> {
+    await prodDb.supervisors.update(id, { active: false })
+  },
   async listActive(): Promise<Supervisor[]> {
     return prodDb.supervisors.where('active').equals(1).toArray()
+  },
+  async listPending(): Promise<Supervisor[]> {
+    return prodDb.supervisors.filter(s => s.approvalStatus === 'PENDING').toArray()
+  },
+  async listAll(): Promise<Supervisor[]> {
+    return prodDb.supervisors.toArray()
+  },
+  async approve(id: string, approverName: string): Promise<void> {
+    await prodDb.supervisors.update(id, {
+      approvalStatus: 'APPROVED',
+      active: true,
+      approvedAt: new Date().toISOString(),
+      approvedBy: approverName,
+    })
+  },
+  async reject(id: string, approverName: string): Promise<void> {
+    await prodDb.supervisors.update(id, {
+      approvalStatus: 'REJECTED',
+      active: false,
+      approvedAt: new Date().toISOString(),
+      approvedBy: approverName,
+    })
   },
 }
 

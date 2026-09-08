@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useState } from 'react'
+import React, { lazy, Suspense, useState, useEffect } from 'react'
 import { ForecourtProvider, useForecourt } from './context/ForecourtContext'
 import { NetworkSimulatorProvider, useNetworkSimulator } from './context/NetworkSimulatorContext'
 import { MVPLogo } from './components/common/MVPLogo'
@@ -12,8 +12,23 @@ import {
   clearUnifiedSession,
   type UnifiedSession,
 } from './features/unified/UnifiedLoginScreen'
+import {
+  Smartphone,
+  Building2,
+  CheckCircle2,
+  AlertTriangle,
+  Info,
+  X,
+  ChevronDown,
+  LogOut,
+  Maximize2,
+  ShieldCheck,
+  Sparkles,
+  UserCog,
+  Zap,
+} from 'lucide-react'
 
-// Code-split the heavy production portals: each loads on demand.
+// Code-split heavy production portals on demand
 const ProductionAttendantApp = lazy(() =>
   import('./features/attendant/ProductionAttendantApp').then(m => ({ default: m.ProductionAttendantApp })),
 )
@@ -23,33 +38,29 @@ const ProductionSupervisorApp = lazy(() =>
 const ProductionHeadOfficeDashboard = lazy(() =>
   import('./features/headoffice/HeadOfficeDashboard').then(m => ({ default: m.ProductionHeadOfficeDashboard })),
 )
-import {
-  Smartphone,
-  Tablet,
-  Building2,
-  Monitor,
-  Wifi,
-  WifiOff,
-  Globe,
-  Radio,
-  CheckCircle2,
-  AlertTriangle,
-  Info,
-  X,
-  ChevronDown,
-  Code
-} from 'lucide-react'
-
-type AppViewMode = 'attendant' | 'supervisor_desktop' | 'supervisor_mobile' | 'headoffice'
+const SuperSuperAdminDashboard = lazy(() =>
+  import('./features/superadmin/SuperSuperAdminDashboard').then(m => ({ default: m.SuperSuperAdminDashboard })),
+)
 
 const MainAppLayout: React.FC = () => {
-  const [activeMode, setActiveMode] = useState<AppViewMode>(() =>
-    loadUnifiedSession()?.role === 'attendant' ? 'attendant' : 'supervisor_desktop',
-  )
-  const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false)
   const [session, setSession] = useState<UnifiedSession | null>(() => loadUnifiedSession())
+  const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false)
+  const [desktopFrameMode, setDesktopFrameMode] = useState<boolean>(false)
   const { activeCompany, activeStation, notification, setNotification } = useForecourt()
-  const { networkMode, isOnline, isLocalWifi, isOffline } = useNetworkSimulator()
+  const { networkMode, isOnline, isLocalWifi } = useNetworkSimulator()
+
+  // Screen size detection for responsive mobile layout
+  const [isMobileScreen, setIsMobileScreen] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false,
+  )
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileScreen(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   if (!session) {
     return (
@@ -57,170 +68,195 @@ const MainAppLayout: React.FC = () => {
         onAuthenticated={next => {
           saveUnifiedSession(next)
           setSession(next)
-          setActiveMode(next.role === 'attendant' ? 'attendant' : 'supervisor_desktop')
         }}
       />
     )
   }
 
+  const roleLabel =
+    session.role === 'superadmin'
+      ? 'Platform Master'
+      : session.role === 'headoffice'
+      ? 'Company HQ Admin'
+      : session.role === 'supervisor'
+      ? 'Station Manager'
+      : 'Fuel Attendant'
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
-      {/* Production Navigation Header */}
-      <header className="bg-slate-900/95 backdrop-blur-md border-b border-slate-800/80 px-6 py-3 shrink-0 flex flex-wrap items-center justify-between gap-4 sticky top-0 z-40">
-        {/* Brand & Multi-Company Tenant Switcher */}
-        <div className="flex items-center gap-4">
-          <MVPLogo size="md" showText={true} tagline={true} />
+    <div className="min-h-screen bg-[#080c14] text-slate-100 flex flex-col font-sans selection:bg-orange-500/30">
+      {/* Clean Production Enterprise Header */}
+      <header className="bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-2.5 shrink-0 flex items-center justify-between gap-3 sticky top-0 z-40">
+        {/* Brand & Station Identity */}
+        <div className="flex items-center gap-3">
+          <MVPLogo size="md" showText={!isMobileScreen} tagline={!isMobileScreen} />
 
-          {/* Active Company & Branch Switcher Button */}
+          {/* Active Station / Enterprise Tag */}
           <button
-            onClick={() => setIsCompanyModalOpen(true)}
-            className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-2xl bg-slate-950/80 border border-slate-700/80 hover:border-orange-500/80 transition shadow-inner group"
-            title="Click to switch active Oil & Gas Company or Branch Station"
-          >
-            <span className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30" style={{ backgroundColor: activeCompany.primaryColor }} />
-            <div className="text-left">
-              <span className="text-[10px] font-mono font-bold text-orange-400 block uppercase leading-none">
-                {activeCompany.shortCode} Tenant
-              </span>
-              <span className="text-xs font-bold text-white leading-tight group-hover:text-orange-200 transition">
-                {activeStation.name}
-              </span>
-            </div>
-            <ChevronDown className="w-3.5 h-3.5 text-slate-400 group-hover:text-orange-400 transition" />
-          </button>
-        </div>
-
-        {/* 4 Clean Production Role Portals */}
-        <div className="flex items-center gap-1.5 p-1 bg-slate-950/90 rounded-2xl border border-slate-800 shadow-inner overflow-x-auto">
-          <button
-            onClick={() => setActiveMode('attendant')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 ${
-              activeMode === 'attendant'
-                ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 text-white shadow-md shadow-orange-950/60 border border-orange-400/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900/50'
+            onClick={() => (session.role === 'headoffice' || session.role === 'superadmin') && setIsCompanyModalOpen(true)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-left transition ${
+              session.role === 'headoffice' || session.role === 'superadmin'
+                ? 'hover:border-orange-500/80 cursor-pointer group'
+                : 'cursor-default'
             }`}
+            title={session.role === 'superadmin' ? 'Global Platform Owner' : session.role === 'headoffice' ? 'Switch company/station' : 'Assigned station'}
           >
-            <Smartphone className={`w-4 h-4 ${activeMode === 'attendant' ? 'text-white' : 'text-orange-400'}`} />
-            <span>Attendant (App / Web)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('supervisor_desktop')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 ${
-              activeMode === 'supervisor_desktop'
-                ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 text-white shadow-md shadow-orange-950/60 border border-orange-400/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900/50'
-            }`}
-          >
-            <Monitor className={`w-4 h-4 ${activeMode === 'supervisor_desktop' ? 'text-white' : 'text-orange-400'}`} />
-            <span>Supervisor Console (Web)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('supervisor_mobile')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 ${
-              activeMode === 'supervisor_mobile'
-                ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 text-white shadow-md shadow-orange-950/60 border border-orange-400/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900/50'
-            }`}
-          >
-            <Tablet className={`w-4 h-4 ${activeMode === 'supervisor_mobile' ? 'text-white' : 'text-amber-400'}`} />
-            <span>Supervisor Handheld (App)</span>
-          </button>
-
-          <button
-            onClick={() => setActiveMode('headoffice')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition shrink-0 ${
-              activeMode === 'headoffice'
-                ? 'bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 text-white shadow-md shadow-orange-950/60 border border-orange-400/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-900/50'
-            }`}
-          >
-            <Building2 className={`w-4 h-4 ${activeMode === 'headoffice' ? 'text-white' : 'text-amber-400'}`} />
-            <span>Head Office & ERP APIs</span>
-          </button>
-        </div>
-
-        {/* Right Actions: Signed-in identity + PWA Install + Network Pill */}
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-slate-950 border border-slate-800">
-            <span className={`w-2 h-2 rounded-full ${session.role === 'supervisor' ? 'bg-orange-400' : 'bg-amber-400'}`} />
+            <span
+              className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30"
+              style={{ backgroundColor: session.role === 'superadmin' ? '#F43F5E' : activeCompany.primaryColor }}
+            />
             <div className="leading-tight">
-              <p className="text-[10px] font-mono font-bold text-slate-300">{session.fullName}</p>
-              <p className="text-[9px] font-mono text-slate-500 uppercase">{session.employeeCode} · {session.role}</p>
+              <span className="text-[9px] font-mono font-bold text-orange-400 block uppercase">
+                {session.role === 'superadmin'
+                  ? 'Master Console'
+                  : session.role === 'headoffice'
+                  ? session.companyShortCode || 'Enterprise Network'
+                  : activeCompany.shortCode}
+              </span>
+              <span className="text-xs font-bold text-white truncate max-w-[140px] sm:max-w-none block">
+                {session.role === 'superadmin'
+                  ? 'All Registered OMCs'
+                  : session.companyName || session.stationName || activeStation.name}
+              </span>
             </div>
+            {(session.role === 'headoffice' || session.role === 'superadmin') && (
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-orange-400 transition ml-0.5" />
+            )}
+          </button>
+        </div>
+
+        {/* Right Section: Role View Mode toggle + Operator Profile + Connectivity + Sign Out */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Attendant Desktop View Toggle (Full Screen vs Device Frame) */}
+          {session.role === 'attendant' && !isMobileScreen && (
+            <button
+              onClick={() => setDesktopFrameMode(v => !v)}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white text-[11px] font-bold flex items-center gap-1.5 transition"
+              title={desktopFrameMode ? 'Switch to Full Screen View' : 'Switch to Handheld Phone Frame'}
+            >
+              {desktopFrameMode ? <Maximize2 className="w-3.5 h-3.5 text-orange-400" /> : <Smartphone className="w-3.5 h-3.5 text-orange-400" />}
+              <span>{desktopFrameMode ? 'Full View' : 'Phone Frame'}</span>
+            </button>
+          )}
+
+          {/* User Profile Pill */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner">
+            <div
+              className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${
+                session.role === 'superadmin'
+                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                  : session.role === 'headoffice'
+                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                  : session.role === 'supervisor'
+                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+              }`}
+            >
+              {session.role === 'superadmin' ? (
+                <Sparkles className="w-3.5 h-3.5" />
+              ) : session.role === 'headoffice' ? (
+                <Building2 className="w-3.5 h-3.5" />
+              ) : session.role === 'supervisor' ? (
+                <UserCog className="w-3.5 h-3.5" />
+              ) : (
+                <Zap className="w-3.5 h-3.5" />
+              )}
+            </div>
+
+            <div className="leading-tight hidden sm:block">
+              <p className="text-xs font-bold text-white truncate max-w-[130px]">{session.fullName}</p>
+              <p className="text-[10px] font-mono text-slate-400">
+                <span className="text-orange-400 font-bold">{session.employeeCode}</span> · {roleLabel}
+              </p>
+            </div>
+
+            {/* Sign Out Button */}
             <button
               onClick={() => {
                 clearUnifiedSession()
                 setSession(null)
               }}
-              className="ml-1 px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[10px] font-bold text-rose-400 hover:bg-rose-500/10 transition"
-              title="Sign out of all portals"
+              className="ml-1 p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-rose-400 hover:bg-rose-500/15 hover:border-rose-500/40 transition flex items-center gap-1"
+              title="Sign Out"
             >
-              Sign out
+              <LogOut className="w-3.5 h-3.5" />
+              <span className="text-[10px] font-bold hidden md:inline">Sign out</span>
             </button>
           </div>
 
           <PWAInstallPrompt />
 
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-950 border border-slate-800 text-xs font-mono">
+          {/* Connectivity Status Pill */}
+          <div
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs font-mono"
+            title={networkMode === 'online' ? 'Cloud Connected' : networkMode === 'local_wifi' ? 'Station Wi-Fi Mesh' : 'Air-Gapped Offline'}
+          >
             <span
               className={`w-2 h-2 rounded-full ${
                 isOnline ? 'bg-emerald-500 animate-pulse' : isLocalWifi ? 'bg-amber-500' : 'bg-rose-500'
               }`}
             />
-            <span className="text-slate-300 font-bold capitalize text-[11px]">
-              {networkMode === 'online' ? 'Cloud Connected' : networkMode === 'local_wifi' ? 'Station Wi-Fi Mesh' : 'Air-Gapped Offline'}
+            <span className="text-slate-400 text-[10px] font-bold capitalize hidden lg:inline">
+              {networkMode === 'online' ? 'Cloud' : networkMode === 'local_wifi' ? 'Mesh' : 'Offline'}
             </span>
           </div>
         </div>
       </header>
 
-      {/* Main View Area */}
+      {/* Main View Area with Strict Role-Based Portal Access */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <Suspense
           fallback={
-            <div className="flex-1 flex flex-col items-center justify-center bg-slate-950 gap-3">
+            <div className="flex-1 flex flex-col items-center justify-center bg-[#080c14] gap-3">
               <span className="w-10 h-10 border-4 border-slate-800 border-t-orange-500 rounded-full animate-spin" />
               <p className="text-xs font-mono text-slate-500">Loading PetroView portal…</p>
             </div>
           }
         >
-        {activeMode === 'attendant' && (
-          <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center bg-slate-950">
-<DeviceFrame
-              type="phone"
-              title="Attendant Mobile Forecourt OS"
-              subtitle="Production build — offline-first with locked shift lifecycle"
-            >
-              <ProductionAttendantApp />
-            </DeviceFrame>
-          </div>
-        )}
+          {/* 1. Attendant Portal */}
+          {session.role === 'attendant' && (
+            <div className="flex-1 flex flex-col overflow-y-auto bg-[#080c14]">
+              {desktopFrameMode && !isMobileScreen ? (
+                <div className="flex-1 p-6 flex flex-col items-center justify-center">
+                  <DeviceFrame
+                    type="phone"
+                    title="Attendant Mobile Forecourt OS"
+                    subtitle="Simulated handheld device terminal"
+                  >
+                    <ProductionAttendantApp />
+                  </DeviceFrame>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col w-full max-w-2xl mx-auto">
+                  <ProductionAttendantApp />
+                </div>
+              )}
+            </div>
+          )}
 
-        {activeMode === 'supervisor_desktop' && (
-          <div className="flex-1 overflow-y-auto bg-slate-950">
-            <ProductionSupervisorApp />
-          </div>
-        )}
-
-        {activeMode === 'supervisor_mobile' && (
-          <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center bg-slate-950">
-            <DeviceFrame
-              type="phone"
-              title="Supervisor Handheld Station Hub"
-              subtitle="Touch-optimized mobile tablet app for forecourt audits & QR scanning"
-            >
+          {/* 2. Station Manager / Supervisor Portal */}
+          {session.role === 'supervisor' && (
+            <div className="flex-1 overflow-y-auto bg-[#080c14]">
               <ProductionSupervisorApp />
-            </DeviceFrame>
-          </div>
-        )}
+            </div>
+          )}
 
-        {activeMode === 'headoffice' && <ProductionHeadOfficeDashboard />}
+          {/* 3. Company Head Office Portal */}
+          {session.role === 'headoffice' && (
+            <div className="flex-1 overflow-y-auto bg-[#080c14]">
+              <ProductionHeadOfficeDashboard session={session} />
+            </div>
+          )}
+
+          {/* 4. Platform Master Super Super Admin Console */}
+          {session.role === 'superadmin' && (
+            <div className="flex-1 overflow-y-auto bg-[#080c14]">
+              <SuperSuperAdminDashboard />
+            </div>
+          )}
         </Suspense>
       </main>
 
-      {/* Multi-Company & Branch Switcher Modal */}
+      {/* Multi-Company & Branch Switcher Modal (HQ & Super Admin) */}
       <CompanySelectorModal
         isOpen={isCompanyModalOpen}
         onClose={() => setIsCompanyModalOpen(false)}

@@ -7,6 +7,7 @@ export type DomainErrorCode =
   | 'AUTH_ACCOUNT_DISABLED'
   | 'AUTH_ACCOUNT_LOCKED'
   | 'AUTH_SESSION_EXPIRED'
+  | 'AUTH_ACCOUNT_PENDING'
   | 'SHIFT_NOT_OPEN'
   | 'SHIFT_ALREADY_EXISTS'
   | 'SHIFT_ALREADY_CLOSED'
@@ -22,6 +23,9 @@ export type DomainErrorCode =
   | 'SHIFT_NOT_REVIEWABLE'
   | 'ATTENDANT_CODE_EXISTS'
   | 'ATTENDANT_NOT_FOUND'
+  | 'STAFF_CODE_EXISTS'
+  | 'STAFF_NOT_FOUND'
+  | 'VALIDATION_ERROR'
   | 'UNKNOWN'
 
 export class DomainError extends Error {

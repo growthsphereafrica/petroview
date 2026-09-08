@@ -12,6 +12,8 @@ import type {
   AuditEntry,
   Attendant,
   AttendantSession,
+  Company,
+  CompanyStation,
   ReceiptRecord,
   Shift,
   ShiftTransaction,
@@ -27,6 +29,8 @@ export class ProductionDatabase extends Dexie {
   supervisorSessions!: Table<SupervisorSession, string>
   shifts!: Table<Shift, string>
   transactions!: Table<ShiftTransaction, string>
+  companies!: Table<Company, string>
+  companyStations!: Table<CompanyStation, string>
   receipts!: Table<ReceiptRecord, string>
   syncQueue!: Table<SyncQueueItem, string>
   auditLog!: Table<AuditEntry, string>
@@ -62,10 +66,132 @@ export class ProductionDatabase extends Dexie {
       syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
       auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
     })
+    this.version(4).stores({
+      attendants: 'id, employeeCode, stationId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, active, approvalStatus, isHeadOffice',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
+    })
+    this.version(5).stores({
+      companies: 'id, shortCode, name, adminCode, active',
+      companyStations: 'id, companyId, code, name',
+      attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
+    })
   }
 }
 
 export const prodDb = new ProductionDatabase()
+
+export interface SeedCompany {
+  id: string
+  name: string
+  shortCode: string
+  tagline: string
+  logoText: string
+  primaryColor: string
+  primaryDark: string
+  accentColor: string
+  currency: string
+  adminCode: string
+  adminName: string
+  adminPin: string
+  phone: string
+  stations: { id: string; name: string; code: string; location: string; region: string; pumpsCount: number }[]
+}
+
+export const SEED_COMPANIES: SeedCompany[] = [
+  {
+    id: 'COMP-PV',
+    name: 'PetroView Petroleum',
+    shortCode: 'PV',
+    tagline: 'Local-First Forecourt Operating System',
+    logoText: 'PETROVIEW',
+    primaryColor: '#F97316',
+    primaryDark: '#C2410C',
+    accentColor: '#F59E0B',
+    currency: 'GHS',
+    adminCode: 'PV-HQ01',
+    adminName: 'PetroView Operations HQ',
+    adminPin: '9999',
+    phone: '030 200 1100',
+    stations: [
+      { id: 'STN-GV-042', name: 'Green Valley Main', code: 'GV-042', location: 'Accra - Tema Motorway Corridor', region: 'Greater Accra', pumpsCount: 4 },
+      { id: 'STN-AB-015', name: 'Airport Bypass Express', code: 'AB-015', location: 'Airport Residential, Accra', region: 'Greater Accra', pumpsCount: 2 },
+      { id: 'STN-TH-021', name: 'Takoradi Harbour Hub', code: 'TH-021', location: 'Harbour Road, Takoradi', region: 'Western Region', pumpsCount: 2 },
+    ],
+  },
+  {
+    id: 'COMP-GOIL',
+    name: 'GOIL Ghana PLC',
+    shortCode: 'GOIL',
+    tagline: 'Good Energy. Ghana’s Pride.',
+    logoText: 'GOIL GHANA',
+    primaryColor: '#FF8200',
+    primaryDark: '#D46A00',
+    accentColor: '#009639',
+    currency: 'GHS',
+    adminCode: 'GOIL-HQ01',
+    adminName: 'GOIL Corporate HQ',
+    adminPin: '9999',
+    phone: '030 200 2200',
+    stations: [
+      { id: 'GOIL-001', name: 'Accra Ridge Flagship', code: 'GOIL-RDG', location: 'Ridge Roundabout, Accra', region: 'Greater Accra', pumpsCount: 4 },
+      { id: 'GOIL-002', name: 'Tema Port Industrial Hub', code: 'GOIL-TP', location: 'Harbour Road, Tema', region: 'Greater Accra', pumpsCount: 3 },
+      { id: 'GOIL-003', name: 'Kumasi Tech Junction', code: 'GOIL-KSI', location: 'KNUST Junction, Kumasi', region: 'Ashanti Region', pumpsCount: 4 },
+    ],
+  },
+  {
+    id: 'COMP-TOTAL',
+    name: 'TotalEnergies Ghana',
+    shortCode: 'TOTAL',
+    tagline: 'Committed to Better Energy.',
+    logoText: 'TOTALENERGIES',
+    primaryColor: '#E20613',
+    primaryDark: '#B8000B',
+    accentColor: '#002B49',
+    currency: 'GHS',
+    adminCode: 'TOT-HQ01',
+    adminName: 'TotalEnergies HQ Admin',
+    adminPin: '9999',
+    phone: '030 200 3300',
+    stations: [
+      { id: 'TOTAL-001', name: 'Ring Road Central Express', code: 'TOT-RRC', location: 'Ring Road Central, Accra', region: 'Greater Accra', pumpsCount: 4 },
+      { id: 'TOTAL-002', name: 'Liberation Road Station', code: 'TOT-LIB', location: 'Airport City, Accra', region: 'Greater Accra', pumpsCount: 4 },
+    ],
+  },
+  {
+    id: 'COMP-STAR',
+    name: 'Star Oil Company',
+    shortCode: 'STAR',
+    tagline: 'Fueled for the Journey.',
+    logoText: 'STAR OIL',
+    primaryColor: '#0B2545',
+    primaryDark: '#07162C',
+    accentColor: '#EE9B00',
+    currency: 'GHS',
+    adminCode: 'STAR-HQ01',
+    adminName: 'Star Oil Central HQ',
+    adminPin: '9999',
+    phone: '030 200 4400',
+    stations: [
+      { id: 'STAR-001', name: 'Spintex Coastal Station', code: 'STAR-SPX', location: 'Spintex Road, Batsonaa', region: 'Greater Accra', pumpsCount: 2 },
+      { id: 'STAR-002', name: 'Takoradi Harbour Branch', code: 'STAR-TKD', location: 'Commercial Street, Takoradi', region: 'Western Region', pumpsCount: 2 },
+    ],
+  },
+]
 
 export interface SeedAttendant {
   employeeCode: string
@@ -73,29 +199,53 @@ export interface SeedAttendant {
   pin: string
   pumpId: string
   stationId: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED'
 }
 
-/** Registered production attendants. PINs are documented for the demo device. */
+/** Registered production attendants. */
 export const SEED_ATTENDANTS: SeedAttendant[] = [
-  { employeeCode: 'ATT1001', fullName: 'Aisha Boateng', pin: '2024', pumpId: 'pump-1', stationId: 'STN-GV-042' },
-  { employeeCode: 'ATT1002', fullName: 'Kofi Asante', pin: '3319', pumpId: 'pump-2', stationId: 'STN-GV-042' },
-  { employeeCode: 'ATT1003', fullName: 'Nana Yaw Owusu', pin: '1187', pumpId: 'pump-3', stationId: 'STN-GV-042' },
-  { employeeCode: 'ATT1004', fullName: 'Esi Mensah', pin: '5520', pumpId: 'pump-4', stationId: 'STN-GV-042' },
-  { employeeCode: 'ATT2001', fullName: 'Kwabena Owusu', pin: '4726', pumpId: 'pump-1', stationId: 'STN-AB-015' },
-  { employeeCode: 'ATT3001', fullName: 'Adjoa Baidoo', pin: '8391', pumpId: 'pump-1', stationId: 'STN-TH-021' },
+  { employeeCode: 'PV001A', fullName: 'Aisha Boateng', pin: '2024', pumpId: 'pump-1', stationId: 'STN-GV-042', companyId: 'COMP-PV', companyShortCode: 'PV', phone: '024 111 2233', approvalStatus: 'APPROVED' },
+  { employeeCode: 'PV002A', fullName: 'Kofi Asante', pin: '3319', pumpId: 'pump-2', stationId: 'STN-GV-042', companyId: 'COMP-PV', companyShortCode: 'PV', phone: '020 334 5566', approvalStatus: 'APPROVED' },
+  { employeeCode: 'GOIL001A', fullName: 'Nana Yaw Owusu', pin: '1187', pumpId: 'pump-1', stationId: 'GOIL-001', companyId: 'COMP-GOIL', companyShortCode: 'GOIL', phone: '027 889 9001', approvalStatus: 'APPROVED' },
+  { employeeCode: 'TOT001A', fullName: 'Esi Mensah', pin: '5520', pumpId: 'pump-1', stationId: 'TOTAL-001', companyId: 'COMP-TOTAL', companyShortCode: 'TOTAL', phone: '055 443 2211', approvalStatus: 'APPROVED' },
+  { employeeCode: 'STAR001A', fullName: 'Kwabena Owusu', pin: '4726', pumpId: 'pump-1', stationId: 'STAR-001', companyId: 'COMP-STAR', companyShortCode: 'STAR', phone: '024 990 1122', approvalStatus: 'APPROVED' },
+  // Demo Pending Attendant under GOIL
+  { employeeCode: 'GOIL002A', fullName: 'Emmanuel Darko', pin: '1234', pumpId: 'pump-2', stationId: 'GOIL-001', companyId: 'COMP-GOIL', companyShortCode: 'GOIL', phone: '024 776 5544', approvalStatus: 'PENDING' },
 ]
 
-interface SeedSupervisor {
+export interface SeedSupervisor {
   employeeCode: string
   fullName: string
   pin: string
   stationId: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  isHeadOffice?: boolean
+  isSuperAdmin?: boolean
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED'
 }
 
 export const SEED_SUPERVISORS: SeedSupervisor[] = [
-  { employeeCode: 'SUP1001', fullName: 'Kwame Mensah', pin: '5678', stationId: 'STN-GV-042' },
-  { employeeCode: 'SUP1002', fullName: 'Ebenezer Osei', pin: '5678', stationId: 'STN-AB-015' },
-  { employeeCode: 'SUP1003', fullName: 'Daniel Larbi', pin: '5678', stationId: 'STN-TH-021' },
+  // 1. SUPER SUPER ADMIN (Platform Owner / PetroView Master)
+  { employeeCode: 'SUPER-ADMIN', fullName: 'PetroView Platform Master Admin', pin: '7256', stationId: 'STN-GV-042', isSuperAdmin: true, isHeadOffice: true, phone: '030 000 0000', approvalStatus: 'APPROVED' },
+
+  // 2. COMPANY HQ ADMINS (Provisioned by Super Super Admin)
+  { employeeCode: 'PV-HQ01', fullName: 'PetroView Operations HQ', pin: '9999', stationId: 'STN-GV-042', companyId: 'COMP-PV', companyShortCode: 'PV', isHeadOffice: true, phone: '030 200 1100', approvalStatus: 'APPROVED' },
+  { employeeCode: 'GOIL-HQ01', fullName: 'GOIL Corporate HQ Admin', pin: '9999', stationId: 'GOIL-001', companyId: 'COMP-GOIL', companyShortCode: 'GOIL', isHeadOffice: true, phone: '030 200 2200', approvalStatus: 'APPROVED' },
+  { employeeCode: 'TOT-HQ01', fullName: 'TotalEnergies HQ Admin', pin: '9999', stationId: 'TOTAL-001', companyId: 'COMP-TOTAL', companyShortCode: 'TOTAL', isHeadOffice: true, phone: '030 200 3300', approvalStatus: 'APPROVED' },
+  { employeeCode: 'STAR-HQ01', fullName: 'Star Oil Central HQ Admin', pin: '9999', stationId: 'STAR-001', companyId: 'COMP-STAR', companyShortCode: 'STAR', isHeadOffice: true, phone: '030 200 4400', approvalStatus: 'APPROVED' },
+  { employeeCode: 'HQ-ADMIN', fullName: 'Enterprise Super Admin', pin: '9999', stationId: 'STN-GV-042', companyId: 'COMP-PV', companyShortCode: 'PV', isHeadOffice: true, phone: '030 200 9900', approvalStatus: 'APPROVED' },
+
+  // 3. STATION MANAGERS
+  { employeeCode: 'PV001M', fullName: 'Kwame Mensah', pin: '5678', stationId: 'STN-GV-042', companyId: 'COMP-PV', companyShortCode: 'PV', phone: '024 887 6655', approvalStatus: 'APPROVED' },
+  { employeeCode: 'GOIL001M', fullName: 'Daniel Larbi', pin: '5678', stationId: 'GOIL-001', companyId: 'COMP-GOIL', companyShortCode: 'GOIL', phone: '027 112 2334', approvalStatus: 'APPROVED' },
+  { employeeCode: 'TOT001M', fullName: 'Patrick Addo', pin: '5678', stationId: 'TOTAL-001', companyId: 'COMP-TOTAL', companyShortCode: 'TOTAL', phone: '020 998 8776', approvalStatus: 'APPROVED' },
+  // Demo Pending Manager under GOIL
+  { employeeCode: 'GOIL002M', fullName: 'Grace Mensah', pin: '1234', stationId: 'GOIL-002', companyId: 'COMP-GOIL', companyShortCode: 'GOIL', phone: '054 332 1100', approvalStatus: 'PENDING' },
 ]
 
 function todayAt(daysAgo: number, hour: number, minute: number): string {
@@ -315,6 +465,42 @@ async function buildSeedTransactions(): Promise<ShiftTransaction[]> {
 }
 
 export async function seedProductionData(): Promise<boolean> {
+  // Always guarantee SUPER-ADMIN is seeded and active with PIN 7256
+  const { salt: saSalt, hash: saHash } = await hashPin('7256')
+  const existingSuperAdmin = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase('SUPER-ADMIN').first()
+  if (!existingSuperAdmin) {
+    await prodDb.supervisors.add({
+      id: 'sup-super-admin',
+      employeeCode: 'SUPER-ADMIN',
+      fullName: 'PetroView Platform Master Admin',
+      pinSalt: saSalt,
+      pinHash: saHash,
+      stationId: 'STN-GV-042',
+      phone: '030 000 0000',
+      isHeadOffice: true,
+      isSuperAdmin: true,
+      approvalStatus: 'APPROVED',
+      approvedAt: new Date().toISOString(),
+      approvedBy: 'System Master',
+      active: true,
+      failedAttempts: 0,
+      lockoutUntil: null,
+      createdAt: new Date().toISOString(),
+    })
+  } else {
+    // Update hash and status
+    await prodDb.supervisors.update(existingSuperAdmin.id, {
+      pinSalt: saSalt,
+      pinHash: saHash,
+      isSuperAdmin: true,
+      isHeadOffice: true,
+      approvalStatus: 'APPROVED',
+      active: true,
+      failedAttempts: 0,
+      lockoutUntil: null,
+    })
+  }
+
   const count = await prodDb.attendants.count()
   if (count > 0) return false
 
@@ -323,6 +509,7 @@ export async function seedProductionData(): Promise<boolean> {
 
   for (const seed of SEED_ATTENDANTS) {
     const { salt, hash } = await hashPin(seed.pin)
+    const isApproved = (seed.approvalStatus ?? 'APPROVED') === 'APPROVED'
     attendants.push({
       id: `att-${seed.employeeCode.toLowerCase()}`,
       employeeCode: seed.employeeCode,
@@ -331,7 +518,11 @@ export async function seedProductionData(): Promise<boolean> {
       pinHash: hash,
       pumpId: PRODUCTION_PUMPS.some(p => p.id === seed.pumpId) ? seed.pumpId : null,
       stationId: seed.stationId,
-      active: true,
+      phone: seed.phone ?? '024 000 0000',
+      approvalStatus: seed.approvalStatus ?? 'APPROVED',
+      approvedAt: isApproved ? now : null,
+      approvedBy: isApproved ? 'HQ Super Admin' : null,
+      active: isApproved,
       failedAttempts: 0,
       lockoutUntil: null,
       createdAt: now,
@@ -342,6 +533,7 @@ export async function seedProductionData(): Promise<boolean> {
   const supervisors: Supervisor[] = []
   for (const seed of SEED_SUPERVISORS) {
     const { salt, hash } = await hashPin(seed.pin)
+    const isApproved = (seed.approvalStatus ?? 'APPROVED') === 'APPROVED'
     supervisors.push({
       id: `sup-${seed.employeeCode.toLowerCase()}`,
       employeeCode: seed.employeeCode,
@@ -349,13 +541,56 @@ export async function seedProductionData(): Promise<boolean> {
       pinSalt: salt,
       pinHash: hash,
       stationId: seed.stationId,
-      active: true,
+      phone: seed.phone ?? '024 000 0000',
+      isHeadOffice: seed.isHeadOffice ?? false,
+      approvalStatus: seed.approvalStatus ?? 'APPROVED',
+      approvedAt: isApproved ? now : null,
+      approvedBy: isApproved ? 'HQ Super Admin' : null,
+      active: isApproved,
       failedAttempts: 0,
       lockoutUntil: null,
       createdAt: now,
     })
   }
   await prodDb.supervisors.bulkAdd(supervisors)
+
+  const companies: Company[] = []
+  const stations: CompanyStation[] = []
+
+  for (const c of SEED_COMPANIES) {
+    companies.push({
+      id: c.id,
+      name: c.name,
+      shortCode: c.shortCode,
+      tagline: c.tagline,
+      logoText: c.logoText,
+      primaryColor: c.primaryColor,
+      primaryDark: c.primaryDark,
+      accentColor: c.accentColor,
+      currency: c.currency,
+      adminCode: c.adminCode,
+      adminName: c.adminName,
+      phone: c.phone,
+      active: true,
+      createdAt: now,
+    })
+
+    for (const st of c.stations) {
+      stations.push({
+        id: st.id,
+        companyId: c.id,
+        name: st.name,
+        code: st.code,
+        location: st.location,
+        region: st.region,
+        pumpsCount: st.pumpsCount,
+        createdAt: now,
+      })
+    }
+  }
+
+  await prodDb.companies.bulkAdd(companies)
+  await prodDb.companyStations.bulkAdd(stations)
 
   const shifts = SEED_SHIFTS.map(buildSeedShift)
   await prodDb.shifts.bulkAdd(shifts)
@@ -390,5 +625,7 @@ export async function resetProductionData(): Promise<void> {
   await prodDb.auditLog.clear()
   await prodDb.attendants.clear()
   await prodDb.supervisors.clear()
+  await prodDb.companies.clear()
+  await prodDb.companyStations.clear()
   await seedProductionData()
 }

@@ -1,0 +1,46 @@
+{
+  "expo": {
+    "name": "Master View Petroleum",
+    "slug": "master-view-petroleum",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "masterview",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "plugins": [
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Master View uses the camera to scan QR sync codes from other devices."
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.masterview.petroleum",
+      "buildNumber": "1"
+    },
+    "android": {
+      "package": "com.masterview.petroleum",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#090d16",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e3573c70-0508-4883-96d8-86b79dbb0a50"
+      }
+    },
+    "owner": "otooaggreydennis"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules
+dist
+mobile
+.git
+.env
+*.log
+.vite-dev.log
+backend
+Dockerfile.web

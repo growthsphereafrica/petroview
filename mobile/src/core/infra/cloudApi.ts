@@ -6,6 +6,11 @@
 
 import { keys, sGet, sSet } from '../store/storage'
 import type { Shift } from '../domain/types'
+import { PRODUCTION_PUMPS } from '../domain/config'
+
+function pumpNameFor(id: string | null | undefined): string {
+  return PRODUCTION_PUMPS.find(p => p.id === id)?.name ?? ''
+}
 
 export function getCloudApiBase(): string | null {
   const configured = (process.env.EXPO_PUBLIC_API_URL as string | undefined)?.trim()
@@ -77,6 +82,7 @@ function toBackendShift(shift: Shift) {
     attendantId: shift.attendantId,
     attendantName: shift.attendantName,
     pumpId: shift.pumpId,
+    pumpName: pumpNameFor(shift.pumpId),
     stationId: shift.stationId,
     stationName: shift.stationName,
     status: shift.status,

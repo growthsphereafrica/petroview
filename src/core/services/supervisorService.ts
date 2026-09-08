@@ -462,6 +462,130 @@ export class SupervisorService {
     return updated
   }
 
+  /** Resets PIN for either an attendant or a supervisor/manager */
+  async resetStaffPin(
+    id: string,
+    role: 'attendant' | 'supervisor',
+    newPin: string,
+    actorName = 'Administrator',
+  ): Promise<void> {
+    if (!/^\d{4}$/.test(newPin)) {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
+    }
+    const { salt, hash } = await hashPin(newPin)
+
+    if (role === 'attendant') {
+      const attendant = await attendantRepo.getById(id)
+      if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
+      const updated: Attendant = {
+        ...attendant,
+        pinSalt: salt,
+        pinHash: hash,
+        failedAttempts: 0,
+        lockoutUntil: null,
+      }
+      await prodDb.attendants.put(updated)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
+    } else {
+      const supervisor = await supervisorRepo.getById(id)
+      if (!supervisor) throw new DomainError('STAFF_NOT_FOUND', 'Supervisor not found.')
+      const updated: Supervisor = {
+        ...supervisor,
+        pinSalt: salt,
+        pinHash: hash,
+        failedAttempts: 0,
+        lockoutUntil: null,
+      }
+      await prodDb.supervisors.put(updated)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'UPDATE', key: id })
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'PIN_RESET',
+      actorId: 'admin',
+      actorName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `PIN reset for ${role} (${id})`,
+      notes: `Reset by ${actorName}`,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /** Updates staff profile (name, phone, station, active status) */
+  async updateStaff(
+    id: string,
+    role: 'attendant' | 'supervisor',
+    updates: { fullName?: string; phone?: string; stationId?: string; active?: boolean },
+    actorName = 'Administrator',
+  ): Promise<void> {
+    if (role === 'attendant') {
+      const attendant = await attendantRepo.getById(id)
+      if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
+      const updated: Attendant = {
+        ...attendant,
+        fullName: updates.fullName?.trim() ?? attendant.fullName,
+        phone: updates.phone?.trim() ?? attendant.phone,
+        stationId: updates.stationId ?? attendant.stationId,
+        active: updates.active !== undefined ? updates.active : attendant.active,
+      }
+      await prodDb.attendants.put(updated)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
+    } else {
+      const supervisor = await supervisorRepo.getById(id)
+      if (!supervisor) throw new DomainError('STAFF_NOT_FOUND', 'Supervisor not found.')
+      const updated: Supervisor = {
+        ...supervisor,
+        fullName: updates.fullName?.trim() ?? supervisor.fullName,
+        phone: updates.phone?.trim() ?? supervisor.phone,
+        stationId: updates.stationId ?? supervisor.stationId,
+        active: updates.active !== undefined ? updates.active : supervisor.active,
+      }
+      await prodDb.supervisors.put(updated)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'UPDATE', key: id })
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_APPROVED',
+      actorId: 'admin',
+      actorName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `Updated ${role} profile (${id})`,
+      notes: `Modified by ${actorName}`,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /** Deletes staff account */
+  async deleteStaff(
+    id: string,
+    role: 'attendant' | 'supervisor',
+    actorName = 'Administrator',
+  ): Promise<void> {
+    if (role === 'attendant') {
+      await prodDb.attendants.delete(id)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'DELETE', key: id })
+    } else {
+      await prodDb.supervisors.delete(id)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'DELETE', key: id })
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_DEACTIVATED',
+      actorId: 'admin',
+      actorName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `Deleted ${role} account (${id})`,
+      notes: `Deleted by ${actorName}`,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
   async stationName(stationId: string): Promise<string> {
     return getStationName(stationId)
   }

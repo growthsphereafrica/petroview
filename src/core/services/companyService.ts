@@ -209,6 +209,124 @@ export class CompanyService {
 
     return stObj
   }
+
+  /** Updates an existing company's information */
+  async updateCompany(
+    companyId: string,
+    updates: {
+      name?: string
+      shortCode?: string
+      tagline?: string
+      primaryColor?: string
+      accentColor?: string
+      phone?: string
+      adminName?: string
+      adminPin?: string
+      active?: boolean
+    },
+  ): Promise<Company> {
+    const company = await this.getCompanyById(companyId)
+    if (!company) throw new Error('Company not found.')
+
+    const updated: Company = {
+      ...company,
+      name: updates.name?.trim() ?? company.name,
+      shortCode: updates.shortCode?.trim().toUpperCase() ?? company.shortCode,
+      tagline: updates.tagline?.trim() ?? company.tagline,
+      primaryColor: updates.primaryColor ?? company.primaryColor,
+      accentColor: updates.accentColor ?? company.accentColor,
+      phone: updates.phone?.trim() ?? company.phone,
+      adminName: updates.adminName?.trim() ?? company.adminName,
+      active: updates.active !== undefined ? updates.active : company.active,
+    }
+
+    await prodDb.companies.put(updated)
+
+    // If admin PIN is being updated, update the supervisor account
+    if (updates.adminPin && updates.adminPin.length === 4) {
+      const { salt, hash } = await hashPin(updates.adminPin)
+      const hqSupervisor = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(company.adminCode).first()
+      if (hqSupervisor) {
+        await prodDb.supervisors.update(hqSupervisor.id, {
+          fullName: updated.adminName,
+          pinSalt: salt,
+          pinHash: hash,
+        })
+      }
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'COMPANY_UPDATED',
+      actorId: 'super-admin',
+      actorName: 'Super Super Admin',
+      actorRole: 'SUPERVISOR',
+      targetId: companyId,
+      targetDescription: `Updated OMC profile: ${updated.name} (${updated.shortCode})`,
+      notes: null,
+      timestamp: new Date().toISOString(),
+    })
+
+    return updated
+  }
+
+  /** Deletes an OMC and its associated stations and staff */
+  async deleteCompany(companyId: string): Promise<void> {
+    const company = await this.getCompanyById(companyId)
+    if (!company) throw new Error('Company not found.')
+
+    await prodDb.companies.delete(companyId)
+    await prodDb.companyStations.where('companyId').equals(companyId).delete()
+
+    // Deactivate / remove supervisors and attendants associated with this company
+    const supervisors = await prodDb.supervisors.where('companyId').equals(companyId).toArray()
+    for (const sup of supervisors) {
+      await prodDb.supervisors.delete(sup.id)
+    }
+
+    const attendants = await prodDb.attendants.where('companyId').equals(companyId).toArray()
+    for (const att of attendants) {
+      await prodDb.attendants.delete(att.id)
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'COMPANY_UPDATED',
+      actorId: 'super-admin',
+      actorName: 'Super Super Admin',
+      actorRole: 'SUPERVISOR',
+      targetId: companyId,
+      targetDescription: `Deleted OMC tenant: ${company.name} (${company.shortCode})`,
+      notes: 'Company and associated branches removed',
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /** Updates a station branch */
+  async updateStation(
+    stationId: string,
+    updates: { name?: string; code?: string; location?: string; region?: string; pumpsCount?: number },
+  ): Promise<CompanyStation> {
+    const station = await prodDb.companyStations.get(stationId)
+    if (!station) throw new Error('Station not found.')
+
+    const updated: CompanyStation = {
+      ...station,
+      name: updates.name?.trim() ?? station.name,
+      code: updates.code?.trim().toUpperCase() ?? station.code,
+      location: updates.location?.trim() ?? station.location,
+      region: updates.region?.trim() ?? station.region,
+      pumpsCount: updates.pumpsCount ?? station.pumpsCount,
+    }
+
+    await prodDb.companyStations.put(updated)
+    return updated
+  }
+
+  /** Deletes a station branch */
+  async deleteStation(stationId: string): Promise<void> {
+    await prodDb.companyStations.delete(stationId)
+  }
 }
 
 export const companyService = new CompanyService()

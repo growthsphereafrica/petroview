@@ -1,23 +1,29 @@
 /**
  * Production Head Office Dashboard & Company HQ Portal.
- * - Live enterprise financial rollup computed from production DB
- * - Staff Onboarding & Approval Queue scoped to Company (Approve / Reject Attendants & Managers)
- * - Multi-station Staff Roster & Access Management
- * - Multi-Tenant company context awareness
+ * - Live enterprise financial rollup computed from production DB scoped to the OMC
+ * - Custom Date Range filtering (Today, 7 Days, 30 Days, Custom from-to dates)
+ * - Staff Summaries & Attendance/Sales Performance Reports for any selected period
+ * - Staff User Management: Edit staff profile, Reset 4-digit PIN, and Delete staff
+ * - Staff Onboarding & Approval Queue scoped to Company
+ * - Export Reports to Excel (CSV) and Print-Ready PDF
  */
 
 import React, { useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Building2,
+  Calendar,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Clock3,
   DollarSign,
   Download,
+  Edit2,
   Flame,
   KeyRound,
   Layers,
+  Lock,
   MapPin,
   Phone,
   Printer,
@@ -25,6 +31,7 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Trash2,
   UserCheck,
   UserCog,
   UserPlus,
@@ -32,7 +39,7 @@ import {
   UserX,
   Zap,
 } from 'lucide-react'
-import { rollupService, type HeadOfficeSummary } from '../../core/services/rollupService'
+import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../core/services/rollupService'
 import { supervisorService } from '../../core/services/supervisorService'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { shiftStatusLabel, shiftStatusTone } from '../supervisor/util'
@@ -42,33 +49,15 @@ import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
 import { loadUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import type { Attendant, Supervisor } from '../../core/domain/types'
 
-type RangeDays = 1 | 7 | 30 | null
-type HQTab = 'overview' | 'approvals' | 'staff'
-
-const RANGES: { key: RangeDays; label: string }[] = [
-  { key: 1, label: 'Today' },
-  { key: 7, label: '7 Days' },
-  { key: 30, label: '30 Days' },
-  { key: null, label: 'All Time' },
-]
+type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
+type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff'
 
 const Splash: React.FC = () => (
   <div className="h-full flex flex-col items-center justify-center bg-[#090d16] gap-3">
     <span className="w-10 h-10 border-4 border-slate-800 border-t-orange-500 rounded-full animate-spin" />
-    <p className="text-xs font-mono text-slate-400">Computing enterprise rollup…</p>
+    <p className="text-xs font-mono text-slate-400">Computing company rollup…</p>
   </div>
 )
-
-function toCsv(summary: HeadOfficeSummary): string {
-  const header = 'Station,Shifts,Shares,Litres,Sales,Variance,Review Status'
-  const rows = summary.stations.map(st =>
-    [st.name, st.shiftCount, st.region, st.litresToday, st.salesToday, st.netVariance].join(','),
-  )
-  const leader = summary.attendants.map(a =>
-    [a.employeeCode, a.name, a.stationName, a.shiftsClosed, a.litres, a.sales, a.variance].join(','),
-  )
-  return [header, ...rows, '', 'Attendant,Name,Station,Shifts,Litres,Sales,Variance', ...leader].join('\n')
-}
 
 export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession }> = ({ session: propsSession }) => {
   const activeSession = propsSession || loadUnifiedSession()
@@ -78,7 +67,9 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
   const [activeTab, setActiveTab] = useState<HQTab>('overview')
   const [summary, setSummary] = useState<HeadOfficeSummary | null>(null)
-  const [range, setRange] = useState<RangeDays>(1)
+  const [rangePreset, setRangePreset] = useState<RangePreset>('today')
+  const [customStartDate, setCustomStartDate] = useState(new Date().toISOString().slice(0, 10))
+  const [customEndDate, setCustomEndDate] = useState(new Date().toISOString().slice(0, 10))
   const [refreshing, setRefreshing] = useState(false)
 
   // Staff & Approvals State (scoped to company)
@@ -95,12 +86,54 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
 
+  // Selected Attendant Detail Drawer
+  const [selectedStaffSummary, setSelectedStaffSummary] = useState<AttendantRollup | null>(null)
+
+  // Reset PIN State
+  const [resetPinTarget, setResetPinTarget] = useState<{
+    id: string
+    name: string
+    code: string
+    role: 'attendant' | 'supervisor'
+  } | null>(null)
+  const [newPinValue, setNewPinValue] = useState('')
+  const [resetPinBusy, setResetPinBusy] = useState(false)
+
+  // Edit Staff State
+  const [editStaffTarget, setEditStaffTarget] = useState<{
+    id: string
+    name: string
+    phone: string
+    stationId: string
+    role: 'attendant' | 'supervisor'
+    active: boolean
+  } | null>(null)
+  const [editStaffBusy, setEditStaffBusy] = useState(false)
+
   const loadData = useMemo(
     () => async () => {
       setRefreshing(true)
       try {
+        let daysArg: number | null | undefined = undefined
+        let startArg: string | undefined = undefined
+        let endArg: string | undefined = undefined
+
+        if (rangePreset === 'today') daysArg = 1
+        else if (rangePreset === '7days') daysArg = 7
+        else if (rangePreset === '30days') daysArg = 30
+        else if (rangePreset === 'all') daysArg = null
+        else if (rangePreset === 'custom') {
+          startArg = customStartDate
+          endArg = customEndDate
+        }
+
         const [sum, pending, all] = await Promise.all([
-          rollupService.summary(range === null ? undefined : { days: range }),
+          rollupService.summary({
+            days: daysArg,
+            companyId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
           supervisorService.listPendingStaff(companyId),
           supervisorService.listAllStaff(companyId),
         ])
@@ -111,7 +144,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
         setRefreshing(false)
       }
     },
-    [range, companyId],
+    [rangePreset, customStartDate, customEndDate, companyId],
   )
 
   useEffect(() => {
@@ -166,17 +199,148 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
     }
   }
 
-  const downloadCsv = () => {
+  // Execute Reset PIN
+  const handleExecuteResetPin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!resetPinTarget || newPinValue.length !== 4) return
+    setResetPinBusy(true)
+    try {
+      await supervisorService.resetStaffPin(
+        resetPinTarget.id,
+        resetPinTarget.role,
+        newPinValue,
+        `${companyName} HQ Admin`,
+      )
+      setActionMessage({
+        text: `Successfully reset PIN for ${resetPinTarget.name} (${resetPinTarget.code}) to ${newPinValue}`,
+        type: 'success',
+      })
+      setResetPinTarget(null)
+      setNewPinValue('')
+      void loadData()
+      setTimeout(() => setActionMessage(null), 5000)
+    } catch (err: any) {
+      alert(err.message || 'Failed to reset PIN')
+    } finally {
+      setResetPinBusy(false)
+    }
+  }
+
+  // Save Edit Staff
+  const handleSaveEditStaff = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editStaffTarget) return
+    setEditStaffBusy(true)
+    try {
+      await supervisorService.updateStaff(
+        editStaffTarget.id,
+        editStaffTarget.role,
+        {
+          fullName: editStaffTarget.name,
+          phone: editStaffTarget.phone,
+          stationId: editStaffTarget.stationId,
+          active: editStaffTarget.active,
+        },
+        `${companyName} HQ Admin`,
+      )
+      setActionMessage({ text: `Updated staff profile for ${editStaffTarget.name}`, type: 'success' })
+      setEditStaffTarget(null)
+      void loadData()
+      setTimeout(() => setActionMessage(null), 4000)
+    } finally {
+      setEditStaffBusy(false)
+    }
+  }
+
+  // Delete Staff
+  const handleDeleteStaff = async (id: string, role: 'attendant' | 'supervisor', name: string, code: string) => {
+    if (!window.confirm(`Are you sure you want to permanently remove staff member ${name} (${code}) from ${companyName}?`)) {
+      return
+    }
+    try {
+      await supervisorService.deleteStaff(id, role, `${companyName} HQ Admin`)
+      setActionMessage({ text: `Removed ${role} ${name} (${code})`, type: 'success' })
+      void loadData()
+      setTimeout(() => setActionMessage(null), 4000)
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete staff')
+    }
+  }
+
+  // Export Staff Summaries to Excel (CSV)
+  const downloadExcelCsv = () => {
     if (!summary) return
-    const blob = new Blob([toCsv(summary)], { type: 'text/csv;charset=utf-8;' })
+    const periodLabel =
+      rangePreset === 'custom'
+        ? `${customStartDate}_to_${customEndDate}`
+        : rangePreset
+
+    const header = [
+      'Staff Code',
+      'Staff Name',
+      'Assigned Station',
+      'Shifts Closed',
+      'Total Litres Dispensed (L)',
+      'Total Revenue Sales (GHS)',
+      'Net Variance (GHS)',
+      'Approved Shifts',
+      'Rejected Shifts',
+      'Average Shift Sales (GHS)',
+      'Status',
+    ]
+
+    const rows = summary.attendants.map(a => [
+      a.employeeCode,
+      a.name,
+      a.stationName,
+      a.shiftsClosed,
+      a.litres.toFixed(2),
+      a.sales.toFixed(2),
+      a.variance.toFixed(2),
+      a.approved,
+      a.rejected,
+      a.avgShiftSales.toFixed(2),
+      a.active ? 'ACTIVE' : a.approvalStatus,
+    ])
+
+    const stationHeader = ['', 'Station Name', 'Station Code', 'Location', 'Region', 'Total Litres (L)', 'Total Sales (GHS)', 'Variance (GHS)', 'Shifts']
+    const stationRows = summary.stations.map(s => [
+      '',
+      s.name,
+      s.code,
+      s.location,
+      s.region,
+      s.litresToday.toFixed(2),
+      s.salesToday.toFixed(2),
+      s.netVariance.toFixed(2),
+      s.shiftCount,
+    ])
+
+    const allCsv = [
+      [`${companyName} Enterprise Sales & Staff Summary Report - Period: ${periodLabel}`],
+      [`Generated at: ${formatDateTime(summary.generatedAt)}`],
+      [''],
+      ['STAFF PERFORMANCE SUMMARY'],
+      header,
+      ...rows,
+      [''],
+      ['STATION BRANCH SUMMARY'],
+      stationHeader,
+      ...stationRows,
+    ]
+      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+      .join('\n')
+
+    const blob = new Blob([allCsv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `petroview-${companyShortCode.toLowerCase()}-report-${range ?? 'all'}-days.csv`
+    a.download = `${companyShortCode.toLowerCase()}-staff-report-${periodLabel}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
 
+  // Print PDF
   const printReport = () => window.print()
 
   if (!summary) return <Splash />
@@ -231,6 +395,18 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
             </button>
 
             <button
+              onClick={() => setActiveTab('summaries')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                activeTab === 'summaries'
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Users className="w-3.5 h-3.5" />
+              <span>Staff Summaries</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('approvals')}
               className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition relative ${
                 activeTab === 'approvals'
@@ -239,7 +415,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
               }`}
             >
               <UserCheck className="w-3.5 h-3.5" />
-              <span>Pending Approvals</span>
+              <span>Approvals</span>
               {totalPendingCount > 0 && (
                 <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-black flex items-center justify-center animate-pulse">
                   {totalPendingCount}
@@ -255,25 +431,29 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <Users className="w-3.5 h-3.5" />
-              <span>Staff Roster</span>
+              <UserCog className="w-3.5 h-3.5" />
+              <span>Staff Management</span>
             </button>
           </div>
 
           <button
-            onClick={downloadCsv}
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-orange-400 transition"
-            title="Export CSV Rollup"
+            onClick={downloadExcelCsv}
+            className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition"
+            title="Export Excel / CSV Report"
           >
             <Download className="w-4 h-4" />
+            <span className="hidden sm:inline">Excel</span>
           </button>
+
           <button
             onClick={printReport}
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition"
-            title="Print Enterprise Report"
+            className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition"
+            title="Print PDF Report"
           >
             <Printer className="w-4 h-4" />
+            <span className="hidden sm:inline">PDF</span>
           </button>
+
           <button
             onClick={() => void loadData()}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-orange-400 transition"
@@ -292,110 +472,180 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
         </div>
       )}
 
+      {/* Date Range Toolbar */}
+      <div className="shrink-0 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 print:hidden border-b border-slate-900 bg-slate-950/60">
+        <div className="flex items-center gap-1.5 overflow-x-auto">
+          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mr-1 flex items-center gap-1">
+            <Calendar className="w-3.5 h-3.5" /> Date:
+          </span>
+
+          <button
+            onClick={() => setRangePreset('today')}
+            className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+              rangePreset === 'today'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            Today
+          </button>
+
+          <button
+            onClick={() => setRangePreset('7days')}
+            className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+              rangePreset === '7days'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            7 Days
+          </button>
+
+          <button
+            onClick={() => setRangePreset('30days')}
+            className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+              rangePreset === '30days'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            30 Days
+          </button>
+
+          <button
+            onClick={() => setRangePreset('all')}
+            className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+              rangePreset === 'all'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            All Time
+          </button>
+
+          <button
+            onClick={() => setRangePreset('custom')}
+            className={`px-3 py-1 rounded-full text-xs font-bold border transition ${
+              rangePreset === 'custom'
+                ? 'bg-orange-500/20 border-orange-500 text-orange-300'
+                : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+            }`}
+          >
+            Custom Range
+          </button>
+        </div>
+
+        {/* Custom Range Picker */}
+        {rangePreset === 'custom' && (
+          <div className="flex items-center gap-2 animate-in fade-in">
+            <span className="text-[10px] font-mono text-slate-400">From:</span>
+            <input
+              type="date"
+              value={customStartDate}
+              onChange={e => setCustomStartDate(e.target.value)}
+              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white outline-none"
+            />
+            <span className="text-[10px] font-mono text-slate-400">To:</span>
+            <input
+              type="date"
+              value={customEndDate}
+              onChange={e => setCustomEndDate(e.target.value)}
+              className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-xs text-white outline-none"
+            />
+          </div>
+        )}
+
+        <span className="text-[10px] font-mono text-slate-500">
+          {summary.totalShifts} shift(s) computed for {companyName}
+        </span>
+      </div>
+
       {/* ----------------- TAB 1: ENTERPRISE OVERVIEW ----------------- */}
       {activeTab === 'overview' && (
-        <>
-          {/* Date range filter */}
-          <div className="shrink-0 px-4 py-2 flex gap-2 overflow-x-auto print:hidden border-b border-slate-900">
-            {RANGES.map(r => (
-              <button
-                key={String(r.key)}
-                onClick={() => setRange(r.key)}
-                className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${
-                  range === r.key
-                    ? 'bg-gradient-to-r from-orange-600 to-amber-500 border-orange-400/50 text-white shadow-sm ring-1 ring-orange-400/30'
-                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
+        <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-5xl w-full mx-auto">
+          {/* Overall KPIs */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <Card className="p-4 border-orange-500/20 bg-slate-900/90 shadow-md">
+              <div className="flex items-center gap-2 mb-2">
+                <DollarSign className="w-4 h-4 text-orange-400" />
+                <p className="text-[9px] uppercase font-bold text-slate-500">Revenue in period</p>
+              </div>
+              <p className="text-2xl font-black text-orange-400">{formatGHS(summary.salesToday, { noPrefix: true })}</p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {formatLitres(summary.litresToday)} litres across {summary.shiftsToday} closing shifts
+              </p>
+            </Card>
+
+            <Card className="p-4 bg-slate-900/90 shadow-md">
+              <div className="flex items-center gap-2 mb-2">
+                <Layers className="w-4 h-4 text-amber-400" />
+                <p className="text-[9px] uppercase font-bold text-slate-500">Net variance</p>
+              </div>
+              <p
+                className={`text-2xl font-black ${
+                  Math.abs(summary.netVariance) < 5 ? 'text-emerald-400' : 'text-rose-400'
                 }`}
               >
-                {r.label}
-              </button>
-            ))}
-            <span className="ml-auto text-[10px] font-mono text-slate-500 self-center">
-              {summary.rangeDays ? `last ${summary.rangeDays} day(s)` : 'all time'} · {summary.totalShifts} shifts
-            </span>
+                {formatGHS(summary.netVariance, { noPrefix: true, showSign: true })}
+              </p>
+              <p className="text-[10px] text-slate-500 mt-1">across closed shifts in period</p>
+            </Card>
+
+            <Card className="p-4 bg-slate-900/90 shadow-md">
+              <div className="flex items-center gap-2 mb-2">
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+                <p className="text-[9px] uppercase font-bold text-slate-500">Pending Approvals</p>
+              </div>
+              <p className={`text-2xl font-black ${totalPendingCount > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
+                {totalPendingCount}
+              </p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {totalPendingCount > 0 ? (
+                  <button
+                    onClick={() => setActiveTab('approvals')}
+                    className="text-amber-400 font-bold hover:underline"
+                  >
+                    Review pending queue ({totalPendingCount}) →
+                  </button>
+                ) : (
+                  'All staff approved'
+                )}
+              </p>
+            </Card>
+
+            <Card className="p-4 bg-slate-900/90 shadow-md">
+              <div className="flex items-center gap-2 mb-2">
+                <Building2 className="w-4 h-4 text-cyan-400" />
+                <p className="text-[9px] uppercase font-bold text-slate-500">Network Compliance</p>
+              </div>
+              <p className="text-2xl font-black text-cyan-400">{summary.syncCompliancePct}%</p>
+              <p className="text-[10px] text-slate-500 mt-1">{summary.stationCount} Station Branches</p>
+            </Card>
           </div>
 
-          <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-5xl w-full mx-auto">
-            {/* Overall KPIs */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-              <Card className="p-4 border-orange-500/20 bg-slate-900/90 shadow-md">
-                <div className="flex items-center gap-2 mb-2">
-                  <DollarSign className="w-4 h-4 text-orange-400" />
-                  <p className="text-[9px] uppercase font-bold text-slate-500">Revenue in period</p>
+          {/* Real Company Stations & Leaderboards */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Real Per-station table */}
+            <div>
+              <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5">
+                <MapPin className="w-3.5 h-3.5 text-orange-400" /> {companyName} Station Branches ({summary.stations.length})
+              </h4>
+              <Card className="divide-y divide-slate-800/70 overflow-hidden">
+                <div className="px-4 py-2 grid grid-cols-[1fr_auto_auto_auto] gap-3 text-[9px] uppercase font-bold text-slate-500 bg-slate-950/60">
+                  <span>Station</span>
+                  <span className="text-right">Litres</span>
+                  <span className="text-right">Sales</span>
+                  <span className="text-right">Var</span>
                 </div>
-                <p className="text-2xl font-black text-orange-400">{formatGHS(summary.salesToday, { noPrefix: true })}</p>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  {formatLitres(summary.litresToday)} litres across {summary.shiftsToday} closing shifts
-                </p>
-              </Card>
-
-              <Card className="p-4 bg-slate-900/90 shadow-md">
-                <div className="flex items-center gap-2 mb-2">
-                  <Layers className="w-4 h-4 text-amber-400" />
-                  <p className="text-[9px] uppercase font-bold text-slate-500">Net variance</p>
-                </div>
-                <p
-                  className={`text-2xl font-black ${
-                    Math.abs(summary.netVariance) < 5 ? 'text-emerald-400' : 'text-rose-400'
-                  }`}
-                >
-                  {formatGHS(summary.netVariance, { noPrefix: true, showSign: true })}
-                </p>
-                <p className="text-[10px] text-slate-500 mt-1">across closed shifts in period</p>
-              </Card>
-
-              <Card className="p-4 bg-slate-900/90 shadow-md">
-                <div className="flex items-center gap-2 mb-2">
-                  <UserCheck className="w-4 h-4 text-emerald-400" />
-                  <p className="text-[9px] uppercase font-bold text-slate-500">Pending Approvals</p>
-                </div>
-                <p className={`text-2xl font-black ${totalPendingCount > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
-                  {totalPendingCount}
-                </p>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  {totalPendingCount > 0 ? (
-                    <button
-                      onClick={() => setActiveTab('approvals')}
-                      className="text-amber-400 font-bold hover:underline"
-                    >
-                      Review pending staff queue →
-                    </button>
-                  ) : (
-                    'All registrations approved'
-                  )}
-                </p>
-              </Card>
-
-              <Card className="p-4 bg-slate-900/90 shadow-md">
-                <div className="flex items-center gap-2 mb-2">
-                  <Building2 className="w-4 h-4 text-cyan-400" />
-                  <p className="text-[9px] uppercase font-bold text-slate-500">Network Compliance</p>
-                </div>
-                <p className="text-2xl font-black text-cyan-400">{summary.syncCompliancePct}%</p>
-                <p className="text-[10px] text-slate-500 mt-1">{summary.pendingSync} transactions queued in mesh</p>
-              </Card>
-            </div>
-
-            {/* Stations & Leaderboards side-by-side on desktop */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              {/* Per-station table */}
-              <div>
-                <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5">
-                  <MapPin className="w-3.5 h-3.5 text-orange-400" /> Stations Performance
-                </h4>
-                <Card className="divide-y divide-slate-800/70 overflow-hidden">
-                  <div className="px-4 py-2 grid grid-cols-[1fr_auto_auto_auto] gap-3 text-[9px] uppercase font-bold text-slate-500 bg-slate-950/60">
-                    <span>Station</span>
-                    <span className="text-right">Litres</span>
-                    <span className="text-right">Sales</span>
-                    <span className="text-right">Var</span>
-                  </div>
-                  {topStations.map(st => (
+                {topStations.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-xs text-slate-500">No stations registered under {companyName}.</p>
+                ) : (
+                  topStations.map(st => (
                     <div key={st.stationId} className="px-4 py-3 grid grid-cols-[1fr_auto_auto_auto] gap-3 items-center">
                       <div className="min-w-0">
                         <p className="text-[12px] font-bold text-white truncate">{st.name}</p>
                         <p className="text-[10px] text-slate-500 truncate flex items-center gap-1">
-                          <MapPin className="w-3 h-3 text-orange-400" /> {st.region}
+                          <MapPin className="w-3 h-3 text-orange-400" /> {st.region} · {st.code}
                         </p>
                       </div>
                       <span className="text-[11px] font-mono text-slate-300 text-right">{Math.round(st.litresToday)}L</span>
@@ -410,17 +660,29 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                         {formatGHS(st.netVariance, { noPrefix: true, showSign: true })}
                       </span>
                     </div>
-                  ))}
-                </Card>
-              </div>
+                  ))
+                )}
+              </Card>
+            </div>
 
-              {/* Attendant leaderboard */}
-              <div>
-                <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5">
+            {/* Attendant leaderboard */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
                   <Users className="w-3.5 h-3.5 text-orange-400" /> Attendant Leaderboard
                 </h4>
-                <Card className="divide-y divide-slate-800/70 overflow-hidden">
-                  {summary.attendants.slice(0, 5).map((a, i) => (
+                <button
+                  onClick={() => setActiveTab('summaries')}
+                  className="text-[10px] text-orange-400 hover:underline font-bold"
+                >
+                  View All Staff Summaries →
+                </button>
+              </div>
+              <Card className="divide-y divide-slate-800/70 overflow-hidden">
+                {summary.attendants.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-xs text-slate-500">No attendant activity in this period.</p>
+                ) : (
+                  summary.attendants.slice(0, 5).map((a, i) => (
                     <div key={a.employeeCode} className="px-4 py-2.5 flex items-center gap-3">
                       <span className="w-5 text-center text-[10px] font-black text-orange-400">{i + 1}</span>
                       <div className="flex-1 min-w-0">
@@ -432,42 +694,95 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                       <span className="text-[10px] text-slate-500">{a.shiftsClosed} shifts</span>
                       <span className="text-[11px] font-mono text-white font-bold">{formatGHS(a.sales, { noPrefix: true })}</span>
                     </div>
-                  ))}
-                </Card>
-              </div>
-            </div>
-
-            {/* Recent shift activity */}
-            <div>
-              <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2 flex items-center gap-1.5">
-                <Clock3 className="w-3.5 h-3.5 text-orange-400" /> Recent Network Shifts
-              </h4>
-              <Card className="divide-y divide-slate-800/70 overflow-hidden">
-                {summary.recentShifts.length === 0 ? (
-                  <p className="px-4 py-5 text-xs text-slate-500 text-center">No shifts in this period.</p>
-                ) : (
-                  summary.recentShifts.slice(0, 6).map(s => (
-                    <div key={s.id} className="px-4 py-2.5 flex items-center gap-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[12px] font-bold text-white truncate">
-                          {s.attendantName} · {s.number}
-                        </p>
-                        <p className="text-[10px] text-slate-500">
-                          {s.stationName} · {formatDateTime(s.closedAt ?? s.openedAt)}
-                        </p>
-                      </div>
-                      <span className="text-[11px] font-mono text-white font-bold">{formatGHS(s.actualTotal)}</span>
-                      <Badge tone={shiftStatusTone(s.status)}>{shiftStatusLabel(s.status)}</Badge>
-                    </div>
                   ))
                 )}
               </Card>
             </div>
           </div>
-        </>
+        </div>
       )}
 
-      {/* ----------------- TAB 2: PENDING ONBOARDING APPROVALS ----------------- */}
+      {/* ----------------- TAB 2: STAFF SUMMARIES FOR PERIOD ----------------- */}
+      {activeTab === 'summaries' && (
+        <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-5xl w-full mx-auto">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-base font-extrabold text-white flex items-center gap-2">
+                <Users className="w-5 h-5 text-orange-400" />
+                <span>{companyName} Staff Sales & Shift Summaries</span>
+              </h3>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Detailed attendance, dispensing volume, sales revenue, and variances by date range.
+              </p>
+            </div>
+
+            <button
+              onClick={downloadExcelCsv}
+              className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export CSV/Excel</span>
+            </button>
+          </div>
+
+          <Card className="overflow-x-auto divide-y divide-slate-800/70">
+            <div className="px-4 py-2.5 grid grid-cols-[1.5fr_1fr_0.8fr_1fr_1.2fr_1fr_0.8fr] gap-3 text-[10px] uppercase font-bold text-slate-500 bg-slate-950/70 min-w-[700px]">
+              <span>Staff Member</span>
+              <span>Station Branch</span>
+              <span className="text-center">Shifts</span>
+              <span className="text-right">Volume (L)</span>
+              <span className="text-right">Sales Revenue</span>
+              <span className="text-right">Variance</span>
+              <span className="text-center">Status</span>
+            </div>
+
+            {summary.attendants.length === 0 ? (
+              <p className="px-4 py-8 text-center text-xs text-slate-500">
+                No staff activity recorded for {companyName} in this date range.
+              </p>
+            ) : (
+              summary.attendants.map(att => (
+                <div
+                  key={att.employeeCode}
+                  onClick={() => setSelectedStaffSummary(att)}
+                  className="px-4 py-3 grid grid-cols-[1.5fr_1fr_0.8fr_1fr_1.2fr_1fr_0.8fr] gap-3 items-center text-xs min-w-[700px] hover:bg-slate-800/40 cursor-pointer transition"
+                >
+                  <div className="min-w-0">
+                    <p className="font-bold text-white truncate">{att.name}</p>
+                    <p className="text-[10px] font-mono text-orange-400 font-bold">{att.employeeCode}</p>
+                  </div>
+
+                  <span className="text-[11px] text-slate-300 truncate">{att.stationName}</span>
+
+                  <span className="font-mono text-center text-slate-200">{att.shiftsClosed}</span>
+
+                  <span className="font-mono text-right text-slate-300">{Math.round(att.litres)} L</span>
+
+                  <span className="font-mono font-bold text-right text-emerald-400">
+                    {formatGHS(att.sales, { noPrefix: true })}
+                  </span>
+
+                  <span
+                    className={`font-mono font-black text-right ${
+                      Math.abs(att.variance) < 5 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}
+                  >
+                    {formatGHS(att.variance, { noPrefix: true, showSign: true })}
+                  </span>
+
+                  <div className="flex justify-center">
+                    <Badge tone={att.active ? 'success' : 'warning'}>
+                      {att.active ? 'Active' : 'Pending'}
+                    </Badge>
+                  </div>
+                </div>
+              ))
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* ----------------- TAB 3: PENDING APPROVALS ----------------- */}
       {activeTab === 'approvals' && (
         <div className="flex-1 px-4 py-6 max-w-4xl w-full mx-auto flex flex-col gap-4">
           <div className="flex items-center justify-between">
@@ -532,10 +847,6 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                       <Phone className="w-3.5 h-3.5 text-slate-500" />
                       <span>{att.phone || 'No phone provided'}</span>
                     </p>
-                    <p className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                      <Clock className="w-3 h-3" />
-                      <span>Applied: {formatDateTime(att.createdAt)}</span>
-                    </p>
                   </div>
 
                   <div className="flex items-center gap-2 pt-1">
@@ -594,10 +905,6 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                       <Phone className="w-3.5 h-3.5 text-slate-500" />
                       <span>{sup.phone || 'No phone provided'}</span>
                     </p>
-                    <p className="flex items-center gap-1.5 text-[10px] text-slate-500">
-                      <Clock className="w-3 h-3" />
-                      <span>Applied: {formatDateTime(sup.createdAt)}</span>
-                    </p>
                   </div>
 
                   <div className="flex items-center gap-2 pt-1">
@@ -625,17 +932,17 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
         </div>
       )}
 
-      {/* ----------------- TAB 3: ENTERPRISE STAFF ROSTER ----------------- */}
+      {/* ----------------- TAB 4: STAFF MANAGEMENT (EDIT, RESET PIN, DELETE) ----------------- */}
       {activeTab === 'staff' && (
         <div className="flex-1 px-4 py-6 max-w-5xl w-full mx-auto flex flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-extrabold text-white flex items-center gap-2">
                 <Users className="w-5 h-5 text-orange-400" />
-                <span>{companyName} Staff Roster</span>
+                <span>{companyName} Staff Management</span>
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Manage all authorized attendants and station managers under {companyName}.
+                Edit profiles, reset 4-digit PINs, and remove accounts for {companyName} attendants and managers.
               </p>
             </div>
 
@@ -657,8 +964,8 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 className="rounded-xl bg-slate-900 border border-slate-800 px-3 py-1.5 text-xs text-white focus:border-orange-500 outline-none"
               >
                 <option value="ALL">All Stations</option>
-                {PRODUCTION_STATIONS.map(s => (
-                  <option key={s.id} value={s.id}>
+                {summary.stations.map(s => (
+                  <option key={s.stationId} value={s.stationId}>
                     {s.name}
                   </option>
                 ))}
@@ -714,11 +1021,181 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                     <Badge tone={staff.active ? 'success' : staff.approvalStatus === 'PENDING' ? 'warning' : 'danger'}>
                       {staff.active ? 'Active' : staff.approvalStatus}
                     </Badge>
+
+                    <button
+                      onClick={() => {
+                        setResetPinTarget({
+                          id: staff.id,
+                          name: staff.fullName,
+                          code: staff.employeeCode,
+                          role: staff.staffType,
+                        })
+                        setNewPinValue('')
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-amber-500/60 text-amber-400 text-[11px] font-bold transition flex items-center gap-1"
+                      title="Reset Security PIN"
+                    >
+                      <KeyRound className="w-3 h-3" />
+                      <span>Reset PIN</span>
+                    </button>
+
+                    <button
+                      onClick={() =>
+                        setEditStaffTarget({
+                          id: staff.id,
+                          name: staff.fullName,
+                          phone: staff.phone || '',
+                          stationId: staff.stationId,
+                          role: staff.staffType,
+                          active: staff.active,
+                        })
+                      }
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white transition"
+                      title="Edit Staff"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      onClick={() => handleDeleteStaff(staff.id, staff.staffType, staff.fullName, staff.employeeCode)}
+                      className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-500/50 text-rose-400 hover:text-rose-300 transition"
+                      title="Delete Staff"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
               ))
             )}
           </Card>
+        </div>
+      )}
+
+      {/* MODAL: Reset Staff PIN */}
+      {resetPinTarget && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-sm w-full rounded-3xl bg-slate-900 border border-amber-500/40 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-4 h-4 text-amber-400" />
+                <h3 className="text-sm font-extrabold text-white">Reset Staff PIN</h3>
+              </div>
+              <button
+                onClick={() => setResetPinTarget(null)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+              <p className="text-xs font-bold text-white">{resetPinTarget.name}</p>
+              <p className="text-[10px] font-mono text-slate-400">
+                Staff ID: <span className="text-orange-400 font-bold">{resetPinTarget.code}</span> · Role:{' '}
+                <span className="capitalize">{resetPinTarget.role}</span>
+              </p>
+            </div>
+
+            <form onSubmit={handleExecuteResetPin} className="flex flex-col gap-3">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                  Enter New 4-Digit PIN
+                </label>
+                <input
+                  value={newPinValue}
+                  onChange={e => setNewPinValue(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                  placeholder="••••"
+                  type="password"
+                  inputMode="numeric"
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2.5 text-base font-mono tracking-widest text-center text-white focus:border-amber-500 outline-none"
+                  required
+                  autoFocus
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={resetPinBusy || newPinValue.length !== 4}
+                className="w-full rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 text-white py-2.5 text-xs font-bold transition disabled:opacity-40"
+              >
+                {resetPinBusy ? 'Updating PIN…' : 'Save New Security PIN'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Edit Staff Profile */}
+      {editStaffTarget && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-sm w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Edit Staff Details</h3>
+              </div>
+              <button
+                onClick={() => setEditStaffTarget(null)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditStaff} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Official Name</label>
+                <input
+                  value={editStaffTarget.name}
+                  onChange={e => setEditStaffTarget({ ...editStaffTarget, name: e.target.value })}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Mobile Phone</label>
+                <input
+                  value={editStaffTarget.phone}
+                  onChange={e => setEditStaffTarget({ ...editStaffTarget, phone: e.target.value })}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Assigned Station Branch</label>
+                <select
+                  value={editStaffTarget.stationId}
+                  onChange={e => setEditStaffTarget({ ...editStaffTarget, stationId: e.target.value })}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                >
+                  {summary.stations.map(s => (
+                    <option key={s.stationId} value={s.stationId}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-[11px] font-bold text-slate-300">Account Active</span>
+                <input
+                  type="checkbox"
+                  checked={editStaffTarget.active}
+                  onChange={e => setEditStaffTarget({ ...editStaffTarget, active: e.target.checked })}
+                  className="w-4 h-4 accent-orange-500 cursor-pointer"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={editStaffBusy || !editStaffTarget.name.trim()}
+                className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
+              >
+                {editStaffBusy ? 'Saving…' : 'Save Changes'}
+              </button>
+            </form>
+          </div>
         </div>
       )}
     </div>

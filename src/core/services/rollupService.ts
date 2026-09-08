@@ -1,12 +1,13 @@
 /**
- * Head-office rollup service.
- * Computes live enterprise aggregates from the production database —
- * replacing the hard-coded demo stats with real, derived numbers.
+ * Production Head-Office & OMC Rollup Service.
+ * Computes live enterprise & company aggregates from the production database
+ * for specified date ranges and scoped company tenants.
  */
 
-import { PRODUCTION_STATION, PRODUCTION_STATIONS } from '../domain/config'
+import { PRODUCTION_STATION, PRODUCTION_STATIONS, getStationName, registerDynamicStations } from '../domain/config'
 import { shiftRepo, attendantRepo } from '../infra/repositories'
-import type { Shift } from '../domain/types'
+import { prodDb } from '../infra/db'
+import type { Shift, CompanyStation, Attendant } from '../domain/types'
 
 export interface StationRollup {
   stationId: string
@@ -24,20 +25,33 @@ export interface StationRollup {
 }
 
 export interface AttendantRollup {
+  id?: string
   employeeCode: string
   name: string
+  stationId?: string
   stationName: string
+  phone?: string
   shiftsClosed: number
   litres: number
   sales: number
   variance: number
   approved: number
+  rejected: number
+  avgShiftSales: number
+  active: boolean
+  approvalStatus: string
+  cashTotal?: number
+  momoTotal?: number
+  creditTotal?: number
+  voucherTotal?: number
 }
 
 export interface HeadOfficeSummary {
   generatedAt: string
   currency: string
   rangeDays: number | null
+  startDate?: string
+  endDate?: string
   stationCount: number
   totalShifts: number
   shiftsToday: number
@@ -52,6 +66,12 @@ export interface HeadOfficeSummary {
   stations: StationRollup[]
   attendants: AttendantRollup[]
   recentShifts: Shift[]
+  paymentTotals?: {
+    cash: number
+    momo: number
+    credit: number
+    voucher: number
+  }
 }
 
 function startOfTodayIso(): string {
@@ -59,35 +79,127 @@ function startOfTodayIso(): string {
 }
 
 export class RollupService {
-  async summary(options?: { days?: number }): Promise<HeadOfficeSummary> {
-    const all = await shiftRepo.listAll()
+  async summary(options?: {
+    days?: number | null
+    companyId?: string
+    stationId?: string
+    startDate?: string
+    endDate?: string
+  }): Promise<HeadOfficeSummary> {
     const today = startOfTodayIso()
 
-    const cutoffDate = options?.days != null ? new Date(Date.now() - options.days * 86_400_000).toISOString() : null
-    const inRange = cutoffDate ? all.filter(s => s.openedAt >= cutoffDate) : all
+    // 1. Fetch real company stations
+    let targetStations: { id: string; name: string; code: string; location: string; region: string }[] = []
 
-    const closed = inRange.filter(s => s.closedAt)
+    if (options?.stationId) {
+      const dbStation = await prodDb.companyStations.get(options.stationId)
+      if (dbStation) {
+        targetStations = [
+          {
+            id: dbStation.id,
+            name: dbStation.name,
+            code: dbStation.code,
+            location: dbStation.location,
+            region: dbStation.region,
+          },
+        ]
+      } else {
+        const staticStn = PRODUCTION_STATIONS.find(s => s.id === options.stationId)
+        if (staticStn) {
+          targetStations = [
+            {
+              id: staticStn.id,
+              name: staticStn.name,
+              code: staticStn.code,
+              location: staticStn.location,
+              region: staticStn.region,
+            },
+          ]
+        }
+      }
+    } else if (options?.companyId) {
+      const dbCompanyStations = await prodDb.companyStations.where('companyId').equals(options.companyId).toArray()
+      targetStations = dbCompanyStations.map(s => ({
+        id: s.id,
+        name: s.name,
+        code: s.code,
+        location: s.location,
+        region: s.region,
+      }))
+    } else {
+      const allCompStations = await prodDb.companyStations.toArray()
+      targetStations = allCompStations.map(s => ({
+        id: s.id,
+        name: s.name,
+        code: s.code,
+        location: s.location,
+        region: s.region,
+      }))
+    }
+
+    if (targetStations.length > 0) {
+      registerDynamicStations(targetStations)
+    }
+
+    const stationIdSet = new Set(targetStations.map(s => s.id))
+
+    // 2. Fetch all shifts and filter by company stations and date range
+    const allShifts = await shiftRepo.listAll()
+
+    let companyShifts = options?.companyId
+      ? allShifts.filter(s => stationIdSet.has(s.stationId))
+      : allShifts
+
+    // If no shifts matched target stations but companyId is set, check if shifts match any station or attendant company
+    if (options?.companyId && companyShifts.length === 0) {
+      companyShifts = allShifts.filter(s => stationIdSet.has(s.stationId))
+    }
+
+    // Filter by Date Range
+    let inRangeShifts = companyShifts
+
+    if (options?.startDate && options?.endDate) {
+      const startIso = options.startDate.includes('T') ? options.startDate : `${options.startDate}T00:00:00.000Z`
+      const endIso = options.endDate.includes('T') ? options.endDate : `${options.endDate}T23:59:59.999Z`
+      inRangeShifts = companyShifts.filter(s => {
+        const d = s.closedAt || s.openedAt
+        return d >= startIso && d <= endIso
+      })
+    } else if (options?.days != null) {
+      const cutoffDate = new Date(Date.now() - options.days * 86_400_000).toISOString()
+      inRangeShifts = companyShifts.filter(s => (s.closedAt || s.openedAt) >= cutoffDate)
+    }
+
+    const closed = inRangeShifts.filter(s => s.closedAt)
     const closedToday = closed.filter(s => (s.closedAt || '').slice(0, 10) === today)
-    const litresToday = closedToday.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0)
-    const salesToday = Math.round(closedToday.reduce((a, s) => a + s.actualTotal, 0))
+    const litresToday = closed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0)
+    const salesToday = Math.round(closed.reduce((a, s) => a + s.actualTotal, 0))
     const netVariance = Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100
+
+    const paymentTotals = {
+      cash: Math.round(closed.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
+      momo: Math.round(closed.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
+      credit: Math.round(closed.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
+      voucher: Math.round(closed.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
+    }
 
     const pendingReview = closed.filter(s => s.status === 'CLOSED').length
     const approved = closed.filter(s => s.status === 'APPROVED').length
     const rejected = closed.filter(s => s.status === 'REJECTED').length
 
-    const pendingShiftSync = all.filter(s => s.syncStatus === 'PENDING').length
-    const totalSyncUnits = all.length + 1
-    const syncCompliancePct = Math.round(((all.length + 1 - pendingShiftSync) / totalSyncUnits) * 1000) / 10
+    const pendingShiftSync = inRangeShifts.filter(s => s.syncStatus === 'PENDING').length
+    const totalSyncUnits = inRangeShifts.length + 1
+    const syncCompliancePct = Math.round(((inRangeShifts.length + 1 - pendingShiftSync) / totalSyncUnits) * 1000) / 10
 
-    const stations: StationRollup[] = PRODUCTION_STATIONS.map(st => {
-      const shifts = inRange.filter(s => s.stationId === st.id)
+    // 3. Compute Per-Station Rollup
+    const stationRollups: StationRollup[] = targetStations.map(st => {
+      const shifts = inRangeShifts.filter(s => s.stationId === st.id)
       const siteClosed = shifts.filter(s => s.closedAt)
-      const siteClosedToday = siteClosed.filter(s => (s.closedAt || '').slice(0, 10) === today)
       const lastSyncTimes = shifts
         .map(s => s.updatedAt)
         .filter(Boolean)
         .sort()
+
       return {
         stationId: st.id,
         name: st.name,
@@ -95,8 +207,8 @@ export class RollupService {
         region: st.region,
         location: st.location,
         shiftCount: shifts.length,
-        litresToday: siteClosedToday.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
-        salesToday: Math.round(siteClosedToday.reduce((a, s) => a + s.actualTotal, 0)),
+        litresToday: siteClosed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
+        salesToday: Math.round(siteClosed.reduce((a, s) => a + s.actualTotal, 0)),
         netVariance: Math.round(siteClosed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
         pendingReview: siteClosed.filter(s => s.status === 'CLOSED').length,
         pendingSync: shifts.filter(s => s.syncStatus === 'PENDING').length,
@@ -104,29 +216,58 @@ export class RollupService {
       }
     })
 
-    const attendants = await attendantRepo.listActive()
-    const attendantRollups: AttendantRollup[] = attendants.map(att => {
-      const shifts = inRange.filter(s => s.attendantId === att.id)
-      const closed = shifts.filter(s => s.closedAt)
-      return {
-        employeeCode: att.employeeCode,
-        name: att.fullName,
-        stationName: getStationDisplayName(att.stationId),
-        shiftsClosed: closed.length,
-        litres: closed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
-        sales: Math.round(closed.reduce((a, s) => a + s.actualTotal, 0)),
-        variance: Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
-        approved: closed.filter(s => s.status === 'APPROVED').length,
-      }
-    }).sort((a, b) => b.sales - a.sales)
+    // 4. Compute Attendant Staff Rollup
+    const allAttendants = await prodDb.attendants.toArray()
+    const targetAttendants = options?.stationId
+      ? allAttendants.filter(a => a.stationId === options.stationId)
+      : options?.companyId
+      ? allAttendants.filter(a => a.companyId === options.companyId || (stationIdSet.size > 0 && stationIdSet.has(a.stationId)))
+      : allAttendants
+
+    const attendantRollups: AttendantRollup[] = targetAttendants
+      .map(att => {
+        const shifts = inRangeShifts.filter(s => s.attendantId === att.id || s.attendantName === att.fullName)
+        const closedShifts = shifts.filter(s => s.closedAt)
+        const totalSales = Math.round(closedShifts.reduce((a, s) => a + s.actualTotal, 0))
+        const totalLitres = closedShifts.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0)
+        const totalVar = Math.round(closedShifts.reduce((a, s) => a + s.variance, 0) * 100) / 100
+
+        const stn = targetStations.find(s => s.id === att.stationId)
+        const stationName = stn?.name || getStationName(att.stationId)
+
+        return {
+          id: att.id,
+          employeeCode: att.employeeCode,
+          name: att.fullName,
+          stationId: att.stationId,
+          stationName,
+          phone: att.phone,
+          shiftsClosed: closedShifts.length,
+          litres: totalLitres,
+          sales: totalSales,
+          variance: totalVar,
+          approved: closedShifts.filter(s => s.status === 'APPROVED').length,
+          rejected: closedShifts.filter(s => s.status === 'REJECTED').length,
+          avgShiftSales: closedShifts.length > 0 ? Math.round(totalSales / closedShifts.length) : 0,
+          active: att.active,
+          approvalStatus: att.approvalStatus,
+          cashTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
+          momoTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
+          creditTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
+          voucherTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
+        }
+      })
+      .sort((a, b) => b.sales - a.sales)
 
     return {
       generatedAt: new Date().toISOString(),
       currency: PRODUCTION_STATION.currency,
       rangeDays: options?.days ?? null,
-      stationCount: PRODUCTION_STATIONS.length,
-      totalShifts: inRange.length,
-      shiftsToday: inRange.filter(s => (s.openedAt || '').slice(0, 10) === today).length,
+      startDate: options?.startDate,
+      endDate: options?.endDate,
+      stationCount: targetStations.length,
+      totalShifts: inRangeShifts.length,
+      shiftsToday: inRangeShifts.filter(s => (s.openedAt || '').slice(0, 10) === today).length,
       litresToday,
       salesToday,
       netVariance,
@@ -135,17 +276,14 @@ export class RollupService {
       pendingReview,
       pendingSync: pendingShiftSync,
       syncCompliancePct,
-      stations,
+      stations: stationRollups,
       attendants: attendantRollups,
-      recentShifts: [...inRange]
+      recentShifts: [...inRangeShifts]
         .sort((a, b) => new Date(b.closedAt ?? b.openedAt).getTime() - new Date(a.closedAt ?? a.openedAt).getTime())
-        .slice(0, 6),
+        .slice(0, 10),
+      paymentTotals,
     }
   }
-}
-
-function getStationDisplayName(stationId: string): string {
-  return PRODUCTION_STATIONS.find(s => s.id === stationId)?.name ?? stationId
 }
 
 export const rollupService = new RollupService()

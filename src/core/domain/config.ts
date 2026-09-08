@@ -56,18 +56,47 @@ export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
  * Enterprise station registry. The attendant terminal operates station 0
  * (Green Valley Main); supervisor & head-office rollups span all stations.
  */
-export const PRODUCTION_STATIONS: ProductionStationEntry[] = [
-  { id: 'STN-GV-042', name: 'Green Valley Main', code: 'GV-042', location: 'Accra - Tema Motorway', region: 'Greater Accra', pumps: 4 },
-  { id: 'STN-AB-015', name: 'Airport Bypass Express', code: 'AB-015', location: 'Airport Residential, Accra', region: 'Greater Accra', pumps: 2 },
-  { id: 'STN-TH-021', name: 'Takoradi Harbour Hub', code: 'TH-021', location: 'Harbour Road, Takoradi', region: 'Western Region', pumps: 2 },
-]
+export const PRODUCTION_STATIONS: ProductionStationEntry[] = []
+
+const dynamicStationMap = new Map<string, ProductionStationEntry>()
+
+export function registerDynamicStations(stations: { id: string; name: string; code?: string; location?: string; region?: string; pumpsCount?: number; pumps?: number }[]): void {
+  for (const st of stations) {
+    dynamicStationMap.set(st.id, {
+      id: st.id,
+      name: st.name,
+      code: st.code || st.id,
+      location: st.location || 'Forecourt Station',
+      region: st.region || 'Branch Region',
+      pumps: st.pumpsCount || st.pumps || 4,
+    })
+  }
+}
 
 export function getStationById(stationId: string): ProductionStationEntry {
-  return PRODUCTION_STATIONS.find(s => s.id === stationId) ?? PRODUCTION_STATIONS[0]
+  if (dynamicStationMap.has(stationId)) {
+    return dynamicStationMap.get(stationId)!
+  }
+  const staticFound = PRODUCTION_STATIONS.find(s => s.id === stationId)
+  if (staticFound) return staticFound
+  return {
+    id: stationId,
+    name: stationId.startsWith('STN-') ? `Station ${stationId.replace(/^STN-/, '')}` : stationId,
+    code: stationId,
+    location: 'Forecourt Station',
+    region: 'Active Region',
+    pumps: 4,
+  }
 }
 
 export function getStationName(stationId: string): string {
-  return getStationById(stationId).name
+  if (!stationId) return 'Main Station'
+  if (dynamicStationMap.has(stationId)) {
+    return dynamicStationMap.get(stationId)!.name
+  }
+  const staticFound = PRODUCTION_STATIONS.find(s => s.id === stationId)
+  if (staticFound) return staticFound.name
+  return stationId.startsWith('STN-') ? `Station ${stationId.replace(/^STN-/, '')}` : stationId
 }
 
 export const FUEL_META: Record<FuelCode, { label: string; shortLabel: string; color: string; bg: string }> = {

@@ -92,13 +92,13 @@ const MainAppLayout: React.FC = () => {
 
           {/* Active Station / Enterprise Tag */}
           <button
-            onClick={() => (session.role === 'headoffice' || session.role === 'superadmin') && setIsCompanyModalOpen(true)}
+            onClick={() => session.role === 'superadmin' && setIsCompanyModalOpen(true)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-left transition ${
-              session.role === 'headoffice' || session.role === 'superadmin'
+              session.role === 'superadmin'
                 ? 'hover:border-orange-500/80 cursor-pointer group'
-                : 'cursor-default'
+                : 'cursor-default pointer-events-none'
             }`}
-            title={session.role === 'superadmin' ? 'Global Platform Owner' : session.role === 'headoffice' ? 'Switch company/station' : 'Assigned station'}
+            title={session.role === 'superadmin' ? 'Global Platform Owner · Switch/inspect tenant' : 'Assigned Enterprise OMC'}
           >
             <span
               className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30"
@@ -118,7 +118,7 @@ const MainAppLayout: React.FC = () => {
                   : session.companyName || session.stationName || activeStation.name}
               </span>
             </div>
-            {(session.role === 'headoffice' || session.role === 'superadmin') && (
+            {session.role === 'superadmin' && (
               <ChevronDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-orange-400 transition ml-0.5" />
             )}
           </button>

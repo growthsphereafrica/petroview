@@ -158,24 +158,28 @@ export const SupervisorDashboardScreen: React.FC<{
 
         {/* Stations */}
         <div>
-          <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">Stations</h4>
+          <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500 mb-2">
+            {supervisor ? getStationName(supervisor.stationId) : 'Station Branch'}
+          </h4>
           <Card className="divide-y divide-slate-800/70 overflow-hidden">
-            {PRODUCTION_STATIONS.map(st => {
-              const stationShifts = shifts.filter(s => s.stationId === st.id)
+            {(() => {
+              const currentStationId = supervisor?.stationId || 'STN-GV-042'
+              const currentStation = getStationById(currentStationId)
+              const stationShifts = shifts.filter(s => s.stationId === currentStationId)
               const sitePending = stationShifts.filter(s => s.status === 'CLOSED').length
               return (
-                <div key={st.id} className="px-4 py-2.5 flex items-center gap-3">
+                <div key={currentStation.id} className="px-4 py-2.5 flex items-center gap-3">
                   <div className="w-5 h-5 rounded-md flex items-center justify-center text-[8px] font-black bg-slate-800 text-orange-400 border border-orange-500/20">
-                    {st.code.split('-').pop()}
+                    {currentStation.code.split('-').pop()}
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[12px] font-bold text-white truncate">{st.name}</p>
-                    <p className="text-[10px] text-slate-500 truncate">{st.region} · {st.location}</p>
+                    <p className="text-[12px] font-bold text-white truncate">{currentStation.name}</p>
+                    <p className="text-[10px] text-slate-500 truncate">{currentStation.region} · {currentStation.location}</p>
                   </div>
                   {sitePending > 0 && <Badge tone="warning">{sitePending} to review</Badge>}
                 </div>
               )
-            })}
+            })()}
           </Card>
         </div>
 

@@ -8,7 +8,6 @@ import { Flame, KeyRound, ShieldCheck, Zap } from 'lucide-react'
 import { useAttendantSession } from '../providers'
 import { describeError } from '../../../core/domain/errors'
 import { MVPLogo } from '../../../components/common/MVPLogo'
-import { SEED_ATTENDANTS } from '../../../core/infra/db'
 
 export const LoginScreen: React.FC = () => {
   const { signIn, signingIn } = useAttendantSession()
@@ -91,31 +90,6 @@ export const LoginScreen: React.FC = () => {
             {signingIn ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
-
-        <div className="mt-6 rounded-xl bg-slate-900/80 border border-slate-800/80 p-3.5 shadow-inner">
-          <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">Demo accounts</p>
-          <ul className="flex flex-col gap-1.5">
-            {SEED_ATTENDANTS.slice(0, 4).map(a => (
-              <li key={a.employeeCode} className="flex items-center justify-between text-[11px] font-mono">
-                <span className="text-slate-300 truncate max-w-[200px]">
-                  {a.employeeCode} · {a.fullName}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmployeeCode(a.employeeCode)
-                    setPin(a.pin)
-                    setError(null)
-                    pinRef.current?.focus()
-                  }}
-                  className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700 text-orange-400 text-[10px] font-bold hover:bg-slate-700 hover:border-orange-500/40 transition"
-                >
-                  PIN {a.pin}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
       </div>
     </div>
   )

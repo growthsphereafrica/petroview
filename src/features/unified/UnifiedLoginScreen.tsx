@@ -343,14 +343,14 @@ export const UnifiedLoginScreen: React.FC<{
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5 uppercase tracking-wide flex items-center justify-between">
                   <span>Staff / Admin Code</span>
-                  <span className="text-[10px] font-normal text-slate-500 lowercase">e.g. GOIL001A, PV-HQ01, SUPER-ADMIN</span>
+                  <span className="text-[10px] font-normal text-slate-500 lowercase">e.g. SUPER-ADMIN</span>
                 </label>
                 <div className="relative">
                   <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     value={loginCode}
                     onChange={e => setLoginCode(e.target.value.toUpperCase())}
-                    placeholder="GOIL001A / GOIL-HQ01 / SUPER-ADMIN"
+                    placeholder="SUPER-ADMIN"
                     className="w-full rounded-xl bg-slate-900/90 border border-slate-800 pl-10 pr-4 py-3 text-sm font-mono text-white placeholder:text-slate-600 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none transition"
                     autoCapitalize="characters"
                     autoComplete="username"
@@ -446,192 +446,6 @@ export const UnifiedLoginScreen: React.FC<{
                 {signingIn ? 'Verifying & Authenticating…' : 'Sign In'}
               </button>
             </form>
-
-            {/* Quick Demo Access Grid */}
-            <div className="rounded-2xl bg-slate-900/70 border border-slate-800/80 p-4 shadow-inner">
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
-                  <Sparkles className="w-3 h-3 text-orange-400" /> 1-Click Role Logins (Demo Roster)
-                </p>
-                <span className="text-[9px] font-mono text-slate-500">Live Seeded</span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2">
-                {/* 1. Super Super Admin */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('SUPER-ADMIN')
-                    setLoginPin('7256')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/90 border border-rose-500/30 hover:border-rose-400 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-rose-500/20 border border-rose-500/30 flex items-center justify-center text-rose-400 shrink-0">
-                      <Sparkles className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-black text-white group-hover:text-rose-300 transition truncate">
-                        Platform Master (Super Super Admin)
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-rose-400 font-bold">SUPER-ADMIN</span> · PIN: 7256
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-rose-400 uppercase tracking-wide px-2 py-0.5 rounded bg-rose-500/15">
-                    Tier 1 Master
-                  </span>
-                </button>
-
-                {/* 2. GOIL HQ */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('GOIL-HQ01')
-                    setLoginPin('9999')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-orange-500/50 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-orange-500/20 border border-orange-500/30 flex items-center justify-center text-orange-400 shrink-0">
-                      <Building2 className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white group-hover:text-orange-300 transition truncate">
-                        GOIL Company HQ Admin
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-orange-400 font-bold">GOIL-HQ01</span> · PIN: 9999
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-orange-400 uppercase tracking-wide px-2 py-0.5 rounded bg-orange-500/15">
-                    Tier 2 HQ
-                  </span>
-                </button>
-
-                {/* 3. Total Energies HQ */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('TOT-HQ01')
-                    setLoginPin('9999')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-red-500/50 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-red-500/20 border border-red-500/30 flex items-center justify-center text-red-400 shrink-0">
-                      <Building2 className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white group-hover:text-red-300 transition truncate">
-                        TotalEnergies HQ Admin
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-red-400 font-bold">TOT-HQ01</span> · PIN: 9999
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-red-400 uppercase tracking-wide px-2 py-0.5 rounded bg-red-500/15">
-                    Tier 2 HQ
-                  </span>
-                </button>
-
-                {/* 4. GOIL Station Manager */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('GOIL001M')
-                    setLoginPin('5678')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-amber-500/50 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-                      <UserCog className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white group-hover:text-amber-300 transition truncate">
-                        GOIL Station Manager (Kwame Mensah)
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-amber-400 font-bold">GOIL001M</span> · PIN: 5678
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wide px-2 py-0.5 rounded bg-amber-500/15">
-                    Manager
-                  </span>
-                </button>
-
-                {/* 5. GOIL Fuel Attendant */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('GOIL001A')
-                    setLoginPin('2024')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/80 border border-slate-800 hover:border-emerald-500/50 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
-                      <Zap className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white group-hover:text-emerald-300 transition truncate">
-                        GOIL Fuel Attendant (Aisha Boateng)
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-emerald-400 font-bold">GOIL001A</span> · PIN: 2024
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-wide px-2 py-0.5 rounded bg-emerald-500/15">
-                    Attendant
-                  </span>
-                </button>
-
-                {/* 6. Pending Demo Account */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('GOIL002A')
-                    setLoginPin('1234')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className="text-left px-3 py-2 rounded-xl bg-slate-950/80 border border-amber-800/40 hover:border-amber-500/70 transition flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <div className="w-7 h-7 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 shrink-0">
-                      <Clock className="w-3.5 h-3.5" />
-                    </div>
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-amber-200 group-hover:text-amber-100 transition truncate">
-                        Pending Attendant (Test Approval State)
-                      </p>
-                      <p className="text-[10px] font-mono text-slate-400">
-                        <span className="text-amber-400 font-bold">GOIL002A</span> · PIN: 1234
-                      </p>
-                    </div>
-                  </div>
-                  <span className="text-[9px] font-mono px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 shrink-0">
-                    Pending
-                  </span>
-                </button>
-              </div>
-            </div>
           </div>
         )}
 

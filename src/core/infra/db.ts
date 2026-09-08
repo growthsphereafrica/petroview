@@ -130,40 +130,49 @@ export const prodDb = new ProductionDatabase()
  * starts completely empty and companies/staff are created by the SUPER-ADMIN.
  */
 export async function seedProductionData(): Promise<boolean> {
-  // Always guarantee SUPER-ADMIN is seeded and active with PIN 7256
-  const { salt: saSalt, hash: saHash } = await hashPin('7256')
-  const existingSuperAdmin = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase('SUPER-ADMIN').first()
-  if (!existingSuperAdmin) {
-    await prodDb.supervisors.add({
-      id: 'sup-super-admin',
-      employeeCode: 'SUPER-ADMIN',
-      fullName: 'PetroView Platform Master Admin',
-      pinSalt: saSalt,
-      pinHash: saHash,
-      stationId: 'STN-GV-042',
-      phone: '030 000 0000',
-      isHeadOffice: true,
-      isSuperAdmin: true,
-      approvalStatus: 'APPROVED',
-      approvedAt: new Date().toISOString(),
-      approvedBy: 'System Master',
-      active: true,
-      failedAttempts: 0,
-      lockoutUntil: null,
-      createdAt: new Date().toISOString(),
-    })
-  } else {
-    // Update hash and status
-    await prodDb.supervisors.update(existingSuperAdmin.id, {
-      pinSalt: saSalt,
-      pinHash: saHash,
-      isSuperAdmin: true,
-      isHeadOffice: true,
-      approvalStatus: 'APPROVED',
-      active: true,
-      failedAttempts: 0,
-      lockoutUntil: null,
-    })
+  try {
+    // Always guarantee SUPER-ADMIN is seeded and active with PIN 7256
+    const { salt: saSalt, hash: saHash } = await hashPin('7256')
+    const allSups = await prodDb.supervisors.toArray()
+    const existingSuperAdmin = allSups.find(
+      s => s.employeeCode?.trim().toUpperCase() === 'SUPER-ADMIN' || s.isSuperAdmin === true,
+    )
+
+    if (!existingSuperAdmin) {
+      await prodDb.supervisors.add({
+        id: 'sup-super-admin',
+        employeeCode: 'SUPER-ADMIN',
+        fullName: 'PetroView Platform Master Admin',
+        pinSalt: saSalt,
+        pinHash: saHash,
+        stationId: 'STN-GV-042',
+        phone: '030 000 0000',
+        isHeadOffice: true,
+        isSuperAdmin: true,
+        approvalStatus: 'APPROVED',
+        approvedAt: new Date().toISOString(),
+        approvedBy: 'System Master',
+        active: true,
+        failedAttempts: 0,
+        lockoutUntil: null,
+        createdAt: new Date().toISOString(),
+      })
+    } else {
+      // Update hash and status to ensure 7256 is always active
+      await prodDb.supervisors.update(existingSuperAdmin.id, {
+        employeeCode: 'SUPER-ADMIN',
+        pinSalt: saSalt,
+        pinHash: saHash,
+        isSuperAdmin: true,
+        isHeadOffice: true,
+        approvalStatus: 'APPROVED',
+        active: true,
+        failedAttempts: 0,
+        lockoutUntil: null,
+      })
+    }
+  } catch (err) {
+    console.error('Error in seedProductionData:', err)
   }
 
   return true

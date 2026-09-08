@@ -18,7 +18,16 @@ import type {
 
 export const attendantRepo = {
   async findByEmployeeCode(employeeCode: string): Promise<Attendant | undefined> {
-    return prodDb.attendants.where('employeeCode').equalsIgnoreCase(employeeCode.trim()).first()
+    const raw = employeeCode.trim()
+    if (!raw) return undefined
+    try {
+      const found = await prodDb.attendants.where('employeeCode').equalsIgnoreCase(raw).first()
+      if (found) return found
+    } catch {
+      // index query fallback
+    }
+    const all = await prodDb.attendants.toArray()
+    return all.find(a => a.employeeCode.trim().toUpperCase() === raw.toUpperCase())
   },
   async getById(id: string): Promise<Attendant | undefined> {
     return prodDb.attendants.get(id)
@@ -36,7 +45,7 @@ export const attendantRepo = {
     await prodDb.attendants.update(id, { active: false })
   },
   async listActive(): Promise<Attendant[]> {
-    return prodDb.attendants.where('active').equals(1).toArray()
+    return prodDb.attendants.filter(a => a.active === true).toArray()
   },
   async listPending(): Promise<Attendant[]> {
     return prodDb.attendants.filter(a => a.approvalStatus === 'PENDING').toArray()
@@ -64,7 +73,20 @@ export const attendantRepo = {
 
 export const supervisorRepo = {
   async findByEmployeeCode(employeeCode: string): Promise<Supervisor | undefined> {
-    return prodDb.supervisors.where('employeeCode').equalsIgnoreCase(employeeCode.trim()).first()
+    const raw = employeeCode.trim()
+    if (!raw) return undefined
+    const normalized = (raw.toUpperCase() === 'SUPERADMIN' || raw.toUpperCase() === 'SUPER ADMIN') ? 'SUPER-ADMIN' : raw
+    try {
+      const found = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(normalized).first()
+      if (found) return found
+    } catch {
+      // index query fallback
+    }
+    const all = await prodDb.supervisors.toArray()
+    return all.find(s => {
+      const code = s.employeeCode.trim().toUpperCase()
+      return code === raw.toUpperCase() || code === normalized.toUpperCase()
+    })
   },
   async getById(id: string): Promise<Supervisor | undefined> {
     return prodDb.supervisors.get(id)

@@ -39,6 +39,7 @@ import { authService } from '../../core/services/authService'
 import { supervisorService } from '../../core/services/supervisorService'
 import { companyService } from '../../core/services/companyService'
 import { generateNextStaffCode, inferRoleFromCode } from '../../core/services/staffCodeService'
+import { attendantRepo, supervisorRepo } from '../../core/infra/repositories'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
 
 export interface UnifiedSession {
@@ -158,60 +159,83 @@ export const UnifiedLoginScreen: React.FC<{
     setSigningIn(true)
     try {
       await seedProductionData()
-      const code = loginCode.trim().toUpperCase()
-      const detectedRole = inferRoleFromCode(code)
+      const rawCode = loginCode.trim()
+      const pin = loginPin.trim()
 
-      if (detectedRole === 'superadmin') {
-        const { supervisor, session } = await supervisorService.authenticate(code, loginPin)
-        localStorage.setItem('mvp_prod_supervisor_token', session.token)
-        onAuthenticated({
-          role: 'superadmin',
-          fullName: supervisor.fullName || 'Platform Master Super Super Admin',
-          employeeCode: code,
-          stationId: undefined,
-          stationName: 'Global Enterprise Network',
-          companyId: undefined,
-          companyName: 'PetroView Platform Owner',
-        })
-      } else if (detectedRole === 'headoffice' || detectedRole === 'supervisor') {
-        const { supervisor, session } = await supervisorService.authenticate(code, loginPin)
+      if (!rawCode) {
+        throw new Error('Please enter your Staff / Admin Code.')
+      }
+      if (pin.length !== 4) {
+        throw new Error('PIN must be 4 digits.')
+      }
+
+      // Normalize SUPER-ADMIN variants
+      const code =
+        rawCode.toUpperCase() === 'SUPERADMIN' || rawCode.toUpperCase() === 'SUPER ADMIN'
+          ? 'SUPER-ADMIN'
+          : rawCode.toUpperCase()
+
+      // 1. Check Supervisors / Admins table
+      const supervisorMatch = await supervisorRepo.findByEmployeeCode(code)
+
+      if (supervisorMatch) {
+        const { supervisor, session } = await supervisorService.authenticate(supervisorMatch.employeeCode, pin)
         localStorage.setItem('mvp_prod_supervisor_token', session.token)
 
-        const finalRole: UnifiedRole =
-          supervisor.isSuperAdmin || code === 'SUPER-ADMIN'
-            ? 'superadmin'
-            : supervisor.isHeadOffice || code.includes('HQ') || code === 'HQ-ADMIN'
-            ? 'headoffice'
-            : 'supervisor'
+        const isSuperAdmin =
+          supervisor.isSuperAdmin ||
+          supervisor.employeeCode === 'SUPER-ADMIN' ||
+          supervisor.employeeCode === 'PETRO-MASTER'
+        const isHQ =
+          isSuperAdmin ||
+          supervisor.isHeadOffice ||
+          supervisor.employeeCode.includes('HQ') ||
+          supervisor.employeeCode === 'HQ-ADMIN'
+
+        const finalRole: UnifiedRole = isSuperAdmin
+          ? 'superadmin'
+          : isHQ
+          ? 'headoffice'
+          : 'supervisor'
 
         const comp = supervisor.companyId ? await companyService.getCompany(supervisor.companyId) : null
 
         onAuthenticated({
           role: finalRole,
-          fullName: supervisor.fullName,
-          employeeCode: code,
+          fullName: supervisor.fullName || (isSuperAdmin ? 'Platform Master Super Super Admin' : 'Supervisor'),
+          employeeCode: supervisor.employeeCode,
           stationId: supervisor.stationId,
-          stationName: getStationName(supervisor.stationId),
+          stationName: supervisor.stationId ? getStationName(supervisor.stationId) : 'Global Enterprise Network',
           companyId: supervisor.companyId || comp?.id,
-          companyName: comp?.name || 'PetroView Downstream',
+          companyName: comp?.name || (isSuperAdmin ? 'PetroView Platform Owner' : 'PetroView Downstream'),
           companyShortCode: supervisor.companyShortCode || comp?.shortCode,
         })
-      } else {
-        const { attendant, session } = await authService.authenticate(code, loginPin)
+        return
+      }
+
+      // 2. Check Attendants table
+      const attendantMatch = await attendantRepo.findByEmployeeCode(code)
+
+      if (attendantMatch) {
+        const { attendant, session } = await authService.authenticate(attendantMatch.employeeCode, pin)
         localStorage.setItem('mvp_prod_session_token', session.token)
         const comp = attendant.companyId ? await companyService.getCompany(attendant.companyId) : null
 
         onAuthenticated({
           role: 'attendant',
           fullName: attendant.fullName,
-          employeeCode: code,
+          employeeCode: attendant.employeeCode,
           stationId: attendant.stationId,
           stationName: getStationName(attendant.stationId),
           companyId: attendant.companyId || comp?.id,
           companyName: comp?.name || 'PetroView Downstream',
           companyShortCode: attendant.companyShortCode || comp?.shortCode,
         })
+        return
       }
+
+      // If code not found in either table
+      throw new Error(`Account with code "${code}" not found. Please verify your Staff ID or create an account.`)
     } catch (err) {
       const msg = describeError(err)
       setLoginError(msg)

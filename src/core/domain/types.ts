@@ -3,7 +3,23 @@
  * Framework-agnostic core entities shared across services and UI.
  */
 
-export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO'
+export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO' | string
+
+export type ProductCategory = 'FUEL' | 'LUBRICANT' | 'LPG' | 'OTHER'
+
+export interface Product {
+  id: string
+  companyId?: string
+  code: string
+  name: string
+  category: ProductCategory
+  unitPrice: number
+  unit: string
+  color?: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
 
 export type PaymentMethod = 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'
 
@@ -63,6 +79,9 @@ export type AuditAction =
   | 'COMPANY_CREATED'
   | 'COMPANY_UPDATED'
   | 'STATION_CREATED'
+  | 'PRODUCT_CREATED'
+  | 'PRODUCT_UPDATED'
+  | 'PRODUCT_DELETED'
 
 export interface MeterReading {
   fuelCode: FuelCode

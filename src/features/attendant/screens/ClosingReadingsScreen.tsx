@@ -3,12 +3,12 @@
  * add notes, and lock the shift for supervisor review.
  */
 
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { Lock, AlertTriangle } from 'lucide-react'
 import { MeterReadingsScreen } from './MeterReadingsScreen'
 import { useShift } from '../providers'
 import { computeFuelSales, sumSales } from '../../../core/domain/rules'
-import { PRODUCTION_STATION } from '../../../core/domain/config'
+import { productService } from '../../../core/services/productService'
 import { formatGHS } from '../../../utils/currencyFormatter'
 import { describeError } from '../../../core/domain/errors'
 import type { MeterReading } from '../../../core/domain/types'
@@ -17,15 +17,20 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
   const { activeShift, closeShift } = useShift()
   const [notes, setNotes] = useState('')
   const [closing, setClosing] = useState<MeterReading[] | null>(null)
+  const [fuelPrices, setFuelPrices] = useState<Record<string, number>>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  useEffect(() => {
+    productService.getFuelPriceMap().then(setFuelPrices).catch(() => {})
+  }, [])
+
   const { variance, expectedTotal } = useMemo(() => {
     if (!activeShift || !closing) return { variance: 0, expectedTotal: 0 }
-    const sales = computeFuelSales(activeShift.openingReadings, closing, PRODUCTION_STATION.fuelPrices)
+    const sales = computeFuelSales(activeShift.openingReadings, closing, fuelPrices as any)
     const expected = sumSales(sales)
     return { variance: Math.round((activeShift.actualTotal - expected) * 100) / 100, expectedTotal: expected }
-  }, [activeShift, closing])
+  }, [activeShift, closing, fuelPrices])
 
   if (!activeShift) {
     return (

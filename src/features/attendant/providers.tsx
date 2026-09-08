@@ -103,7 +103,9 @@ interface ShiftContextValue {
   toast: ShiftToast
   dismissToast: () => void
   openShift: (input: { pumpId: string; openingReadings: Shift['openingReadings'] }) => Promise<void>
-  recordSale: (input: { fuelCode: Shift['sales'][number]['fuelCode']; litres: number; method: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT' }) => Promise<void>
+  recordSale: (input: { fuelCode: Shift['sales'][number]['fuelCode']; litres: number; method: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => Promise<void>
+  updateSale: (txId: string, updates: { fuelCode?: Shift['sales'][number]['fuelCode']; litres?: number; method?: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => Promise<void>
+  deleteSale: (txId: string) => Promise<void>
   closeShift: (input: { closingReadings: Shift['closingReadings']; notes?: string }) => Promise<void>
   refresh: () => Promise<void>
   pushSync: () => Promise<void>
@@ -176,7 +178,7 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
   )
 
   const recordSale = useCallback(
-    async (input: { fuelCode: Shift['sales'][number]['fuelCode']; litres: number; method: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT' }) => {
+    async (input: { fuelCode: Shift['sales'][number]['fuelCode']; litres: number; method: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => {
       if (!attendant || !activeShift) {
         notify('No open shift. Start a shift first.', 'error')
         throw new DomainError('SHIFT_NOT_OPEN', 'No open shift.')
@@ -186,12 +188,51 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
         fuelCode: input.fuelCode,
         litres: input.litres,
         method: input.method,
+        unitPrice: input.unitPrice,
       })
       setActiveShift(updated)
       setShifts(prev => (prev.some(s => s.id === updated.id) ? prev.map(s => (s.id === updated.id ? updated : s)) : [updated, ...prev]))
       notify(`${input.litres.toFixed(2)}L ${input.fuelCode} — ${formatGHS(updated.actualTotal)} collected so far`, 'success')
     },
     [attendant, activeShift, notify],
+  )
+
+  const updateSale = useCallback(
+    async (txId: string, updates: { fuelCode?: Shift['sales'][number]['fuelCode']; litres?: number; method?: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => {
+      if (!activeShift) {
+        notify('No active shift.', 'error')
+        return
+      }
+      try {
+        const updated = await shiftService.updateTransaction(activeShift.id, txId, updates)
+        setActiveShift(updated)
+        setShifts(prev => prev.map(s => (s.id === updated.id ? updated : s)))
+        notify('Transaction updated successfully.', 'success')
+      } catch (err) {
+        notify(describeError(err), 'error')
+        throw err
+      }
+    },
+    [activeShift, notify],
+  )
+
+  const deleteSale = useCallback(
+    async (txId: string) => {
+      if (!activeShift) {
+        notify('No active shift.', 'error')
+        return
+      }
+      try {
+        const updated = await shiftService.deleteTransaction(activeShift.id, txId)
+        setActiveShift(updated)
+        setShifts(prev => prev.map(s => (s.id === updated.id ? updated : s)))
+        notify('Transaction removed.', 'info')
+      } catch (err) {
+        notify(describeError(err), 'error')
+        throw err
+      }
+    },
+    [activeShift, notify],
   )
 
   const closeShift = useCallback(
@@ -210,14 +251,14 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
   )
 
   const pushSync = useCallback(async () => {
-const result = await syncService.runPendingSync()
-      setPendingCount(await syncService.pendingCount())
-      notify(
-        result.attempted === 0
-          ? 'Nothing pending — all records up to date.'
-          : `Synchronized ${result.succeeded}/${result.attempted} record(s).`,
-        result.failed > 0 ? 'warning' : 'success',
-      )
+    const result = await syncService.runPendingSync()
+    setPendingCount(await syncService.pendingCount())
+    notify(
+      result.attempted === 0
+        ? 'Nothing pending — all records up to date.'
+        : `Synchronized ${result.succeeded}/${result.attempted} record(s).`,
+      result.failed > 0 ? 'warning' : 'success',
+    )
   }, [notify])
 
   // Reflect sync status changes into pending counter.
@@ -237,12 +278,14 @@ const result = await syncService.runPendingSync()
       dismissToast: () => setToast(null),
       openShift,
       recordSale,
+      updateSale,
+      deleteSale,
       closeShift,
       refresh,
       pushSync,
       pendingCount,
     }),
-    [loading, activeShift, shifts, toast, openShift, recordSale, closeShift, refresh, pushSync, pendingCount],
+    [loading, activeShift, shifts, toast, openShift, recordSale, updateSale, deleteSale, closeShift, refresh, pushSync, pendingCount],
   )
 
   return <ShiftContext.Provider value={value}>{children}</ShiftContext.Provider>

@@ -204,6 +204,15 @@ export const transactionRepo = {
   async add(tx: ShiftTransaction): Promise<void> {
     await prodDb.transactions.add(tx)
   },
+  async getById(id: string): Promise<ShiftTransaction | undefined> {
+    return prodDb.transactions.get(id)
+  },
+  async update(tx: ShiftTransaction): Promise<void> {
+    await prodDb.transactions.put(tx)
+  },
+  async delete(id: string): Promise<void> {
+    await prodDb.transactions.delete(id)
+  },
   async listForShift(shiftId: string): Promise<ShiftTransaction[]> {
     const rows = await prodDb.transactions.where('shiftId').equals(shiftId).toArray()
     return rows.sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime())

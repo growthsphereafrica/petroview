@@ -33,16 +33,19 @@ import {
   Users,
   UserX,
   Zap,
+  Tag,
+  PackagePlus,
 } from 'lucide-react'
 import { companyService } from '../../core/services/companyService'
 import { supervisorService } from '../../core/services/supervisorService'
+import { productService } from '../../core/services/productService'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS } from '../../utils/currencyFormatter'
 import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
-import type { Company, CompanyStation, Attendant, Supervisor } from '../../core/domain/types'
+import type { Company, CompanyStation, Attendant, Supervisor, Product, ProductCategory } from '../../core/domain/types'
 
-type SuperAdminTab = 'companies' | 'staff' | 'telemetry'
+type SuperAdminTab = 'companies' | 'staff' | 'products' | 'telemetry'
 
 export const SuperSuperAdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SuperAdminTab>('companies')
@@ -59,6 +62,32 @@ export const SuperSuperAdminDashboard: React.FC = () => {
   const [staffSearchQuery, setStaffSearchQuery] = useState('')
   const [selectedCompanyFilter, setSelectedCompanyFilter] = useState('ALL')
   const [actionNotice, setActionNotice] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
+
+  // Products & Fuel Pricing State
+  const [products, setProducts] = useState<Product[]>([])
+  const [productSearchQuery, setProductSearchQuery] = useState('')
+  const [selectedProdCompanyFilter, setSelectedProdCompanyFilter] = useState('ALL')
+  const [isCreateProdModalOpen, setIsCreateProdModalOpen] = useState(false)
+  const [newProdCompanyId, setNewProdCompanyId] = useState<string>('')
+  const [newProdCode, setNewProdCode] = useState('')
+  const [newProdName, setNewProdName] = useState('')
+  const [newProdCategory, setNewProdCategory] = useState<ProductCategory>('FUEL')
+  const [newProdPrice, setNewProdPrice] = useState('')
+  const [newProdUnit, setNewProdUnit] = useState('Litre')
+  const [newProdColor, setNewProdColor] = useState('#22c55e')
+  const [prodSaving, setProdSaving] = useState(false)
+  const [prodError, setProdError] = useState<string | null>(null)
+
+  // Edit Product Modal State
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null)
+  const [editProdName, setEditProdName] = useState('')
+  const [editProdPrice, setEditProdPrice] = useState('')
+  const [editProdCategory, setEditProdCategory] = useState<ProductCategory>('FUEL')
+  const [editProdUnit, setEditProdUnit] = useState('Litre')
+  const [editProdColor, setEditProdColor] = useState('#22c55e')
+  const [editProdActive, setEditProdActive] = useState(true)
+  const [editProdSaving, setEditProdSaving] = useState(false)
+  const [editProdError, setEditProdError] = useState<string | null>(null)
 
   // Create OMC Modal State
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
@@ -125,12 +154,14 @@ export const SuperSuperAdminDashboard: React.FC = () => {
   const loadData = async () => {
     setRefreshing(true)
     try {
-      const [allCompanies, staff] = await Promise.all([
+      const [allCompanies, staff, allProds] = await Promise.all([
         companyService.listAllCompanies(),
         supervisorService.listAllStaff(),
+        productService.getAllProducts('ALL'),
       ])
       setCompanies(allCompanies)
       setAllStaff(staff)
+      setProducts(allProds)
 
       const stMap: Record<string, CompanyStation[]> = {}
       const staffMap: Record<string, number> = {}
@@ -150,6 +181,99 @@ export const SuperSuperAdminDashboard: React.FC = () => {
     } finally {
       setLoading(false)
       setRefreshing(false)
+    }
+  }
+
+  // Create Product Handler (Super Admin)
+  const handleCreateProduct = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setProdError(null)
+    const priceNum = Number(newProdPrice)
+    if (isNaN(priceNum) || priceNum <= 0) {
+      setProdError('Please enter a valid price greater than 0.')
+      return
+    }
+    if (!newProdCode.trim() || !newProdName.trim()) {
+      setProdError('Product code and name are required.')
+      return
+    }
+
+    setProdSaving(true)
+    try {
+      const targetCompany = companies.find(c => c.id === newProdCompanyId)
+      await productService.createProduct({
+        companyId: newProdCompanyId || undefined,
+        code: newProdCode.trim().toUpperCase(),
+        name: newProdName.trim(),
+        category: newProdCategory,
+        unitPrice: priceNum,
+        unit: newProdUnit.trim() || 'Litre',
+        color: newProdColor,
+        actorName: 'Platform Master Super Admin',
+      })
+      setActionNotice({
+        text: `Created product ${newProdName} (${newProdCode.toUpperCase()}) for ${targetCompany ? targetCompany.name : 'Global Catalog'}`,
+        type: 'success',
+      })
+      setIsCreateProdModalOpen(false)
+      setNewProdCode('')
+      setNewProdName('')
+      setNewProdPrice('')
+      void loadData()
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      setProdError(err.message || 'Failed to create product.')
+    } finally {
+      setProdSaving(false)
+    }
+  }
+
+  // Edit Product Handler (Super Admin)
+  const handleSaveEditProduct = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingProduct) return
+    setEditProdError(null)
+    const priceNum = Number(editProdPrice)
+    if (isNaN(priceNum) || priceNum <= 0) {
+      setEditProdError('Please enter a valid price greater than 0.')
+      return
+    }
+
+    setEditProdSaving(true)
+    try {
+      await productService.updateProduct(editingProduct.id, {
+        name: editProdName.trim(),
+        unitPrice: priceNum,
+        category: editProdCategory,
+        unit: editProdUnit.trim() || 'Litre',
+        color: editProdColor,
+        active: editProdActive,
+        actorName: 'Platform Master Super Admin',
+      })
+      setActionNotice({
+        text: `Updated product ${editProdName} pricing to GHS ${priceNum.toFixed(2)}/${editProdUnit}`,
+        type: 'success',
+      })
+      setEditingProduct(null)
+      void loadData()
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      setEditProdError(err.message || 'Failed to update product.')
+    } finally {
+      setEditProdSaving(false)
+    }
+  }
+
+  // Delete Product Handler (Super Admin)
+  const handleDeleteProduct = async (prod: Product) => {
+    if (!window.confirm(`Are you sure you want to permanently delete product "${prod.name}" (${prod.code})?`)) return
+    try {
+      await productService.deleteProduct(prod.id, 'Platform Master Super Admin')
+      setActionNotice({ text: `Deleted product ${prod.name}`, type: 'success' })
+      void loadData()
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete product.')
     }
   }
 
@@ -500,6 +624,18 @@ export const SuperSuperAdminDashboard: React.FC = () => {
             >
               <Users className="w-3.5 h-3.5" />
               <span>Staff Management ({totalStaffCount})</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('products')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+                activeTab === 'products'
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Flame className="w-3.5 h-3.5" />
+              <span>Products & Pricing ({products.length})</span>
             </button>
           </div>
 
@@ -894,6 +1030,150 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                 ))
               )}
             </Card>
+          </div>
+        )}
+
+        {/* ----------------- TAB 3: PRODUCTS & FUEL PRICING ----------------- */}
+        {activeTab === 'products' && (
+          <div className="flex flex-col gap-4">
+            {/* Header Bar */}
+            <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Flame className="w-5 h-5 text-orange-400" />
+                  <h3 className="text-sm font-black text-white">Global Fuel Products & Multi-Tenant Pricing Engine</h3>
+                </div>
+                <p className="text-xs text-slate-400 mt-1">
+                  Configure official retail prices (GHS/L) and product catalog for all OMCs or individual company tenants.
+                  Prices set here propagate instantly to managers and pump attendants.
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setNewProdCompanyId(selectedProdCompanyFilter !== 'ALL' ? selectedProdCompanyFilter : '')
+                  setIsCreateProdModalOpen(true)
+                }}
+                className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-bold flex items-center gap-1.5 shadow-lg transition shrink-0 border border-orange-400/30"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Fuel / Product</span>
+              </button>
+            </div>
+
+            {/* Filters */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+              {/* OMC Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400 font-bold shrink-0">Filter OMC:</span>
+                <select
+                  value={selectedProdCompanyFilter}
+                  onChange={e => setSelectedProdCompanyFilter(e.target.value)}
+                  className="rounded-xl bg-slate-900 border border-slate-800 px-3 py-2 text-xs text-white outline-none focus:border-orange-500"
+                >
+                  <option value="ALL">All Products (Global & OMCs)</option>
+                  <option value="GLOBAL">Global Platform Defaults</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.shortCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Search Bar */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  value={productSearchQuery}
+                  onChange={e => setProductSearchQuery(e.target.value)}
+                  placeholder="Search products by code or name (e.g. PMS, AGO, V-Power, Diesel Max)…"
+                  className="w-full rounded-xl bg-slate-900 border border-slate-800 pl-9 pr-4 py-2 text-xs text-white placeholder:text-slate-600 focus:border-orange-500 outline-none"
+                />
+              </div>
+            </div>
+
+            {/* Products Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+              {products
+                .filter(p => {
+                  if (selectedProdCompanyFilter === 'GLOBAL') {
+                    if (p.companyId) return false
+                  } else if (selectedProdCompanyFilter !== 'ALL') {
+                    if (p.companyId !== selectedProdCompanyFilter) return false
+                  }
+                  if (!productSearchQuery.trim()) return true
+                  const q = productSearchQuery.toLowerCase()
+                  return p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)
+                })
+                .map(prod => {
+                  const comp = companies.find(c => c.id === prod.companyId)
+                  return (
+                    <Card
+                      key={prod.id}
+                      className="p-4 bg-slate-900/90 border border-slate-800 hover:border-slate-700 flex flex-col justify-between gap-3 shadow-md"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span
+                            className="w-3.5 h-3.5 rounded-full ring-2 ring-white/10 shrink-0"
+                            style={{ backgroundColor: prod.color || '#22c55e' }}
+                          />
+                          <div>
+                            <h4 className="text-xs font-bold text-white leading-tight">{prod.name}</h4>
+                            <span className="text-[10px] font-mono text-slate-500 block">
+                              Code: <strong className="text-orange-400 font-bold">{prod.code}</strong> · {prod.category}
+                            </span>
+                          </div>
+                        </div>
+                        <Badge tone={prod.active ? 'success' : 'default'}>
+                          {prod.active ? 'Active' : 'Inactive'}
+                        </Badge>
+                      </div>
+
+                      <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800/80 flex items-center justify-between">
+                        <span className="text-[10px] uppercase font-bold text-slate-500">Retail Unit Price</span>
+                        <span className="text-base font-mono font-black text-orange-400">
+                          GHS {prod.unitPrice.toFixed(2)} <span className="text-xs font-normal text-slate-500">/ {prod.unit}</span>
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[10px] text-slate-500">
+                        <span className="truncate max-w-[150px]">
+                          {comp ? (
+                            <strong className="text-slate-300">{comp.name}</strong>
+                          ) : (
+                            'Global Base Default'
+                          )}
+                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => {
+                              setEditingProduct(prod)
+                              setEditProdName(prod.name)
+                              setEditProdPrice(String(prod.unitPrice))
+                              setEditProdCategory(prod.category)
+                              setEditProdUnit(prod.unit)
+                              setEditProdColor(prod.color || '#22c55e')
+                              setEditProdActive(prod.active)
+                              setEditProdError(null)
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-[11px] font-bold flex items-center gap-1 transition"
+                          >
+                            <Edit2 className="w-3 h-3 text-orange-400" /> Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteProduct(prod)}
+                            className="p-1.5 rounded-lg bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-400 transition"
+                            title="Delete Product"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      </div>
+                    </Card>
+                  )
+                })}
+            </div>
           </div>
         )}
       </div>
@@ -1422,6 +1702,222 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                 className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
               >
                 {editStaffBusy ? 'Saving…' : 'Save Staff Profile'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 7: Super Admin Create Product */}
+      {isCreateProdModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Flame className="w-5 h-5 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Create Product / Set Fuel Pricing</h3>
+              </div>
+              <button
+                onClick={() => setIsCreateProdModalOpen(false)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {prodError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-bold">
+                {prodError}
+              </div>
+            )}
+
+            <form onSubmit={handleCreateProduct} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                  Assign to OMC Tenant (Or Platform Default)
+                </label>
+                <select
+                  value={newProdCompanyId}
+                  onChange={e => setNewProdCompanyId(e.target.value)}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                >
+                  <option value="">Global Base Default (All Companies)</option>
+                  {companies.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} ({c.shortCode})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Product Code</label>
+                  <input
+                    value={newProdCode}
+                    onChange={e => setNewProdCode(e.target.value.toUpperCase())}
+                    placeholder="e.g. PMS, AGO, V-POWER"
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs font-mono text-white uppercase focus:border-orange-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Category</label>
+                  <select
+                    value={newProdCategory}
+                    onChange={e => setNewProdCategory(e.target.value as ProductCategory)}
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  >
+                    <option value="FUEL">Fuel (Petrol / Diesel)</option>
+                    <option value="LUBRICANT">Lubricants / Engine Oils</option>
+                    <option value="LPG">LPG / Auto Gas</option>
+                    <option value="OTHER">Other Item</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Product Name</label>
+                <input
+                  value={newProdName}
+                  onChange={e => setNewProdName(e.target.value)}
+                  placeholder="e.g. Super Unleaded Petrol (PMS)"
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit Price (GHS)</label>
+                  <input
+                    type="text"
+                    value={newProdPrice}
+                    onChange={e => setNewProdPrice(e.target.value.replace(/[^0-9.]/g, ''))}
+                    placeholder="14.80"
+                    inputMode="decimal"
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 font-mono text-sm font-bold text-orange-400 focus:border-orange-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit of Measure</label>
+                  <input
+                    value={newProdUnit}
+                    onChange={e => setNewProdUnit(e.target.value)}
+                    placeholder="Litre"
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Color Theme</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={newProdColor}
+                    onChange={e => setNewProdColor(e.target.value)}
+                    className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0"
+                  />
+                  <span className="font-mono text-xs text-slate-400">{newProdColor}</span>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={prodSaving}
+                className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
+              >
+                {prodSaving ? 'Saving…' : 'Create Product in Engine'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 8: Super Admin Edit Product */}
+      {editingProduct && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Edit2 className="w-4 h-4 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Edit Product & Pricing</h3>
+              </div>
+              <button
+                onClick={() => setEditingProduct(null)}
+                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            {editProdError && (
+              <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 text-xs font-bold">
+                {editProdError}
+              </div>
+            )}
+
+            <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+              <p className="text-xs font-bold text-white">{editingProduct.name}</p>
+              <p className="text-[10px] font-mono text-slate-400">
+                Code: <strong className="text-orange-400 font-bold">{editingProduct.code}</strong> · Scope:{' '}
+                {editingProduct.companyId
+                  ? companies.find(c => c.id === editingProduct.companyId)?.name || editingProduct.companyId
+                  : 'Global Platform Default'}
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveEditProduct} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Product Name</label>
+                <input
+                  value={editProdName}
+                  onChange={e => setEditProdName(e.target.value)}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  required
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Retail Price (GHS)</label>
+                  <input
+                    type="text"
+                    value={editProdPrice}
+                    onChange={e => setEditProdPrice(e.target.value.replace(/[^0-9.]/g, ''))}
+                    inputMode="decimal"
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 font-mono text-sm font-bold text-orange-400 focus:border-orange-500 outline-none"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Unit of Measure</label>
+                  <input
+                    value={editProdUnit}
+                    onChange={e => setEditProdUnit(e.target.value)}
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950 border border-slate-800">
+                <span className="text-[11px] font-bold text-slate-300">Active (Visible across stations)</span>
+                <input
+                  type="checkbox"
+                  checked={editProdActive}
+                  onChange={e => setEditProdActive(e.target.checked)}
+                  className="w-4 h-4 accent-orange-500 cursor-pointer"
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={editProdSaving}
+                className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
+              >
+                {editProdSaving ? 'Saving Changes…' : 'Update Product & Price'}
               </button>
             </form>
           </div>

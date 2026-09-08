@@ -12,6 +12,7 @@ import type {
   AttendantSession,
   Company,
   CompanyStation,
+  Product,
   ReceiptRecord,
   Shift,
   ShiftTransaction,
@@ -29,6 +30,7 @@ export class ProductionDatabase extends Dexie {
   transactions!: Table<ShiftTransaction, string>
   companies!: Table<Company, string>
   companyStations!: Table<CompanyStation, string>
+  products!: Table<Product, string>
   receipts!: Table<ReceiptRecord, string>
   syncQueue!: Table<SyncQueueItem, string>
   auditLog!: Table<AuditEntry, string>
@@ -101,8 +103,6 @@ export class ProductionDatabase extends Dexie {
       syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
       auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
     }).upgrade(async tx => {
-      // One-time clean slate: wipe any previously demo-seeded data from browsers
-      // that used the app before this release.
       for (const table of [
         'companies',
         'companyStations',
@@ -118,6 +118,20 @@ export class ProductionDatabase extends Dexie {
       ] as const) {
         await tx.table(table).clear()
       }
+    })
+    this.version(7).stores({
+      companies: 'id, shortCode, name, adminCode, active',
+      companyStations: 'id, companyId, code, name',
+      products: 'id, companyId, code, category, active',
+      attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
     })
   }
 }
@@ -191,5 +205,6 @@ export async function resetProductionData(): Promise<void> {
   await prodDb.supervisors.clear()
   await prodDb.companies.clear()
   await prodDb.companyStations.clear()
+  await prodDb.products.clear()
   await seedProductionData()
 }

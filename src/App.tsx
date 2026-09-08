@@ -1,6 +1,7 @@
 import React, { lazy, Suspense, useState, useEffect } from 'react'
 import { ForecourtProvider, useForecourt } from './context/ForecourtContext'
 import { NetworkSimulatorProvider, useNetworkSimulator } from './context/NetworkSimulatorContext'
+import { ThemeProvider, ThemeToggleButton, useTheme } from './context/ThemeContext'
 import { MVPLogo } from './components/common/MVPLogo'
 import { DeviceFrame } from './components/common/DeviceFrame'
 import { CompanySelectorModal } from './components/company/CompanySelectorModal'
@@ -48,6 +49,7 @@ const MainAppLayout: React.FC = () => {
   const [desktopFrameMode, setDesktopFrameMode] = useState<boolean>(false)
   const { activeCompany, activeStation, notification, setNotification } = useForecourt()
   const { networkMode, isOnline, isLocalWifi } = useNetworkSimulator()
+  const { theme } = useTheme()
 
   // Screen size detection for responsive mobile layout
   const [isMobileScreen, setIsMobileScreen] = useState<boolean>(() =>
@@ -83,9 +85,13 @@ const MainAppLayout: React.FC = () => {
       : 'Fuel Attendant'
 
   return (
-    <div className="min-h-screen bg-[#080c14] text-slate-100 flex flex-col font-sans selection:bg-orange-500/30">
+    <div className={`min-h-screen flex flex-col font-sans selection:bg-orange-500/30 ${
+      theme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-[#080c14] text-slate-100'
+    }`}>
       {/* Clean Production Enterprise Header */}
-      <header className="bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-2.5 shrink-0 flex items-center justify-between gap-3 sticky top-0 z-40">
+      <header className={`px-4 sm:px-6 py-2.5 shrink-0 flex items-center justify-between gap-3 sticky top-0 z-40 backdrop-blur-md border-b transition-colors ${
+        theme === 'light' ? 'bg-white/95 border-slate-200 shadow-sm' : 'bg-slate-950/90 border-slate-800/80'
+      }`}>
         {/* Brand & Station Identity */}
         <div className="flex items-center gap-3">
           <MVPLogo size="md" showText={!isMobileScreen} tagline={!isMobileScreen} />
@@ -93,7 +99,9 @@ const MainAppLayout: React.FC = () => {
           {/* Active Station / Enterprise Tag */}
           <button
             onClick={() => session.role === 'superadmin' && setIsCompanyModalOpen(true)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-left transition ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-left transition ${
+              theme === 'light' ? 'bg-slate-100 border-slate-200 text-slate-800' : 'bg-slate-900/90 border-slate-800 text-white'
+            } ${
               session.role === 'superadmin'
                 ? 'hover:border-orange-500/80 cursor-pointer group'
                 : 'cursor-default pointer-events-none'
@@ -105,14 +113,16 @@ const MainAppLayout: React.FC = () => {
               style={{ backgroundColor: session.role === 'superadmin' ? '#F43F5E' : activeCompany.primaryColor }}
             />
             <div className="leading-tight">
-              <span className="text-[9px] font-mono font-bold text-orange-400 block uppercase">
+              <span className="text-[9px] font-mono font-bold text-orange-500 block uppercase">
                 {session.role === 'superadmin'
                   ? 'Master Console'
                   : session.role === 'headoffice'
                   ? session.companyShortCode || 'Enterprise Network'
                   : activeCompany.shortCode}
               </span>
-              <span className="text-xs font-bold text-white truncate max-w-[140px] sm:max-w-none block">
+              <span className={`text-xs font-bold truncate max-w-[140px] sm:max-w-none block ${
+                theme === 'light' ? 'text-slate-900' : 'text-white'
+              }`}>
                 {session.role === 'superadmin'
                   ? 'All Registered OMCs'
                   : session.companyName || session.stationName || activeStation.name}
@@ -124,13 +134,20 @@ const MainAppLayout: React.FC = () => {
           </button>
         </div>
 
-        {/* Right Section: Role View Mode toggle + Operator Profile + Connectivity + Sign Out */}
+        {/* Right Section: Theme Toggle + Role View Mode toggle + Operator Profile + Connectivity + Sign Out */}
         <div className="flex items-center gap-2 sm:gap-3">
+          {/* Global Theme Toggle */}
+          <ThemeToggleButton size="sm" />
+
           {/* Attendant Desktop View Toggle (Full Screen vs Device Frame) */}
           {session.role === 'attendant' && !isMobileScreen && (
             <button
               onClick={() => setDesktopFrameMode(v => !v)}
-              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 text-slate-400 hover:text-white text-[11px] font-bold flex items-center gap-1.5 transition"
+              className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-bold flex items-center gap-1.5 transition ${
+                theme === 'light'
+                  ? 'bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200'
+                  : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+              }`}
               title={desktopFrameMode ? 'Switch to Full Screen View' : 'Switch to Handheld Phone Frame'}
             >
               {desktopFrameMode ? <Maximize2 className="w-3.5 h-3.5 text-orange-400" /> : <Smartphone className="w-3.5 h-3.5 text-orange-400" />}
@@ -139,16 +156,18 @@ const MainAppLayout: React.FC = () => {
           )}
 
           {/* User Profile Pill */}
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 shadow-inner">
+          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border shadow-inner ${
+            theme === 'light' ? 'bg-slate-100/90 border-slate-200' : 'bg-slate-900/90 border-slate-800'
+          }`}>
             <div
               className={`w-6 h-6 rounded-lg flex items-center justify-center text-xs font-black ${
                 session.role === 'superadmin'
-                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                  ? 'bg-rose-500/20 text-rose-500 border border-rose-500/40'
                   : session.role === 'headoffice'
-                  ? 'bg-orange-500/20 text-orange-400 border border-orange-500/40'
+                  ? 'bg-orange-500/20 text-orange-500 border border-orange-500/40'
                   : session.role === 'supervisor'
-                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                  : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                  ? 'bg-amber-500/20 text-amber-500 border border-amber-500/40'
+                  : 'bg-emerald-500/20 text-emerald-500 border border-emerald-500/40'
               }`}
             >
               {session.role === 'superadmin' ? (
@@ -163,9 +182,13 @@ const MainAppLayout: React.FC = () => {
             </div>
 
             <div className="leading-tight hidden sm:block">
-              <p className="text-xs font-bold text-white truncate max-w-[130px]">{session.fullName}</p>
-              <p className="text-[10px] font-mono text-slate-400">
-                <span className="text-orange-400 font-bold">{session.employeeCode}</span> · {roleLabel}
+              <p className={`text-xs font-bold truncate max-w-[130px] ${
+                theme === 'light' ? 'text-slate-900' : 'text-white'
+              }`}>{session.fullName}</p>
+              <p className={`text-[10px] font-mono ${
+                theme === 'light' ? 'text-slate-500' : 'text-slate-400'
+              }`}>
+                <span className="text-orange-500 font-bold">{session.employeeCode}</span> · {roleLabel}
               </p>
             </div>
 
@@ -175,7 +198,9 @@ const MainAppLayout: React.FC = () => {
                 clearUnifiedSession()
                 setSession(null)
               }}
-              className="ml-1 p-1.5 rounded-lg bg-slate-950 border border-slate-800 text-rose-400 hover:bg-rose-500/15 hover:border-rose-500/40 transition flex items-center gap-1"
+              className={`ml-1 p-1.5 rounded-lg border text-rose-500 hover:bg-rose-500/15 hover:border-rose-500/40 transition flex items-center gap-1 ${
+                theme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-950 border-slate-800'
+              }`}
               title="Sign Out"
             >
               <LogOut className="w-3.5 h-3.5" />
@@ -187,7 +212,9 @@ const MainAppLayout: React.FC = () => {
 
           {/* Connectivity Status Pill */}
           <div
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs font-mono"
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs font-mono ${
+              theme === 'light' ? 'bg-slate-100 border-slate-200' : 'bg-slate-900 border-slate-800'
+            }`}
             title={networkMode === 'online' ? 'Cloud Connected' : networkMode === 'local_wifi' ? 'Station Wi-Fi Mesh' : 'Air-Gapped Offline'}
           >
             <span
@@ -195,7 +222,7 @@ const MainAppLayout: React.FC = () => {
                 isOnline ? 'bg-emerald-500 animate-pulse' : isLocalWifi ? 'bg-amber-500' : 'bg-rose-500'
               }`}
             />
-            <span className="text-slate-400 text-[10px] font-bold capitalize hidden lg:inline">
+            <span className="text-slate-500 text-[10px] font-bold capitalize hidden lg:inline">
               {networkMode === 'online' ? 'Cloud' : networkMode === 'local_wifi' ? 'Mesh' : 'Offline'}
             </span>
           </div>
@@ -206,15 +233,19 @@ const MainAppLayout: React.FC = () => {
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <Suspense
           fallback={
-            <div className="flex-1 flex flex-col items-center justify-center bg-[#080c14] gap-3">
-              <span className="w-10 h-10 border-4 border-slate-800 border-t-orange-500 rounded-full animate-spin" />
+            <div className={`flex-1 flex flex-col items-center justify-center gap-3 ${
+              theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
+            }`}>
+              <span className="w-10 h-10 border-4 border-slate-300 border-t-orange-500 rounded-full animate-spin" />
               <p className="text-xs font-mono text-slate-500">Loading PetroView portal…</p>
             </div>
           }
         >
           {/* 1. Attendant Portal */}
           {session.role === 'attendant' && (
-            <div className="flex-1 flex flex-col overflow-y-auto bg-[#080c14]">
+            <div className={`flex-1 flex flex-col overflow-y-auto ${
+              theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
+            }`}>
               {desktopFrameMode && !isMobileScreen ? (
                 <div className="flex-1 p-6 flex flex-col items-center justify-center">
                   <DeviceFrame
@@ -235,21 +266,27 @@ const MainAppLayout: React.FC = () => {
 
           {/* 2. Station Manager / Supervisor Portal */}
           {session.role === 'supervisor' && (
-            <div className="flex-1 overflow-y-auto bg-[#080c14]">
+            <div className={`flex-1 overflow-y-auto ${
+              theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
+            }`}>
               <ProductionSupervisorApp />
             </div>
           )}
 
           {/* 3. Company Head Office Portal */}
           {session.role === 'headoffice' && (
-            <div className="flex-1 overflow-y-auto bg-[#080c14]">
+            <div className={`flex-1 overflow-y-auto ${
+              theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
+            }`}>
               <ProductionHeadOfficeDashboard session={session} />
             </div>
           )}
 
           {/* 4. Platform Master Super Super Admin Console */}
           {session.role === 'superadmin' && (
-            <div className="flex-1 overflow-y-auto bg-[#080c14]">
+            <div className={`flex-1 overflow-y-auto ${
+              theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
+            }`}>
               <SuperSuperAdminDashboard />
             </div>
           )}
@@ -298,10 +335,12 @@ const MainAppLayout: React.FC = () => {
 
 export default function App() {
   return (
-    <NetworkSimulatorProvider>
-      <ForecourtProvider>
-        <MainAppLayout />
-      </ForecourtProvider>
-    </NetworkSimulatorProvider>
+    <ThemeProvider>
+      <NetworkSimulatorProvider>
+        <ForecourtProvider>
+          <MainAppLayout />
+        </ForecourtProvider>
+      </NetworkSimulatorProvider>
+    </ThemeProvider>
   )
 }

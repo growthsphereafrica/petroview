@@ -7,7 +7,6 @@
 import { DomainError } from '../domain/errors'
 import { PRODUCTION_PUMPS, PRODUCTION_STATION } from '../domain/config'
 import {
-  applyPayment,
   computeFuelSales,
   emptyPayments,
   finalizeClosedShift,
@@ -17,14 +16,15 @@ import {
   validateReadingsSet,
   validateSale,
 } from '../domain/rules'
-import { shiftRepo, transactionRepo } from '../infra/repositories'
-import { syncQueueRepo } from '../infra/repositories'
+import { shiftRepo, transactionRepo, syncQueueRepo } from '../infra/repositories'
 import { liveSyncBus } from './liveSyncBus'
+import { productService } from './productService'
 import type {
   Attendant,
   FuelCode,
   FuelSale,
   MeterReading,
+  PaymentsBreakdown,
   PaymentMethod,
   Shift,
   ShiftTransaction,
@@ -34,6 +34,7 @@ export interface OpenShiftInput {
   attendant: Attendant
   pumpId: string
   openingReadings: MeterReading[]
+  customFuelPrices?: Record<string, number>
 }
 
 export interface RecordSaleInput {
@@ -41,6 +42,15 @@ export interface RecordSaleInput {
   fuelCode: FuelCode
   litres: number
   method: PaymentMethod
+  unitPrice?: number
+  customerRef?: string
+}
+
+export interface UpdateTransactionInput {
+  fuelCode?: FuelCode
+  litres?: number
+  method?: PaymentMethod
+  unitPrice?: number
   customerRef?: string
 }
 
@@ -57,6 +67,9 @@ export class ShiftService {
         shiftId: existing.id,
       })
     }
+
+    const prices =
+      input.customFuelPrices || (await productService.getFuelPriceMap(input.attendant.companyId))
 
     const now = new Date()
     const dayCount = (await shiftRepo.countForDate(input.attendant.id, now.toISOString())) + 1
@@ -81,7 +94,7 @@ export class ShiftService {
       closedAt: null,
       openingReadings: readings,
       closingReadings: [],
-      sales: computeFuelSales(readings, readings, PRODUCTION_STATION.fuelPrices).map(s => ({ ...s, litres: 0, amount: 0 })),
+      sales: computeFuelSales(readings, readings, prices).map(s => ({ ...s, litres: 0, amount: 0 })),
       expectedTotal: 0,
       payments: emptyPayments(),
       actualTotal: 0,
@@ -104,11 +117,17 @@ export class ShiftService {
 
   async recordSale(input: RecordSaleInput): Promise<Shift> {
     if (input.shift.status !== 'OPEN') {
-      throw new DomainError('SHIFT_NOT_OPEN', 'Shift is not open.', undefined, { shiftId: input.shift.id })
+      throw new DomainError('SHIFT_NOT_OPEN', 'Shift is closed and submitted. Sales cannot be recorded.', undefined, {
+        shiftId: input.shift.id,
+      })
     }
 
-    const price = PRODUCTION_STATION.fuelPrices[input.fuelCode]
-    if (!price) throw new DomainError('SHIFT_NOT_FOUND', 'Unknown fuel code.', input.fuelCode)
+    // Lookup price from input or database
+    let price = input.unitPrice
+    if (!price || price <= 0) {
+      const prices = await productService.getFuelPriceMap()
+      price = prices[input.fuelCode] || PRODUCTION_STATION.fuelPrices[input.fuelCode as 'PMS'] || 14.8
+    }
 
     const amount = validateSale({ fuelCode: input.fuelCode, litres: input.litres, unitPrice: price })
 
@@ -128,26 +147,129 @@ export class ShiftService {
     await transactionRepo.add(tx)
     liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'INSERT', key: tx.id })
 
-    // Recompute cumulative sales from recorded transactions for an audit-proof trail.
-    const txs = await transactionRepo.listForShift(input.shift.id)
+    // Recompute cumulative sales & payments from all recorded transactions for an audit-proof trail.
+    return this.recalculateShiftTotals(input.shift.id)
+  }
+
+  /**
+   * Updates an existing shift transaction.
+   * STRICT ENFORCEMENT: Transactions can only be edited while shift.status === 'OPEN'.
+   * Once submitted/closed, editing is permanently locked.
+   */
+  async updateTransaction(shiftId: string, txId: string, updates: UpdateTransactionInput): Promise<Shift> {
+    const shift = await shiftRepo.getById(shiftId)
+    if (!shift) {
+      throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.', shiftId)
+    }
+
+    if (shift.status !== 'OPEN') {
+      throw new DomainError(
+        'SHIFT_LOCKED' as any,
+        'Shift is closed/submitted and locked. Transactions cannot be edited after shift submission.',
+        undefined,
+        { shiftId, status: shift.status },
+      )
+    }
+
+    const tx = await transactionRepo.getById(txId)
+    if (!tx || tx.shiftId !== shiftId) {
+      throw new DomainError('TRANSACTION_NOT_FOUND' as any, 'Transaction record not found.', txId)
+    }
+
+    const nextFuelCode = updates.fuelCode || tx.fuelCode
+    const nextLitres = updates.litres !== undefined ? Math.max(0, updates.litres) : tx.litres
+    let nextUnitPrice = updates.unitPrice !== undefined ? updates.unitPrice : tx.unitPrice
+
+    if (!nextUnitPrice || nextUnitPrice <= 0) {
+      const prices = await productService.getFuelPriceMap()
+      nextUnitPrice = prices[nextFuelCode] || 14.8
+    }
+
+    const nextAmount = Math.round(nextLitres * nextUnitPrice * 100) / 100
+    const nextMethod = updates.method || tx.method
+
+    const updatedTx: ShiftTransaction = {
+      ...tx,
+      fuelCode: nextFuelCode,
+      litres: Math.round(nextLitres * 100) / 100,
+      unitPrice: nextUnitPrice,
+      amount: nextAmount,
+      method: nextMethod,
+      customerRef: updates.customerRef !== undefined ? updates.customerRef : tx.customerRef,
+      recordedAt: new Date().toISOString(),
+    }
+
+    await transactionRepo.update(updatedTx)
+    liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'UPDATE', key: txId })
+
+    return this.recalculateShiftTotals(shiftId)
+  }
+
+  /**
+   * Deletes a transaction from an open shift.
+   * Blocked if shift is closed/submitted.
+   */
+  async deleteTransaction(shiftId: string, txId: string): Promise<Shift> {
+    const shift = await shiftRepo.getById(shiftId)
+    if (!shift) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.', shiftId)
+
+    if (shift.status !== 'OPEN') {
+      throw new DomainError(
+        'SHIFT_LOCKED' as any,
+        'Shift is closed/submitted and locked. Transactions cannot be deleted.',
+        undefined,
+        { shiftId },
+      )
+    }
+
+    await transactionRepo.delete(txId)
+    liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'DELETE', key: txId })
+
+    return this.recalculateShiftTotals(shiftId)
+  }
+
+  /**
+   * Recomputes all cumulative sales, payment method breakdowns, and actual total
+   * directly from current transactions for exact mathematical accuracy.
+   */
+  private async recalculateShiftTotals(shiftId: string): Promise<Shift> {
+    const shift = await shiftRepo.getById(shiftId)
+    if (!shift) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.', shiftId)
+
+    const txs = await transactionRepo.listForShift(shiftId)
     const sales = this.aggregateSales(txs)
     const expectedTotal = sumSales(sales)
-    const next = applyPayment(input.shift, this.paymentKey(input.method), amount)
+
+    const payments: PaymentsBreakdown = {
+      CASH: 0,
+      MOMO: 0,
+      VOUCHER: 0,
+      CREDIT: 0,
+    }
+
+    for (const tx of txs) {
+      if (tx.method in payments) {
+        payments[tx.method] = Math.round((payments[tx.method] + tx.amount) * 100) / 100
+      }
+    }
+
+    const actualTotal = Math.round(
+      (payments.CASH + payments.MOMO + payments.VOUCHER + payments.CREDIT) * 100,
+    ) / 100
+
     const updated: Shift = {
-      ...next,
+      ...shift,
       sales,
       expectedTotal,
-      variance: Math.round((next.actualTotal - expectedTotal) * 100) / 100,
+      payments,
+      actualTotal,
+      variance: Math.round((actualTotal - expectedTotal) * 100) / 100,
       updatedAt: new Date().toISOString(),
     }
 
     await shiftRepo.upsert(updated)
     liveSyncBus.publish({ table: 'SHIFTS', reason: 'UPDATE', key: updated.id })
     return updated
-  }
-
-  private paymentKey(method: PaymentMethod): 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT' {
-    return method
   }
 
   private aggregateSales(txs: ShiftTransaction[]): FuelSale[] {
@@ -174,7 +296,8 @@ export class ShiftService {
       throw new DomainError('SHIFT_ALREADY_CLOSED', 'Shift is already closed.', undefined, { shiftId: shift.id })
     }
 
-    const closed = finalizeClosedShift(shift, closingReadings, PRODUCTION_STATION.fuelPrices, notes)
+    const prices = await productService.getFuelPriceMap()
+    const closed = finalizeClosedShift(shift, closingReadings, prices as any, notes)
     await shiftRepo.upsert(closed)
     liveSyncBus.publish({ table: 'SHIFTS', reason: 'UPDATE', key: closed.id })
 

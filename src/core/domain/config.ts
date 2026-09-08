@@ -52,11 +52,48 @@ export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
   { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] },
 ]
 
-/**
- * Enterprise station registry. The attendant terminal operates station 0
- * (Green Valley Main); supervisor & head-office rollups span all stations.
- */
-export const PRODUCTION_STATIONS: ProductionStationEntry[] = []
+export const PRODUCTION_STATIONS: ProductionStationEntry[] = [
+  {
+    id: 'STN-PV-01',
+    name: 'Green Valley Main Flagship (PetroView)',
+    code: 'PV-01',
+    location: 'Accra - Tema Motorway Corridor',
+    region: 'Greater Accra',
+    pumps: 4,
+  },
+  {
+    id: 'STN-PV-02',
+    name: 'Airport City Express (PetroView)',
+    code: 'PV-02',
+    location: 'Liberation Road, Airport City',
+    region: 'Greater Accra',
+    pumps: 4,
+  },
+  {
+    id: 'STN-GOIL-01',
+    name: 'GOIL Kwame Nkrumah Circle Flagship',
+    code: 'GOIL-01',
+    location: 'Ring Road Central, Circle',
+    region: 'Greater Accra',
+    pumps: 6,
+  },
+  {
+    id: 'STN-TOTAL-01',
+    name: 'TotalEnergies 37 Flagship Station',
+    code: 'TOTAL-01',
+    location: 'Liberation Road, 37 Roundabout',
+    region: 'Greater Accra',
+    pumps: 4,
+  },
+  {
+    id: 'STN-SHELL-01',
+    name: 'Shell Airport Bypass Express',
+    code: 'SHELL-01',
+    location: 'Airport Bypass Road, Accra',
+    region: 'Greater Accra',
+    pumps: 4,
+  },
+]
 
 const dynamicStationMap = new Map<string, ProductionStationEntry>()
 

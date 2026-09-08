@@ -33,6 +33,8 @@ export interface PaymentsBreakdown {
   CREDIT: number
 }
 
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
+
 export interface Attendant {
   id: string
   employeeCode: string
@@ -41,6 +43,12 @@ export interface Attendant {
   pinHash: string
   pumpId: string | null
   stationId: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  approvalStatus?: ApprovalStatus
+  approvedAt?: string | null
+  approvedBy?: string | null
   active: boolean
   failedAttempts: number
   lockoutUntil: string | null
@@ -53,6 +61,8 @@ export interface AttendantSession {
   attendantId: string
   employeeCode: string
   fullName: string
+  stationId?: string
+  companyId?: string
   createdAt: string
   expiresAt: string
 }
@@ -63,8 +73,19 @@ export interface Supervisor {
   fullName: string
   pinSalt: string
   pinHash: string
-  role: 'SUPERVISOR' | 'ACCOUNTANT'
+  stationId?: string
+  companyId?: string
+  companyShortCode?: string
+  phone?: string
+  role?: 'SUPERVISOR' | 'ACCOUNTANT'
+  isHeadOffice?: boolean
+  isSuperAdmin?: boolean
+  approvalStatus?: ApprovalStatus
+  approvedAt?: string | null
+  approvedBy?: string | null
   active: boolean
+  failedAttempts?: number
+  lockoutUntil?: string | null
   createdAt: string
 }
 

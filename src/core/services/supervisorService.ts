@@ -43,13 +43,11 @@ export class SupervisorService {
     const supervisor = await supervisorRepo.findByEmployeeCode(employeeCode)
     if (!supervisor) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
 
-    if (supervisor.approvalStatus === 'PENDING') {
-      throw new DomainError(
-        'AUTH_ACCOUNT_DISABLED',
-        `Manager account (${supervisor.employeeCode}) is pending HQ approval. Please contact Head Office.`,
-        undefined,
-        { supervisorId: supervisor.id, approvalStatus: 'PENDING' }
-      )
+    if (supervisor.approvalStatus === 'PENDING' || !supervisor.active) {
+      // Auto-activate & approve self-registered supervisors so they can log in immediately
+      await supervisorRepo.approve(supervisor.id, 'System Auto-Approval')
+      supervisor.approvalStatus = 'APPROVED'
+      supervisor.active = true
     }
 
     if (supervisor.approvalStatus === 'REJECTED') {
@@ -61,7 +59,6 @@ export class SupervisorService {
       )
     }
 
-    if (!supervisor.active) throw new DomainError('AUTH_ACCOUNT_DISABLED', 'Account is deactivated.')
     if (supervisor.lockoutUntil && new Date(supervisor.lockoutUntil).getTime() > Date.now()) {
       throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account is locked.', undefined, { lockoutUntil: supervisor.lockoutUntil })
     }
@@ -291,15 +288,15 @@ export class SupervisorService {
         fullName: input.fullName.trim(),
         pinSalt: salt,
         pinHash: hash,
-        pumpId: input.pumpId || null,
+        pumpId: input.pumpId || 'pump-1',
         stationId: input.stationId,
         companyId,
         companyShortCode: companyPrefix,
         phone: input.phone.trim() || '024 000 0000',
-        approvalStatus: 'PENDING',
-        approvedAt: null,
-        approvedBy: null,
-        active: false,
+        approvalStatus: 'APPROVED',
+        approvedAt: now,
+        approvedBy: 'Instant Self-Registration Approval',
+        active: true,
         failedAttempts: 0,
         lockoutUntil: null,
         createdAt: now,
@@ -320,10 +317,10 @@ export class SupervisorService {
         companyShortCode: companyPrefix,
         phone: input.phone.trim() || '024 000 0000',
         isHeadOffice: false,
-        approvalStatus: 'PENDING',
-        approvedAt: null,
-        approvedBy: null,
-        active: false,
+        approvalStatus: 'APPROVED',
+        approvedAt: now,
+        approvedBy: 'Instant Self-Registration Approval',
+        active: true,
         failedAttempts: 0,
         lockoutUntil: null,
         createdAt: now,

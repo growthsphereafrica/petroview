@@ -184,6 +184,63 @@ export const LoginScreen: React.FC = () => {
               <KeyRound className="w-4 h-4" />
               {isSubmitting || signingIn ? 'Signing in…' : 'Sign In'}
             </button>
+
+            {/* Quick Demo Credentials */}
+            <div className="mt-2 p-3 rounded-2xl bg-slate-900/70 border border-slate-800/80 flex flex-col gap-2">
+              <span className="text-[10px] font-bold text-orange-400 uppercase tracking-wider">
+                Quick Demo Credentials (1-Click Fill)
+              </span>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeCode('SUPER-ADMIN')
+                    setPin('7256')
+                    setError(null)
+                  }}
+                  className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 text-left hover:border-slate-700 transition"
+                >
+                  <span className="text-[10px] font-bold text-rose-400 block">👑 Super Admin</span>
+                  <span className="text-[9px] font-mono text-slate-400">SUPER-ADMIN · 7256</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeCode('PV-HQ01')
+                    setPin('9999')
+                    setError(null)
+                  }}
+                  className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 text-left hover:border-slate-700 transition"
+                >
+                  <span className="text-[10px] font-bold text-orange-400 block">🏢 PetroView HQ</span>
+                  <span className="text-[9px] font-mono text-slate-400">PV-HQ01 · 9999</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeCode('PV-ACC-001-M')
+                    setPin('1234')
+                    setError(null)
+                  }}
+                  className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 text-left hover:border-slate-700 transition"
+                >
+                  <span className="text-[10px] font-bold text-amber-400 block">👨‍💼 Manager</span>
+                  <span className="text-[9px] font-mono text-slate-400">PV-ACC-001-M · 1234</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmployeeCode('PV-ACC-001-A')
+                    setPin('1234')
+                    setError(null)
+                  }}
+                  className="p-2 rounded-lg bg-slate-950/70 border border-slate-800 text-left hover:border-slate-700 transition"
+                >
+                  <span className="text-[10px] font-bold text-emerald-400 block">⚡ Attendant</span>
+                  <span className="text-[9px] font-mono text-slate-400">PV-ACC-001-A · 1234</span>
+                </button>
+              </div>
+            </div>
           </form>
         </div>
 

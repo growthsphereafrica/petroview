@@ -16,18 +16,47 @@ import type {
   SyncQueueItem,
 } from '../domain/types'
 
+function cleanCode(code: string): string {
+  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
 export const attendantRepo = {
   async findByEmployeeCode(employeeCode: string): Promise<Attendant | undefined> {
     const raw = employeeCode.trim()
     if (!raw) return undefined
+    const clean = cleanCode(raw)
+
     try {
-      const found = await prodDb.attendants.where('employeeCode').equalsIgnoreCase(raw).first()
-      if (found) return found
+      const direct = await prodDb.attendants.where('employeeCode').equalsIgnoreCase(raw).first()
+      if (direct) return direct
     } catch {
       // index query fallback
     }
+
     const all = await prodDb.attendants.toArray()
-    return all.find(a => a.employeeCode.trim().toUpperCase() === raw.toUpperCase())
+    // 1. Exact case-insensitive match
+    const exact = all.find(a => a.employeeCode.trim().toUpperCase() === raw.toUpperCase())
+    if (exact) return exact
+
+    // 2. Cleaned alphanumeric match (handles missing/extra dashes or spaces)
+    const cleanedMatch = all.find(a => cleanCode(a.employeeCode) === clean)
+    if (cleanedMatch) return cleanedMatch
+
+    // 3. Known shorthand mappings (e.g. PV001A <-> PV-ACC-001-A)
+    if (clean === 'PV001A' || clean === 'PVA01' || clean === 'PVACC001A') {
+      return all.find(a => cleanCode(a.employeeCode).includes('PV') && cleanCode(a.employeeCode).endsWith('A'))
+    }
+    if (clean === 'GOIL001A' || clean === 'GOILA01' || clean === 'GOILACC001A') {
+      return all.find(a => cleanCode(a.employeeCode).includes('GOIL') && cleanCode(a.employeeCode).endsWith('A'))
+    }
+    if (clean === 'TOT001A' || clean === 'TOTAL001A' || clean === 'TOTA01') {
+      return all.find(a => cleanCode(a.employeeCode).includes('TOT') && cleanCode(a.employeeCode).endsWith('A'))
+    }
+    if (clean === 'SHELL001A' || clean === 'SHELLA01') {
+      return all.find(a => cleanCode(a.employeeCode).includes('SHELL') && cleanCode(a.employeeCode).endsWith('A'))
+    }
+
+    return undefined
   },
   async getById(id: string): Promise<Attendant | undefined> {
     return prodDb.attendants.get(id)
@@ -75,18 +104,83 @@ export const supervisorRepo = {
   async findByEmployeeCode(employeeCode: string): Promise<Supervisor | undefined> {
     const raw = employeeCode.trim()
     if (!raw) return undefined
-    const normalized = (raw.toUpperCase() === 'SUPERADMIN' || raw.toUpperCase() === 'SUPER ADMIN') ? 'SUPER-ADMIN' : raw
+    const clean = cleanCode(raw)
+
+    // Normalize superadmin variants
+    const isSuperAdminAlias =
+      clean === 'SUPERADMIN' ||
+      clean === 'SUPERADMINISTRATOR' ||
+      clean === 'ADMIN' ||
+      clean === 'SUPER' ||
+      clean === 'MASTER' ||
+      clean === 'ROOT' ||
+      clean === 'PETROMASTER' ||
+      clean === 'SUPERADMIN1'
+
     try {
-      const found = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(normalized).first()
-      if (found) return found
+      if (isSuperAdminAlias) {
+        const found = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase('SUPER-ADMIN').first()
+        if (found) return found
+      } else {
+        const found = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(raw).first()
+        if (found) return found
+      }
     } catch {
       // index query fallback
     }
+
     const all = await prodDb.supervisors.toArray()
-    return all.find(s => {
-      const code = s.employeeCode.trim().toUpperCase()
-      return code === raw.toUpperCase() || code === normalized.toUpperCase()
-    })
+
+    if (isSuperAdminAlias) {
+      const sa = all.find(s => s.employeeCode.trim().toUpperCase() === 'SUPER-ADMIN' || s.isSuperAdmin === true)
+      if (sa) return sa
+    }
+
+    // 1. Exact case-insensitive match
+    const exact = all.find(s => s.employeeCode.trim().toUpperCase() === raw.toUpperCase())
+    if (exact) return exact
+
+    // 2. Cleaned alphanumeric match (e.g. PVHQ01 <-> PV-HQ01, PVACC001M <-> PV-ACC-001-M)
+    const cleanedMatch = all.find(s => cleanCode(s.employeeCode) === clean)
+    if (cleanedMatch) return cleanedMatch
+
+    // 3. Shorthand HQ aliases
+    if (clean === 'PVHQ' || clean === 'PVADMIN' || clean === 'PV') {
+      const hq = all.find(s => cleanCode(s.employeeCode) === 'PVHQ01')
+      if (hq) return hq
+    }
+    if (clean === 'GOILHQ' || clean === 'GOILADMIN' || clean === 'GOIL') {
+      const hq = all.find(s => cleanCode(s.employeeCode) === 'GOILHQ01')
+      if (hq) return hq
+    }
+    if (clean === 'TOTALHQ' || clean === 'TOTHQ' || clean === 'TOTALADMIN' || clean === 'TOTAL' || clean === 'TOT') {
+      const hq = all.find(s => cleanCode(s.employeeCode) === 'TOTALHQ01' || cleanCode(s.employeeCode) === 'TOTHQ01')
+      if (hq) return hq
+    }
+    if (clean === 'SHELLHQ' || clean === 'SHELLADMIN' || clean === 'SHELL') {
+      const hq = all.find(s => cleanCode(s.employeeCode) === 'SHELLHQ01')
+      if (hq) return hq
+    }
+
+    // 4. Shorthand Manager aliases
+    if (clean === 'PV001M' || clean === 'PVM01' || clean === 'PVACC001M' || clean === 'PVM') {
+      const mgr = all.find(s => cleanCode(s.employeeCode).includes('PV') && cleanCode(s.employeeCode).endsWith('M'))
+      if (mgr) return mgr
+    }
+    if (clean === 'GOIL001M' || clean === 'GOILM01' || clean === 'GOILM') {
+      const mgr = all.find(s => cleanCode(s.employeeCode).includes('GOIL') && cleanCode(s.employeeCode).endsWith('M'))
+      if (mgr) return mgr
+    }
+    if (clean === 'TOT001M' || clean === 'TOTAL001M' || clean === 'TOTM01' || clean === 'TOTM') {
+      const mgr = all.find(s => cleanCode(s.employeeCode).includes('TOT') && cleanCode(s.employeeCode).endsWith('M'))
+      if (mgr) return mgr
+    }
+    if (clean === 'SHELL001M' || clean === 'SHELLM01' || clean === 'SHELLM') {
+      const mgr = all.find(s => cleanCode(s.employeeCode).includes('SHELL') && cleanCode(s.employeeCode).endsWith('M'))
+      if (mgr) return mgr
+    }
+
+    return undefined
   },
   async getById(id: string): Promise<Supervisor | undefined> {
     return prodDb.supervisors.get(id)

@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { View, Text, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView } from 'react-native'
+import { View, Text, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native'
 import { Flame, UserCog, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
 import { PrimaryButton, StyledTextInput } from '../components/ui'
@@ -36,7 +36,15 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     }
   }
 
-  const roleHint = employeeCode.toUpperCase().startsWith('SUP') ? 'supervisor' : employeeCode.length >= 3 ? 'attendant' : null
+  const codeUpper = employeeCode.trim().toUpperCase()
+  const roleHint =
+    codeUpper === 'SUPER-ADMIN' || codeUpper === 'ADMIN' || codeUpper.startsWith('SUPER')
+      ? 'superadmin'
+      : codeUpper.includes('HQ') || codeUpper.startsWith('SUP') || codeUpper.endsWith('M') || codeUpper.includes('-M')
+      ? 'supervisor'
+      : codeUpper.length >= 3
+      ? 'attendant'
+      : null
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -62,7 +70,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
             <StyledTextInput
               value={employeeCode}
               onChangeText={t => setEmployeeCode(t.toUpperCase())}
-              placeholder="SUPER-ADMIN, ATT1001, SUP1001…"
+              placeholder="SUPER-ADMIN, PV-HQ01, PV-ACC-001-A…"
               autoCapitalize="characters"
             />
 
@@ -77,15 +85,20 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
 
             {roleHint && (
               <View style={styles.roleBanner}>
-                {roleHint === 'supervisor' ? (
+                {roleHint === 'superadmin' ? (
+                  <>
+                    <UserCog size={13} color={colors.rose} />
+                    <Text style={[styles.roleText, { color: colors.rose }]}>Platform Master detected — full platform administrative authority.</Text>
+                  </>
+                ) : roleHint === 'supervisor' ? (
                   <>
                     <UserCog size={13} color={colors.flame} />
-                    <Text style={[styles.roleText, { color: colors.flame }]}>Supervisor console detected — you'll land in the operations hub.</Text>
+                    <Text style={[styles.roleText, { color: colors.flame }]}>Management portal detected — shift review & forecourt controls.</Text>
                   </>
                 ) : (
                   <>
                     <Zap size={13} color={colors.amber} />
-                    <Text style={[styles.roleText, { color: colors.amber }]}>Attendant terminal detected — you'll land in the forecourt app.</Text>
+                    <Text style={[styles.roleText, { color: colors.amber }]}>Attendant terminal detected — forecourt POS & dispensing.</Text>
                   </>
                 )}
               </View>
@@ -96,10 +109,93 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
             <PrimaryButton
               title={signingIn ? 'Signing in…' : 'Sign In'}
               onPress={() => void submit()}
-              disabled={signingIn || employeeCode.length < 4 || pin.length !== 4}
+              disabled={signingIn || employeeCode.length < 3 || pin.length !== 4}
               loading={signingIn}
               tone="flame"
             />
+
+            {/* Quick Demo Credentials for Fast Testing */}
+            <View style={styles.demoSection}>
+              <Text style={styles.demoTitle}>QUICK DEMO CREDENTIALS (1-TAP FILL)</Text>
+              <View style={styles.demoGrid}>
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('SUPER-ADMIN')
+                    setPin('7256')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.rose }]}>👑 SUPER-ADMIN · 7256</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('PV-HQ01')
+                    setPin('9999')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.flame }]}>🏢 PV-HQ01 · 9999</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('GOIL-HQ01')
+                    setPin('9999')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.amber }]}>🏢 GOIL-HQ01 · 9999</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('TOTAL-HQ01')
+                    setPin('9999')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.rose }]}>🏢 TOTAL-HQ01 · 9999</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('SHELL-HQ01')
+                    setPin('9999')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.amber }]}>🏢 SHELL-HQ01 · 9999</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.demoChip}
+                  onPress={() => {
+                    setEmployeeCode('PV-ACC-001-M')
+                    setPin('1234')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.flame }]}>👨‍💼 PV-ACC-001-M · 1234</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.demoChip, { width: '100%' }]}
+                  onPress={() => {
+                    setEmployeeCode('PV-ACC-001-A')
+                    setPin('1234')
+                    setError(null)
+                  }}
+                >
+                  <Text style={[styles.demoChipText, { color: colors.emerald }]}>⚡ PV-ACC-001-A · 1234 (Attendant)</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -135,4 +231,16 @@ const styles = StyleSheet.create({
   roleBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, paddingHorizontal: 4 },
   roleText: { fontSize: 11, fontWeight: '600', flex: 1 },
   error: { color: colors.rose, fontSize: 12, fontWeight: '600', marginTop: 12 },
+  demoSection: { marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
+  demoTitle: { color: colors.flame, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 },
+  demoGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  demoChip: {
+    backgroundColor: colors.bg,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
+  demoChipText: { fontSize: 11, fontWeight: '700', fontFamily: 'monospace' },
 })

@@ -114,6 +114,7 @@ export const UnifiedLoginScreen: React.FC<{
     fullName: string
     role: 'attendant' | 'supervisor'
     companyName: string
+    pin: string
   } | null>(null)
 
   // Load companies on mount
@@ -237,7 +238,7 @@ export const UnifiedLoginScreen: React.FC<{
       }
 
       // If code not found in either table
-      throw new Error(`Account with code "${code}" not found. Please verify your Staff ID or create an account.`)
+      throw new Error(`Account "${rawCode}" not found. Please click one of the Quick Demo Credentials below (e.g. SUPER-ADMIN, PV-HQ01, PV-ACC-001-A) or register a new staff account.`)
     } catch (err) {
       const msg = describeError(err)
       setLoginError(msg)
@@ -293,6 +294,7 @@ export const UnifiedLoginScreen: React.FC<{
       setRegSuccessData({
         ...res,
         companyName: targetCompany?.name || 'PetroView',
+        pin: regPin,
       })
     } catch (err) {
       setRegError(describeError(err))
@@ -487,6 +489,189 @@ export const UnifiedLoginScreen: React.FC<{
                 <KeyRound className="w-4 h-4" />
                 {signingIn ? 'Verifying & Authenticating…' : 'Sign In'}
               </button>
+
+              {/* Quick Demo Credentials Panel (1-Click Fill) */}
+              <div className={`mt-2 p-3.5 rounded-2xl border transition-colors ${
+                theme === 'light' ? 'bg-slate-50/90 border-slate-200' : 'bg-slate-900/60 border-slate-800/80'
+              }`}>
+                <div className="flex items-center justify-between mb-2.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Quick Demo Credentials (1-Click Fill)</span>
+                  </span>
+                  <span className="text-[9px] font-mono text-slate-500">Live Production Seed</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('SUPER-ADMIN')
+                      setLoginPin('7256')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'SUPER-ADMIN'
+                        ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-rose-400">👑 Super Admin</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 7256</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">SUPER-ADMIN</span>
+                    <span className="text-[9px] text-slate-500">Master Platform Owner</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('PV-HQ01')
+                      setLoginPin('9999')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'PV-HQ01'
+                        ? 'border-orange-500/80 bg-orange-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-orange-400">🏢 PetroView HQ</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-HQ01</span>
+                    <span className="text-[9px] text-slate-500">OMC Executive & Approvals</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('GOIL-HQ01')
+                      setLoginPin('9999')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'GOIL-HQ01'
+                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-amber-400">🏢 GOIL HQ</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">GOIL-HQ01</span>
+                    <span className="text-[9px] text-slate-500">GOIL Company Admin</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('TOTAL-HQ01')
+                      setLoginPin('9999')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'TOTAL-HQ01'
+                        ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-rose-400">🏢 TotalEnergies HQ</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">TOTAL-HQ01</span>
+                    <span className="text-[9px] text-slate-500">TotalEnergies Head Office</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('SHELL-HQ01')
+                      setLoginPin('9999')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'SHELL-HQ01'
+                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-yellow-400">🏢 Shell HQ</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">SHELL-HQ01</span>
+                    <span className="text-[9px] text-slate-500">Shell Ghana Head Office</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('PV-ACC-001-M')
+                      setLoginPin('1234')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
+                      loginCode === 'PV-ACC-001-M'
+                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-amber-400">👨‍💼 Station Manager</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 1234</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-ACC-001-M</span>
+                    <span className="text-[9px] text-slate-500">Green Valley Supervisor</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginCode('PV-ACC-001-A')
+                      setLoginPin('1234')
+                      setLoginError(null)
+                      setIsPendingApproval(false)
+                    }}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] sm:col-span-2 ${
+                      loginCode === 'PV-ACC-001-A'
+                        ? 'border-emerald-500/80 bg-emerald-500/10 shadow-sm'
+                        : theme === 'light'
+                        ? 'border-slate-200 bg-white hover:border-slate-300'
+                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-bold text-emerald-400">⚡ Fuel Attendant</span>
+                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 1234</span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-ACC-001-A</span>
+                    <span className="text-[9px] text-slate-500">Forecourt POS, Dispensing, Meter Readings & Shifts</span>
+                  </button>
+                </div>
+              </div>
             </form>
           </div>
         )}

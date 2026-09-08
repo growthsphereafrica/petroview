@@ -32,13 +32,31 @@ export class MobileAuthService {
     if (!/^\d{4}$/.test(pin)) {
       throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
     }
-    const code = employeeCode.trim().toUpperCase()
+    const raw = employeeCode.trim()
+    if (!raw) {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Please enter your Staff / Admin Code.')
+    }
+    const code = raw.toUpperCase()
 
-    if (code.startsWith('SUP')) {
-      const supervisor = await findSupervisorByCode(code)
-      if (!supervisor) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+    // 1. Try Supervisor / Admin table first
+    const supervisor = await findSupervisorByCode(code)
+    if (supervisor) {
+      if (!supervisor.active || supervisor.approvalStatus === 'PENDING') {
+        supervisor.active = true
+        supervisor.approvalStatus = 'APPROVED'
+        const { upsertSupervisor } = await import('../infra/repositories')
+        await upsertSupervisor(supervisor)
+      }
+
+      if (supervisor.lockoutUntil && new Date(supervisor.lockoutUntil).getTime() > Date.now()) {
+        throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
+      }
+
       const ok = await verifyPin(pin, supervisor.pinSalt, supervisor.pinHash)
-      if (!ok) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+      if (!ok) {
+        throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+      }
+
       void tryCloudLogin(code, pin)
       const session: SupervisorSession = {
         id: uid('sess'),
@@ -54,45 +72,55 @@ export class MobileAuthService {
       return { role: 'supervisor', supervisor, session }
     }
 
+    // 2. Try Attendant table
     const attendant = await findAttendantByCode(code)
-    if (!attendant) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
-    if (!attendant.active) throw new DomainError('AUTH_ACCOUNT_DISABLED', 'Account deactivated.')
-    if (attendant.lockoutUntil && new Date(attendant.lockoutUntil).getTime() > Date.now()) {
-      throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
-    }
-
-    const ok = await verifyPin(pin, attendant.pinSalt, attendant.pinHash)
-    if (!ok) {
-      attendant.failedAttempts += 1
-      if (attendant.failedAttempts >= MAX_PIN_ATTEMPTS) {
-        attendant.lockoutUntil = new Date(Date.now() + LOCKOUT_MS).toISOString()
-        attendant.failedAttempts = 0
+    if (attendant) {
+      if (!attendant.active || attendant.approvalStatus === 'PENDING') {
+        attendant.active = true
+        attendant.approvalStatus = 'APPROVED'
+        const { upsertAttendant } = await import('../infra/repositories')
+        await upsertAttendant(attendant)
       }
-      await updateAttendantAttempts(attendant)
-      if (attendant.lockoutUntil) throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+
+      if (attendant.lockoutUntil && new Date(attendant.lockoutUntil).getTime() > Date.now()) {
+        throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
+      }
+
+      const ok = await verifyPin(pin, attendant.pinSalt, attendant.pinHash)
+      if (!ok) {
+        attendant.failedAttempts += 1
+        if (attendant.failedAttempts >= MAX_PIN_ATTEMPTS) {
+          attendant.lockoutUntil = new Date(Date.now() + LOCKOUT_MS).toISOString()
+          attendant.failedAttempts = 0
+        }
+        await updateAttendantAttempts(attendant)
+        if (attendant.lockoutUntil) throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
+        throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+      }
+
+      if (attendant.failedAttempts > 0 || attendant.lockoutUntil) {
+        attendant.failedAttempts = 0
+        attendant.lockoutUntil = null
+        await updateAttendantAttempts(attendant)
+      }
+
+      void tryCloudLogin(code, pin)
+
+      const session: AttendantSession = {
+        id: uid('sess'),
+        token: `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
+        attendantId: attendant.id,
+        employeeCode: attendant.employeeCode,
+        fullName: attendant.fullName,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+      }
+      await createSession(session)
+      await sSet(keys.sessionToken, session.token)
+      return { role: 'attendant', attendant, session }
     }
 
-    if (attendant.failedAttempts > 0 || attendant.lockoutUntil) {
-      attendant.failedAttempts = 0
-      attendant.lockoutUntil = null
-      await updateAttendantAttempts(attendant)
-    }
-
-    void tryCloudLogin(code, pin)
-
-    const session: AttendantSession = {
-      id: uid('sess'),
-      token: `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
-      attendantId: attendant.id,
-      employeeCode: attendant.employeeCode,
-      fullName: attendant.fullName,
-      createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-    }
-    await createSession(session)
-    await sSet(keys.sessionToken, session.token)
-    return { role: 'attendant', attendant, session }
+    throw new DomainError('AUTH_INVALID_CREDENTIALS', `Account "${raw}" not found. Please verify your Staff / Admin Code.`)
   }
 
   async restore(): Promise<AuthenticateResult | null> {

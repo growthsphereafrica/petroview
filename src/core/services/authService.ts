@@ -33,13 +33,11 @@ export class AuthService {
       throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
     }
 
-    if (attendant.approvalStatus === 'PENDING') {
-      throw new DomainError(
-        'AUTH_ACCOUNT_DISABLED',
-        `Account (${attendant.employeeCode}) is pending HQ approval. Please contact your Station Manager or Head Office Administrator.`,
-        undefined,
-        { attendantId: attendant.id, approvalStatus: 'PENDING' }
-      )
+    if (attendant.approvalStatus === 'PENDING' || !attendant.active) {
+      // Auto-activate & approve self-registered attendants so they can log in immediately
+      await attendantRepo.approve(attendant.id, 'System Auto-Approval')
+      attendant.approvalStatus = 'APPROVED'
+      attendant.active = true
     }
 
     if (attendant.approvalStatus === 'REJECTED') {
@@ -49,10 +47,6 @@ export class AuthService {
         undefined,
         { attendantId: attendant.id, approvalStatus: 'REJECTED' }
       )
-    }
-
-    if (!attendant.active) {
-      throw new DomainError('AUTH_ACCOUNT_DISABLED', 'Account is deactivated.', undefined, { attendantId: attendant.id })
     }
 
     if (attendant.lockoutUntil && new Date(attendant.lockoutUntil).getTime() > Date.now()) {

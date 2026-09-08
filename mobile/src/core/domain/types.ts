@@ -116,6 +116,7 @@ export interface SyncQueueItem {
   attempts: number
   createdAt: string
   updatedAt: string
+  lastError?: string | null
 }
 
 export interface AuditEntry {

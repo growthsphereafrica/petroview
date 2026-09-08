@@ -6,6 +6,7 @@
 import { DomainError } from './shiftService'
 import { keys, sGet, sSet } from '../store/storage'
 import { verifyPin } from '../infra/password'
+import { cloudLogin } from '../infra/cloudApi'
 import { MAX_PIN_ATTEMPTS, LOCKOUT_MS, SESSION_TTL_MS, uid } from '../domain/config'
 import type { Attendant, AttendantSession, Supervisor, SupervisorSession } from '../domain/types'
 import {
@@ -38,6 +39,7 @@ export class MobileAuthService {
       if (!supervisor) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
       const ok = await verifyPin(pin, supervisor.pinSalt, supervisor.pinHash)
       if (!ok) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
+      void tryCloudLogin(code, pin)
       const session: SupervisorSession = {
         id: uid('sess'),
         token: `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
@@ -76,6 +78,8 @@ export class MobileAuthService {
       attendant.lockoutUntil = null
       await updateAttendantAttempts(attendant)
     }
+
+    void tryCloudLogin(code, pin)
 
     const session: AttendantSession = {
       id: uid('sess'),
@@ -117,6 +121,19 @@ export class MobileAuthService {
     const token = await sGet<string>(keys.sessionToken)
     if (token) await deleteSession(token)
     await sSet(keys.sessionToken, null as never)
+    await sSet(keys.cloudToken, null as never)
+  }
+}
+
+/**
+ * Best-effort cloud login. Never throws — the app stays fully local/offline
+ * when the backend is unreachable or credentials differ from the server.
+ */
+async function tryCloudLogin(employeeCode: string, pin: string): Promise<void> {
+  try {
+    await cloudLogin(employeeCode, pin)
+  } catch {
+    // offline-first: ignore
   }
 }
 

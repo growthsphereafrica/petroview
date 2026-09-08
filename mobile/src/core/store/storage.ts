@@ -79,4 +79,5 @@ export const keys = {
   syncQueue: 'mvp_m_sync_queue',
   auditLog: 'mvp_m_audit_log',
   sessionToken: 'mvp_m_session_token',
+  cloudToken: 'mvp_m_cloud_token',
 }

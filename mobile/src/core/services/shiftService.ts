@@ -210,14 +210,51 @@ export class ShiftService {
 
 export const shiftService = new ShiftService()
 
-export async function syncNow(): Promise<void> {
+export async function syncNow(): Promise<{ synced: number; failed: number; unreachable: boolean }> {
   const { listSyncQueue, updateSyncItem } = await import('../infra/repositories')
+  const { uploadShiftsToCloud, getCloudApiBase } = await import('../infra/cloudApi')
   const items = await listSyncQueue()
-  for (const item of items) {
-    if (item.status === 'PENDING' || item.status === 'FAILED') {
+  const pending = items.filter(i => i.status === 'PENDING' || i.status === 'FAILED')
+  if (pending.length === 0) return { synced: 0, failed: 0, unreachable: false }
+
+  if (!getCloudApiBase()) {
+    for (const item of pending) {
       await updateSyncItem({ ...item, status: 'SYNCED', attempts: item.attempts + 1, updatedAt: new Date().toISOString() })
     }
+    return { synced: pending.length, failed: 0, unreachable: false }
   }
+
+  const shifts = await Promise.all(
+    pending.filter(i => i.type === 'SHIFT').map(async i => {
+      const { getShift } = await import('../infra/repositories')
+      return getShift(i.refId)
+    }),
+  )
+  const toUpload = shifts.filter((s): s is Shift => s !== null)
+
+  let result: Awaited<ReturnType<typeof uploadShiftsToCloud>>
+  try {
+    result = await uploadShiftsToCloud(toUpload)
+  } catch {
+    return { synced: 0, failed: pending.length, unreachable: true }
+  }
+
+  let synced = 0
+  let failed = 0
+  const now = new Date().toISOString()
+  for (const item of pending) {
+    const ok = result.accepted.includes(item.refId)
+    const rejected = result.rejected.find(r => r.id === item.refId)
+    if (ok || item.type !== 'SHIFT') {
+      await updateSyncItem({ ...item, status: 'SYNCED', attempts: item.attempts + 1, updatedAt: now })
+      synced += 1
+    } else {
+      const attempts = item.attempts + 1
+      await updateSyncItem({ ...item, status: 'FAILED', attempts, updatedAt: now, ...(rejected ? { lastError: rejected.reason } : {}) })
+      failed += 1
+    }
+  }
+  return { synced, failed, unreachable: false }
 }
 
 export { describeError, DomainError }

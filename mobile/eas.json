@@ -11,11 +11,17 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "APP_ENV": "preview" }
+      "env": {
+        "APP_ENV": "preview",
+        "EXPO_PUBLIC_API_URL": "https://petroviewapi.growthspheregh.com"
+      }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "APP_ENV": "production" }
+      "env": {
+        "APP_ENV": "production",
+        "EXPO_PUBLIC_API_URL": "https://petroviewapi.growthspheregh.com"
+      }
     }
   },
   "submit": {

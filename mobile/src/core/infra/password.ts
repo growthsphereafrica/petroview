@@ -1,11 +1,7 @@
 /**
- * Pure-TS PBKDF2-SHA256 hashing (no Web Crypto dependency), so the same
+ * Pure-TS PBKDF2-HMAC-SHA256 hashing (no Web Crypto dependency), so the same
  * PIN-hashing scheme works identically on Android, iOS and web.
- *
- * Migration note: the web build uses the browser's `crypto.subtle` PBKDF2
- * with 210k iterations. The salt+hash format is compatible, but for the
- * native build we run a portable implementation so we don't depend on
- * WebCrypto availability. Produces hex salt/hash strings.
+ * Compatible with Node.js crypto and WebCrypto PBKDF2-SHA256.
  */
 
 const ITERATIONS = 20_000
@@ -79,21 +75,21 @@ function sha256(message: Uint8Array): Uint8Array {
   const l = message.length
   const bitLen = l * 8
   const withOne = l + 1
-  const padding = (withOne % 64 === 0 ? 0 : 64 - (withOne % 64)) + 8
-  const total = new Uint8Array(l + padding)
+  const padZeros = (56 - (withOne % 64) + 64) % 64
+  const total = new Uint8Array(withOne + padZeros + 8)
   total.set(message)
   total[l] = 0x80
-  const dv = new DataView(total.buffer)
+  const dv = new DataView(total.buffer, total.byteOffset, total.byteLength)
   dv.setUint32(total.length - 4, bitLen >>> 0, false)
-  dv.setUint32(total.length - 8, Math.floor(bitLen / 2 ** 32), false)
+  dv.setUint32(total.length - 8, Math.floor(bitLen / 0x100000000), false)
 
   let h0 = 0x6a09e667, h1 = 0xbb67ae85, h2 = 0x3c6ef372, h3 = 0xa54ff53a
   let h4 = 0x510e527f, h5 = 0x9b05688c, h6 = 0x1f83d9ab, h7 = 0x5be0cd19
 
-  const wv = Array.from({ length: 64 }, () => 0 as number)
+  const wv = new Uint32Array(64)
   for (let i = 0; i < total.length; i += 64) {
     for (let t = 0; t < 16; t++) {
-      wv[t] = dv.getUint32(i + t * 4, false) >>> 0
+      wv[t] = dv.getUint32(i + t * 4, false)
     }
     for (let t = 16; t < 64; t++) {
       const s0 = rotr(wv[t - 15], 7) ^ rotr(wv[t - 15], 18) ^ (wv[t - 15] >>> 3)
@@ -117,27 +113,51 @@ function sha256(message: Uint8Array): Uint8Array {
   }
 
   const out = new Uint8Array(32)
-  const odv = new DataView(out.buffer)
+  const odv = new DataView(out.buffer, out.byteOffset, out.byteLength)
   odv.setUint32(0, h0, false); odv.setUint32(4, h1, false); odv.setUint32(8, h2, false); odv.setUint32(12, h3, false)
   odv.setUint32(16, h4, false); odv.setUint32(20, h5, false); odv.setUint32(24, h6, false); odv.setUint32(28, h7, false)
   return out
 }
 
+function hmacSha256(key: Uint8Array, message: Uint8Array): Uint8Array {
+  let k = key
+  if (k.length > 64) {
+    k = sha256(k)
+  }
+  const paddedKey = new Uint8Array(64)
+  paddedKey.set(k)
+  const oKeyPad = new Uint8Array(64)
+  const iKeyPad = new Uint8Array(64)
+  for (let i = 0; i < 64; i++) {
+    oKeyPad[i] = paddedKey[i] ^ 0x5c
+    iKeyPad[i] = paddedKey[i] ^ 0x36
+  }
+  const inner = new Uint8Array(64 + message.length)
+  inner.set(iKeyPad)
+  inner.set(message, 64)
+  const innerHash = sha256(inner)
+
+  const outer = new Uint8Array(64 + 32)
+  outer.set(oKeyPad)
+  outer.set(innerHash, 64)
+  return sha256(outer)
+}
+
 function pbkdf2(password: Uint8Array, salt: Uint8Array, iterations: number, keyLenBytes: number): Uint8Array {
   const blocks = Math.ceil(keyLenBytes / 32)
   const out = new Uint8Array(blocks * 32)
-  const salted = new Uint8Array(salt.length + 4)
-  salted.set(salt)
   for (let block = 1; block <= blocks; block++) {
+    const salted = new Uint8Array(salt.length + 4)
+    salted.set(salt)
     salted[salt.length] = (block >> 24) & 0xff
     salted[salt.length + 1] = (block >> 16) & 0xff
     salted[salt.length + 2] = (block >> 8) & 0xff
     salted[salt.length + 3] = block & 0xff
-    let u = sha256(salted)
+    let u = hmacSha256(password, salted)
     const t = new Uint8Array(u.length)
     t.set(u)
     for (let it = 1; it < iterations; it++) {
-      u = sha256(u)
+      u = hmacSha256(password, u)
       for (let k = 0; k < t.length; k++) t[k] ^= u[k]
     }
     out.set(t, (block - 1) * 32)
@@ -147,8 +167,8 @@ function pbkdf2(password: Uint8Array, salt: Uint8Array, iterations: number, keyL
 
 export async function hashPin(pin: string, saltHex: string = randomSaltHex()): Promise<{ salt: string; hash: string }> {
   const salt = fromHex(saltHex)
-const bits = await pbkdf2(utf8Encode(`mvp-v1:${pin}`), salt, ITERATIONS, KEY_LENGTH_BYTES)
-    return { salt: saltHex, hash: toHex(bits) }
+  const bits = pbkdf2(utf8Encode(`mvp-v1:${pin}`), salt, ITERATIONS, KEY_LENGTH_BYTES)
+  return { salt: saltHex, hash: toHex(bits) }
 }
 
 function constantTimeEqual(a: string, b: string): boolean {
@@ -161,7 +181,7 @@ function constantTimeEqual(a: string, b: string): boolean {
 export async function verifyPin(pin: string, saltHex: string, hashHex: string): Promise<boolean> {
   try {
     const salt = fromHex(saltHex)
-    const bits = await pbkdf2(utf8Encode(`mvp-v1:${pin}`), salt, ITERATIONS, KEY_LENGTH_BYTES)
+    const bits = pbkdf2(utf8Encode(`mvp-v1:${pin}`), salt, ITERATIONS, KEY_LENGTH_BYTES)
     return constantTimeEqual(toHex(bits), hashHex)
   } catch {
     return false

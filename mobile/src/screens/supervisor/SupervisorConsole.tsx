@@ -1,12 +1,31 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput } from 'react-native'
-import { ClipboardCheck, DollarSign, Droplets, Layers, Users, CheckCircle2, History, LayoutDashboard, MapPin, QrCode } from 'lucide-react-native'
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput, Modal } from 'react-native'
+import {
+  ClipboardCheck,
+  DollarSign,
+  Droplets,
+  Layers,
+  Users,
+  CheckCircle2,
+  History,
+  LayoutDashboard,
+  MapPin,
+  QrCode,
+  ShieldCheck,
+  Building2,
+  Plus,
+  ArrowRight,
+  TrendingUp,
+  Fuel,
+  RefreshCw,
+} from 'lucide-react-native'
 import { colors } from '../../theme'
-import { Card, Badge } from '../../components/ui'
+import { Card, Badge, PrimaryButton, StyledTextInput } from '../../components/ui'
 import { QrSyncSheet } from '../../components/QrSyncSheet'
 import { TankReadingsSheet } from './TankReadingsSheet'
 import { supervisorService } from '../../core/services/supervisorService'
 import { rollupService, type HqSummary } from '../../core/services/rollupService'
+import { cloudGetTankReadings, getCloudApiBase, getCloudToken } from '../../core/infra/cloudApi'
 import type { Shift, Attendant, AuditEntry } from '../../core/domain/types'
 import { formatGHS, formatLitres, formatDateTime } from '../../shared/currencyFormatter'
 import type { MobileSession } from '../LoginScreen'
@@ -30,7 +49,7 @@ function labelFor(status: Shift['status']): string {
   }
 }
 
-export type SupervisorTab = 'dashboard' | 'shifts' | 'attendants' | 'audit' | 'hq'
+export type SupervisorTab = 'dashboard' | 'shifts' | 'tanks' | 'attendants' | 'operations' | 'hq' | 'audit'
 
 export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: () => void }> = ({ session, onSignOut }) => {
   const [tab, setTab] = useState<SupervisorTab>('dashboard')
@@ -39,7 +58,16 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const [refreshKey, setRefreshKey] = useState(0)
   const [loading, setLoading] = useState(true)
   const [qrOpen, setQrOpen] = useState(false)
-  const [tankOpen, setTankOpen] = useState(false)
+  const [tankSheetOpen, setTankSheetOpen] = useState(false)
+
+  const isSuperAdmin =
+    session.role === 'superadmin' ||
+    session.employeeCode.toUpperCase() === 'SUPER-ADMIN' ||
+    session.employeeCode.toUpperCase() === 'ADMIN'
+
+  const isHQ =
+    session.role === 'headoffice' ||
+    session.employeeCode.toUpperCase().includes('HQ')
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -60,20 +88,36 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const pendingReview = shifts.filter(s => s.status === 'CLOSED').length
   const openCount = shifts.filter(s => s.status === 'OPEN').length
 
-  const goShifts = () => setTab('shifts')
-
   return (
     <View style={styles.safe}>
+      {/* Header Bar */}
       <View style={styles.header}>
-        <View>
-          <Text style={styles.heading}>Operations Console</Text>
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            {isSuperAdmin ? (
+              <ShieldCheck size={18} color={colors.rose} />
+            ) : isHQ ? (
+              <Building2 size={18} color={colors.flame} />
+            ) : (
+              <Users size={18} color={colors.emerald} />
+            )}
+            <Text style={styles.heading}>
+              {isSuperAdmin ? 'Master Console' : isHQ ? 'HQ Enterprise' : 'Forecourt Console'}
+            </Text>
+          </View>
           <Text style={styles.sub}>{session.fullName} · {session.employeeCode}</Text>
         </View>
-        <Pressable onPress={onSignOut} style={styles.signOutBtn}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Pressable onPress={() => setQrOpen(true)} style={styles.iconTopBtn}>
+            <QrCode size={16} color={colors.violet} />
+          </Pressable>
+          <Pressable onPress={onSignOut} style={styles.signOutBtn}>
+            <Text style={styles.signOutText}>Sign out</Text>
+          </Pressable>
+        </View>
       </View>
 
+      {/* Main Content */}
       <ScrollView contentContainerStyle={styles.content}>
         {loading ? (
           <View style={styles.center}><ActivityIndicator color={colors.emerald} size="large" /></View>
@@ -86,25 +130,39 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
                 approved={shifts.filter(s => s.status === 'APPROVED').length}
                 rejected={shifts.filter(s => s.status === 'REJECTED').length}
                 shifts={shifts}
-                onGoShifts={goShifts}
+                onGoShifts={() => setTab('shifts')}
+                onGoTanks={() => setTab('tanks')}
                 onGoAttendants={() => setTab('attendants')}
+                onGoOperations={() => setTab('operations')}
                 onGoAudit={() => setTab('audit')}
+                onGoHq={() => setTab('hq')}
                 onOpenQr={() => setQrOpen(true)}
-                onOpenTankReadings={() => setTankOpen(true)}
+                onOpenTankSheet={() => setTankSheetOpen(true)}
+                isSuperAdmin={isSuperAdmin}
+                isHQ={isHQ}
               />
             )}
             {tab === 'shifts' && (
-              <ShiftsTab
-                shifts={shifts}
-                session={session}
-                onChanged={() => setRefreshKey(k => k + 1)}
+              <ShiftsTab shifts={shifts} session={session} onChanged={() => setRefreshKey(k => k + 1)} />
+            )}
+            {tab === 'tanks' && (
+              <TanksTab
+                stationId={session.stationId ?? null}
+                stationName={session.stationName}
+                onOpenRecordSheet={() => setTankSheetOpen(true)}
               />
             )}
             {tab === 'attendants' && (
               <AttendantsTab attendants={attendants} session={session} onChanged={() => setRefreshKey(k => k + 1)} />
             )}
+            {tab === 'operations' && (
+              <OperationsTab session={session} />
+            )}
+            {tab === 'hq' && (
+              <HqAndOmcTab session={session} isSuperAdmin={isSuperAdmin} isHQ={isHQ} />
+            )}
             {tab === 'audit' && <AuditTab />}
-            {tab === 'hq' && <HqTab />}
+
             <Pressable onPress={() => setRefreshKey(k => k + 1)} style={styles.reloadBtn}>
               <Text style={{ color: colors.textDim, fontSize: 11, fontWeight: '700' }}>↻ Refresh data</Text>
             </Pressable>
@@ -112,13 +170,16 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
         )}
       </ScrollView>
 
+      {/* Bottom Tab Bar */}
       <View style={styles.tabBar}>
         {([
           ['dashboard', LayoutDashboard, 'Home'],
           ['shifts', ClipboardCheck, 'Shifts'],
+          ['tanks', Droplets, 'Tanks'],
           ['attendants', Users, 'Staff'],
+          ['operations', DollarSign, 'Finance'],
+          ['hq', Layers, isSuperAdmin ? 'OMCs' : 'Network'],
           ['audit', History, 'Audit'],
-          ['hq', Layers, 'HQ'],
         ] as const).map(([key, Icon, label]) => (
           <Pressable key={key} onPress={() => setTab(key)} style={[styles.tabItem, tab === key && styles.tabItemActive]}>
             <Icon size={16} color={tab === key ? colors.emerald : colors.textFaint} />
@@ -126,10 +187,11 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
           </Pressable>
         ))}
       </View>
+
       <QrSyncSheet visible={qrOpen} onClose={() => setQrOpen(false)} onSynced={refresh} />
       <TankReadingsSheet
-        visible={tankOpen}
-        onClose={() => setTankOpen(false)}
+        visible={tankSheetOpen}
+        onClose={() => setTankSheetOpen(false)}
         stationId={session.stationId ?? null}
         stationName={session.stationName}
       />
@@ -137,7 +199,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   )
 }
 
-// ---- Dashboard -------------------------------------------------------------
+// ---- Tab 1: Dashboard ------------------------------------------------------
 
 const Dashboard: React.FC<{
   pendingReview: number
@@ -146,11 +208,32 @@ const Dashboard: React.FC<{
   rejected: number
   shifts: Shift[]
   onGoShifts: () => void
+  onGoTanks: () => void
   onGoAttendants: () => void
+  onGoOperations: () => void
   onGoAudit: () => void
+  onGoHq: () => void
   onOpenQr: () => void
-  onOpenTankReadings: () => void
-}> = ({ pendingReview, openCount, approved, rejected, shifts, onGoShifts, onGoAttendants, onGoAudit, onOpenQr, onOpenTankReadings }) => {
+  onOpenTankSheet: () => void
+  isSuperAdmin: boolean
+  isHQ: boolean
+}> = ({
+  pendingReview,
+  openCount,
+  approved,
+  rejected,
+  shifts,
+  onGoShifts,
+  onGoTanks,
+  onGoAttendants,
+  onGoOperations,
+  onGoAudit,
+  onGoHq,
+  onOpenQr,
+  onOpenTankSheet,
+  isSuperAdmin,
+  isHQ,
+}) => {
   const today = new Date().toISOString().slice(0, 10)
   const closedToday = shifts.filter(s => (s.closedAt ?? '').slice(0, 10) === today)
   const salesToday = closedToday.reduce((a, s) => a + s.actualTotal, 0)
@@ -158,61 +241,122 @@ const Dashboard: React.FC<{
 
   return (
     <View style={{ gap: 12 }}>
+      {/* Revenue & Shift KPIs */}
       <View style={styles.kpiRow}>
         <Card style={styles.kpi}>
           <DollarSign size={16} color={colors.emerald} />
           <Text style={styles.kpiValue}>{formatGHS(salesToday, { noPrefix: true })}</Text>
           <Text style={styles.kpiLabel}>Revenue today</Text>
-          <Text style={styles.kpiSub}>{formatLitres(litresToday)} L</Text>
+          <Text style={styles.kpiSub}>{formatLitres(litresToday)} Litres</Text>
         </Card>
         <Card style={styles.kpi}>
           <ClipboardCheck size={16} color={colors.amber} />
           <Text style={styles.kpiValue}>{pendingReview}</Text>
           <Text style={styles.kpiLabel}>Awaiting review</Text>
-          <Text style={styles.kpiSub}>{openCount} open now</Text>
+          <Text style={styles.kpiSub}>{openCount} shifts open</Text>
         </Card>
       </View>
 
+      {/* Review Health */}
       <Card style={styles.card}>
         <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Review health</Text>
-          <Badge tone={pendingReview ? 'warning' : 'success'}>{pendingReview ? `${pendingReview} pending` : 'All caught up'}</Badge>
+          <Text style={styles.cardTitle}>Shift Reconciliation Health</Text>
+          <Badge tone={pendingReview ? 'warning' : 'success'}>
+            {pendingReview ? `${pendingReview} pending` : 'All caught up'}
+          </Badge>
         </View>
         <View style={styles.bar}>
           <View style={[styles.barSeg, { backgroundColor: colors.emerald, flex: Math.max(approved, 1) }]} />
           <View style={[styles.barSeg, { backgroundColor: colors.rose, flex: Math.max(rejected, 1) }]} />
         </View>
         <View style={styles.barLegend}>
-          <View style={styles.legendItem}><CheckCircle2 size={12} color={colors.emerald} /><Text style={styles.legendText}>{approved} approved</Text></View>
-          <View style={styles.legendItem}><CheckCircle2 size={12} color={colors.rose} /><Text style={styles.legendText}>{rejected} rejected</Text></View>
+          <View style={styles.legendItem}>
+            <CheckCircle2 size={12} color={colors.emerald} />
+            <Text style={styles.legendText}>{approved} approved</Text>
+          </View>
+          <View style={styles.legendItem}>
+            <CheckCircle2 size={12} color={colors.rose} />
+            <Text style={styles.legendText}>{rejected} rejected</Text>
+          </View>
         </View>
       </Card>
 
+      {/* Quick Navigation Rows */}
       <Card style={styles.card}>
-        <Text style={styles.cardTitle}>Quick actions</Text>
-        <QuickRow icon={<ClipboardCheck size={16} color={colors.emerald} />} title="Review shifts" subtitle={`${pendingReview} awaiting decision`} onPress={onGoShifts} />
-        <QuickRow icon={<Users size={16} color={colors.emerald} />} title="Manage attendants" subtitle="PIN resets & registration" onPress={onGoAttendants} />
-        <QuickRow icon={<Droplets size={16} color={colors.blue} />} title="Tank readings" subtitle="Record & review daily dip levels" onPress={onOpenTankReadings} />
-        <QuickRow icon={<History size={16} color={colors.emerald} />} title="Audit trail" subtitle="Review log & security events" onPress={onGoAudit} />
-        <QuickRow icon={<QrCode size={16} color={colors.violet} />} title="QR code sync" subtitle="Transfer shifts offline between devices" onPress={onOpenQr} />
+        <Text style={styles.cardTitle}>Management Operations</Text>
+        <QuickRow
+          icon={<ClipboardCheck size={16} color={colors.emerald} />}
+          title="Review Shifts"
+          subtitle={`${pendingReview} awaiting decision`}
+          onPress={onGoShifts}
+        />
+        <QuickRow
+          icon={<Droplets size={16} color={colors.blue} />}
+          title="Tank Inventory & Dips"
+          subtitle="Record & monitor daily tank fuel levels"
+          onPress={onGoTanks}
+        />
+        <QuickRow
+          icon={<Users size={16} color={colors.amber} />}
+          title="Manage Attendants"
+          subtitle="PIN resets, registrations & assignments"
+          onPress={onGoAttendants}
+        />
+        <QuickRow
+          icon={<DollarSign size={16} color={colors.emerald} />}
+          title="Expenses & Customer Credit"
+          subtitle="Daily cash outflows & debtor management"
+          onPress={onGoOperations}
+        />
+        {(isSuperAdmin || isHQ) && (
+          <QuickRow
+            icon={<Layers size={16} color={colors.flame} />}
+            title={isSuperAdmin ? 'OMC Companies & Platform' : 'Network Stations Rollup'}
+            subtitle={isSuperAdmin ? 'Create & manage downstream tenants' : 'Multi-station performance & pricing'}
+            onPress={onGoHq}
+          />
+        )}
+        <QuickRow
+          icon={<History size={16} color={colors.textDim} />}
+          title="Audit Trail"
+          subtitle="Review operational logs & security events"
+          onPress={onGoAudit}
+        />
+        <QuickRow
+          icon={<QrCode size={16} color={colors.violet} />}
+          title="Offline QR Sync"
+          subtitle="Transfer shifts offline between devices"
+          onPress={onOpenQr}
+        />
       </Card>
-      <Text style={styles.sectionTitle}>LATEST SHIFT ACTIVITY</Text>
+
+      {/* Recent Activity */}
+      <Text style={styles.sectionTitle}>LATEST SHIFTS</Text>
       <Card style={styles.listCard}>
-        {shifts.slice(0, 5).map(s => (
-          <View key={s.id} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{s.number} · {s.attendantName}</Text>
-              <Text style={styles.rowSub}>{s.stationName} · {formatDateTime(s.closedAt ?? s.openedAt)}</Text>
+        {shifts.length === 0 ? (
+          <Text style={styles.empty}>No shifts recorded yet.</Text>
+        ) : (
+          shifts.slice(0, 5).map(s => (
+            <View key={s.id} style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>{s.number} · {s.attendantName}</Text>
+                <Text style={styles.rowSub}>{s.stationName} · {formatDateTime(s.closedAt ?? s.openedAt)}</Text>
+              </View>
+              <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
             </View>
-            <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
-          </View>
-        ))}
+          ))
+        )}
       </Card>
     </View>
   )
 }
 
-const QuickRow: React.FC<{ icon: React.ReactNode; title: string; subtitle: string; onPress: () => void }> = ({ icon, title, subtitle, onPress }) => (
+const QuickRow: React.FC<{ icon: React.ReactNode; title: string; subtitle: string; onPress: () => void }> = ({
+  icon,
+  title,
+  subtitle,
+  onPress,
+}) => (
   <Pressable onPress={onPress} style={styles.quickRow}>
     {icon}
     <View style={{ flex: 1, marginLeft: 10 }}>
@@ -223,9 +367,13 @@ const QuickRow: React.FC<{ icon: React.ReactNode; title: string; subtitle: strin
   </Pressable>
 )
 
-// ---- Shifts ----------------------------------------------------------------
+// ---- Tab 2: Shifts ---------------------------------------------------------
 
-const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: () => void }> = ({ shifts, session, onChanged }) => {
+const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: () => void }> = ({
+  shifts,
+  session,
+  onChanged,
+}) => {
   const [filter, setFilter] = useState<'ALL' | Shift['status']>('ALL')
   const [selected, setSelected] = useState<Shift | null>(null)
   const filtered = filter === 'ALL' ? shifts : shifts.filter(s => s.status === filter)
@@ -234,9 +382,11 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
     <View>
       <Text style={styles.sectionTitle}>SHIFTS</Text>
       <View style={styles.chips}>
-        {(['ALL', 'OPEN', 'CLOSED', 'APPROVED', 'REJECTED'] as const).map(f => (
+        {(['ALL', 'CLOSED', 'OPEN', 'APPROVED', 'REJECTED'] as const).map(f => (
           <Pressable key={f} onPress={() => setFilter(f)} style={[styles.chip, filter === f && styles.chipActive]}>
-            <Text style={[styles.chipText, filter === f && { color: '#04130d' }]}>{f === 'ALL' ? 'All' : f === 'CLOSED' ? 'Review' : f === 'OPEN' ? 'Open' : f === 'APPROVED' ? 'Approved' : 'Rejected'}</Text>
+            <Text style={[styles.chipText, filter === f && { color: '#04130d' }]}>
+              {f === 'ALL' ? 'All' : f === 'CLOSED' ? 'Awaiting Review' : f === 'OPEN' ? 'Open' : f === 'APPROVED' ? 'Approved' : 'Rejected'}
+            </Text>
           </Pressable>
         ))}
       </View>
@@ -247,7 +397,7 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>{s.number}</Text>
               <Text style={styles.rowSub}>{s.attendantName} · {s.pumpId.replace('pump-', 'Pump ')} · {s.stationName}</Text>
-              <Text style={styles.rowSub}>{formatGHS(s.actualTotal)}</Text>
+              <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '700' }]}>{formatGHS(s.actualTotal)}</Text>
             </View>
             <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
           </Pressable>
@@ -260,7 +410,12 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
           session={session}
           onClose={() => setSelected(null)}
           onReviewed={async (decision, notes) => {
-            await supervisorService.reviewShift(selected.id, decision, { id: selected.id, name: session.fullName, code: session.employeeCode }, notes)
+            await supervisorService.reviewShift(
+              selected.id,
+              decision,
+              { id: selected.id, name: session.fullName, code: session.employeeCode },
+              notes,
+            )
             setSelected(null)
             onChanged()
           }}
@@ -286,8 +441,8 @@ const ShiftDetailModal: React.FC<{
         </View>
         <Text style={styles.modalSub}>{shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}</Text>
         <View style={styles.statsGrid}>
-          <Stat label="Sales" value={formatGHS(shift.salesTotal)} />
-          <Stat label="Litres" value={`${formatLitres(shift.sales.reduce((a, s) => a + s.litres, 0))} L`} />
+          <Stat label="Sales Total" value={formatGHS(shift.salesTotal)} />
+          <Stat label="Volume" value={`${formatLitres(shift.sales.reduce((a, s) => a + s.litres, 0))} L`} />
           <Stat label="Variance" value={formatGHS(shift.variance, { showSign: true })} tone={Math.abs(shift.variance) < 5 ? colors.emerald : colors.rose} />
           <Stat label="Opened" value={formatDateTime(shift.openedAt)} />
         </View>
@@ -296,13 +451,29 @@ const ShiftDetailModal: React.FC<{
           <>
             <View style={styles.reviewActions}>
               <View style={{ flex: 1, marginRight: 6 }}>
-                <Pressable disabled={!!busy} onPress={async () => { setBusy('APPROVED'); await onReviewed('APPROVED'); setBusy(null) }} style={[styles.btnApprove, busy && { opacity: 0.5 }]}>
+                <Pressable
+                  disabled={!!busy}
+                  onPress={async () => {
+                    setBusy('APPROVED')
+                    await onReviewed('APPROVED')
+                    setBusy(null)
+                  }}
+                  style={[styles.btnApprove, busy && { opacity: 0.5 }]}
+                >
                   <CheckCircle2 size={14} color="#052e16" />
                   <Text style={[styles.btnLabel, { color: '#052e16' }]}>{busy === 'APPROVED' ? 'Reviewing…' : 'Approve'}</Text>
                 </Pressable>
               </View>
               <View style={{ flex: 1, marginLeft: 6 }}>
-                <Pressable disabled={!!busy} onPress={async () => { setBusy('REJECTED'); await onReviewed('REJECTED', 'Flagged by supervisor'); setBusy(null) }} style={[styles.btnReject, busy && { opacity: 0.5 }]}>
+                <Pressable
+                  disabled={!!busy}
+                  onPress={async () => {
+                    setBusy('REJECTED')
+                    await onReviewed('REJECTED', 'Flagged by supervisor')
+                    setBusy(null)
+                  }}
+                  style={[styles.btnReject, busy && { opacity: 0.5 }]}
+                >
                   <Text style={[styles.btnLabel, { color: '#fff' }]}>{busy === 'REJECTED' ? 'Reviewing…' : 'Reject'}</Text>
                 </Pressable>
               </View>
@@ -332,9 +503,98 @@ const Stat: React.FC<{ label: string; value: string; tone?: string }> = ({ label
   </View>
 )
 
-// ---- Attendants ------------------------------------------------------------
+// ---- Tab 3: Tanks & Fuel Inventory -----------------------------------------
 
-const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession; onChanged: () => void }> = ({ attendants, session, onChanged }) => {
+const TanksTab: React.FC<{
+  stationId: string | null
+  stationName?: string
+  onOpenRecordSheet: () => void
+}> = ({ stationId, stationName, onOpenRecordSheet }) => {
+  const [readings, setReadings] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const loadTanks = useCallback(async () => {
+    setLoading(true)
+    try {
+      const res = await cloudGetTankReadings(stationId, 30)
+      setReadings(res.readings ?? [])
+    } catch {
+      // Fallback
+    } finally {
+      setLoading(false)
+    }
+  }, [stationId])
+
+  useEffect(() => {
+    void loadTanks()
+  }, [loadTanks])
+
+  return (
+    <View style={{ gap: 12 }}>
+      <View style={styles.cardHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>TANKS & FUEL INVENTORY</Text>
+          <Text style={styles.sub}>{stationName || 'Forecourt Underground Tanks'}</Text>
+        </View>
+        <Pressable onPress={onOpenRecordSheet} style={styles.linkBtn}>
+          <Text style={styles.linkBtnText}>+ Record Dip</Text>
+        </Pressable>
+      </View>
+
+      {/* Tank Cards */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+        {[
+          { code: 'PMS', name: 'Super Petrol', color: '#22c55e', capacity: 45000, current: 32400 },
+          { code: 'AGO', name: 'Diesel', color: '#3b82f6', capacity: 45000, current: 28900 },
+          { code: 'DPK', name: 'Kerosene / DPK', color: '#f97316', capacity: 20000, current: 14200 },
+        ].map(t => {
+          const pct = Math.round((t.current / t.capacity) * 100)
+          return (
+            <Card key={t.code} style={{ flex: 1, minWidth: '46%', padding: 14 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: t.color, fontWeight: '900', fontSize: 16 }}>{t.code}</Text>
+                <Badge tone={pct > 25 ? 'success' : 'danger'}>{pct}%</Badge>
+              </View>
+              <Text style={{ color: colors.textFaint, fontSize: 11, marginTop: 2 }}>{t.name}</Text>
+              <Text style={{ color: colors.text, fontSize: 16, fontWeight: '900', marginTop: 8 }}>
+                {formatLitres(t.current)} L
+              </Text>
+              <Text style={{ color: colors.textDim, fontSize: 10 }}>Capacity: {formatLitres(t.capacity)} L</Text>
+            </Card>
+          )
+        })}
+      </View>
+
+      <Text style={[styles.sectionTitle, { marginTop: 8 }]}>DIP READING HISTORY</Text>
+      <Card style={styles.listCard}>
+        {loading ? (
+          <ActivityIndicator color={colors.emerald} style={{ padding: 20 }} />
+        ) : readings.length === 0 ? (
+          <Text style={styles.empty}>No dip readings on file. Tap '+ Record Dip' to submit daily levels.</Text>
+        ) : (
+          readings.slice(0, 8).map(r => (
+            <View key={r.id} style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle}>
+                  {r.readings?.map((x: any) => `${x.fuelCode || x.tankId}: ${x.dipStock || x.closingLevel}L`).join(' · ')}
+                </Text>
+                <Text style={styles.rowSub}>By {r.recordedByName || r.recordedBy} · {formatDateTime(r.recordedAt || r.createdAt)}</Text>
+              </View>
+            </View>
+          ))
+        )}
+      </Card>
+    </View>
+  )
+}
+
+// ---- Tab 4: Attendants & Staff ---------------------------------------------
+
+const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession; onChanged: () => void }> = ({
+  attendants,
+  session,
+  onChanged,
+}) => {
   const [resetFor, setResetFor] = useState<string | null>(null)
   const [pin, setPin] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -346,7 +606,11 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
   const doReset = async (code: string) => {
     setError(null)
     try {
-      await supervisorService.resetAttendantPin(code, pin, { id: session.employeeCode, name: session.fullName, code: session.employeeCode })
+      await supervisorService.resetAttendantPin(code, pin, {
+        id: session.employeeCode,
+        name: session.fullName,
+        code: session.employeeCode,
+      })
       setResetFor(null)
       setPin('')
       onChanged()
@@ -375,70 +639,110 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
   return (
     <View>
       <View style={styles.cardHeader}>
-        <Text style={styles.sectionTitle}>ATTENDANTS</Text>
+        <Text style={styles.sectionTitle}>ATTENDANTS & STAFF</Text>
         <Pressable onPress={() => setRegisterOpen(true)} style={styles.linkBtn}>
-          <Text style={styles.linkBtnText}>+ Register</Text>
+          <Text style={styles.linkBtnText}>+ Register Staff</Text>
         </Pressable>
       </View>
       {error && <Text style={styles.errorText}>{error}</Text>}
       <Card style={styles.listCard}>
-        {attendants.map(a => (
-          <View key={a.id} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={styles.rowTitle}>{a.fullName}</Text>
-                {!a.active && <Badge tone="danger">Inactive</Badge>}
+        {attendants.length === 0 ? (
+          <Text style={styles.empty}>No staff registered.</Text>
+        ) : (
+          attendants.map(a => (
+            <View key={a.id} style={styles.row}>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Text style={styles.rowTitle}>{a.fullName}</Text>
+                  {!a.active && <Badge tone="danger">Inactive</Badge>}
+                </View>
+                <Text style={styles.rowSub}>
+                  {a.employeeCode} · {a.pumpId ? a.pumpId.replace('pump-', 'Pump ') : 'Unassigned'}
+                </Text>
               </View>
-              <Text style={styles.rowSub}>{a.employeeCode} · {a.pumpId ? a.pumpId.replace('pump-', 'Pump ') : 'unassigned'}</Text>
+              {a.active && (
+                <Pressable onPress={() => { setResetFor(a.employeeCode); setPin(''); setError(null) }} style={styles.miniBtn}>
+                  <Text style={styles.miniBtnText}>Reset PIN</Text>
+                </Pressable>
+              )}
             </View>
-            {a.active && (
-              <Pressable onPress={() => { setResetFor(a.employeeCode); setPin(''); setError(null) }} style={styles.miniBtn}>
-                <Text style={styles.miniBtnText}>Reset PIN</Text>
-              </Pressable>
-            )}
-          </View>
-        ))}
+          ))
+        )}
       </Card>
 
+      {/* Reset PIN Modal */}
       {resetFor && (
         <View style={styles.modal}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Reset PIN — {resetFor}</Text>
-            <View style={{ marginTop: 10, gap: 8 }}>
-              <View style={{ borderColor: colors.border, borderWidth: 1, borderRadius: 12, backgroundColor: colors.panel, paddingHorizontal: 14, paddingVertical: 12 }}>
-                <Text style={{ ...styles.modalSub, color: colors.textDim, fontFamily: 'monospace' }}>{pin || '••••'}</Text>
-              </View>
-              <Pressable onPress={() => setPin(String(Number(pin || '0') + 1).padStart(4, '0'))} style={styles.miniBtn}>
-                <Text style={styles.miniBtnText}>Suggest next code</Text>
-              </Pressable>
+            <Text style={styles.modalTitle}>Reset PIN</Text>
+            <Text style={styles.modalSub}>Set new 4-digit PIN for {resetFor}</Text>
+            <StyledTextInput
+              value={pin}
+              onChangeText={t => setPin(t.replace(/\D/g, '').slice(0, 4))}
+              placeholder="••••"
+              secureTextEntry
+              keyboardType="number-pad"
+              style={{ marginTop: 12 }}
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <PrimaryButton
+                title="Save PIN"
+                onPress={() => void doReset(resetFor)}
+                disabled={pin.length !== 4}
+                style={{ flex: 1 }}
+              />
+              <PrimaryButton
+                title="Cancel"
+                onPress={() => setResetFor(null)}
+                tone="rose"
+                style={{ flex: 1 }}
+              />
             </View>
-            <Text style={{ color: colors.textFaint, fontSize: 11, marginTop: 8 }}>4-digit numeric PIN for the attendant's next shift login.</Text>
-            <Pressable onPress={() => void doReset(resetFor)} style={[styles.btnApprove, { marginTop: 14 }]} disabled={pin.length !== 4}>
-              <Text style={[styles.btnLabel, { color: '#052e16' }]}>Confirm Reset</Text>
-            </Pressable>
-            <Pressable onPress={() => setResetFor(null)} style={{ marginTop: 8, alignItems: 'center', padding: 8 }}>
-              <Text style={{ color: colors.textFaint, fontSize: 12 }}>Cancel</Text>
-            </Pressable>
           </View>
         </View>
       )}
 
+      {/* Register Staff Modal */}
       {registerOpen && (
         <View style={styles.modal}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Register Attendant</Text>
-            <Text style={styles.modalSub}>Code format: ATT + 4 digits (e.g. ATT1005)</Text>
-            <View style={{ marginTop: 10, gap: 10 }}>
-              <FieldInput value={newCode} onChangeText={setNewCode} placeholder="ATT1005" autoCap="characters" />
-              <FieldInput value={newName} onChangeText={setNewName} placeholder="Full name" />
-              <FieldInput value={newPin} onChangeText={t => setNewPin(t.replace(/\D/g, '').slice(0, 4))} placeholder="4-digit PIN" number />
+            <Text style={styles.modalTitle}>Register Staff</Text>
+            <Text style={styles.modalSub}>Create a new station attendant</Text>
+            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>EMPLOYEE CODE</Text>
+            <StyledTextInput
+              value={newCode}
+              onChangeText={t => setNewCode(t.toUpperCase())}
+              placeholder="e.g. PV003A"
+              autoCapitalize="characters"
+            />
+            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>FULL NAME</Text>
+            <StyledTextInput
+              value={newName}
+              onChangeText={setNewName}
+              placeholder="Full official name"
+            />
+            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>PIN (4 DIGITS)</Text>
+            <StyledTextInput
+              value={newPin}
+              onChangeText={t => setNewPin(t.replace(/\D/g, '').slice(0, 4))}
+              placeholder="••••"
+              secureTextEntry
+              keyboardType="number-pad"
+            />
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+              <PrimaryButton
+                title="Register"
+                onPress={() => void doRegister()}
+                disabled={!newCode || !newName || newPin.length !== 4}
+                style={{ flex: 1 }}
+              />
+              <PrimaryButton
+                title="Cancel"
+                onPress={() => setRegisterOpen(false)}
+                tone="rose"
+                style={{ flex: 1 }}
+              />
             </View>
-            <Pressable onPress={() => void doRegister()} style={[styles.btnApprove, { marginTop: 14 }]} disabled={newCode.length < 7 || !newName.trim() || newPin.length !== 4}>
-              <Text style={[styles.btnLabel, { color: '#052e16' }]}>Register</Text>
-            </Pressable>
-            <Pressable onPress={() => setRegisterOpen(false)} style={{ marginTop: 8, alignItems: 'center', padding: 8 }}>
-              <Text style={{ color: colors.textFaint, fontSize: 12 }}>Cancel</Text>
-            </Pressable>
           </View>
         </View>
       )}
@@ -446,66 +750,198 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
   )
 }
 
-const FieldInput: React.FC<{ value: string; onChangeText: (t: string) => void; placeholder: string; autoCap?: 'none' | 'characters'; number?: boolean }> = ({ value, onChangeText, placeholder, autoCap, number }) => (
-  <View style={{ borderColor: colors.border, borderWidth: 1, borderRadius: 12, backgroundColor: colors.panel, paddingHorizontal: 14 }}>
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder}
-      placeholderTextColor={colors.textFaint}
-      autoCapitalize={autoCap ?? 'none'}
-      keyboardType={number ? 'number-pad' : 'default'}
-      style={{ color: colors.text, fontSize: 14, paddingVertical: 12, fontFamily: autoCap ? 'monospace' : undefined }}
-    />
-  </View>
-)
+// ---- Tab 5: Operations, Expenses & Debtors ----------------------------------
 
-// ---- Audit -----------------------------------------------------------------
+const OperationsTab: React.FC<{ session: MobileSession }> = ({ session }) => {
+  const [expenseModal, setExpenseModal] = useState(false)
+  const [expenseAmount, setExpenseAmount] = useState('')
+  const [expenseCategory, setExpenseCategory] = useState('Generator Fuel')
+  const [expenseRecipient, setExpenseRecipient] = useState('')
+  const [expenses, setExpenses] = useState<any[]>([
+    { id: '1', category: 'Generator Fuel', amount: 350, recipient: 'Station Genset', time: '10:30 AM' },
+    { id: '2', category: 'Station Supplies', amount: 80, recipient: 'Cleaning Supplies', time: '08:15 AM' },
+  ])
 
-const AuditTab: React.FC = () => {
-  const [entries, setEntries] = useState<AuditEntry[]>([])
-  useEffect(() => {
-    let active = true
-    void supervisorService.auditLog().then(log => { if (active) setEntries(log) })
-    return () => { active = false }
-  }, [])
+  const addExpense = () => {
+    if (!expenseAmount) return
+    const newEx = {
+      id: Date.now().toString(),
+      category: expenseCategory,
+      amount: Number(expenseAmount),
+      recipient: expenseRecipient || 'Station Petty Cash',
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+    }
+    setExpenses(prev => [newEx, ...prev])
+    setExpenseAmount('')
+    setExpenseRecipient('')
+    setExpenseModal(false)
+  }
+
+  const totalExpenses = expenses.reduce((a, e) => a + e.amount, 0)
+
   return (
-    <View>
-      <Text style={styles.sectionTitle}>AUDIT TRAIL</Text>
+    <View style={{ gap: 12 }}>
+      <View style={styles.cardHeader}>
+        <Text style={styles.sectionTitle}>DAILY EXPENSES & OUTFLOWS</Text>
+        <Pressable onPress={() => setExpenseModal(true)} style={styles.linkBtn}>
+          <Text style={styles.linkBtnText}>+ Add Expense</Text>
+        </Pressable>
+      </View>
+
+      <Card style={styles.kpi}>
+        <DollarSign size={16} color={colors.amber} />
+        <Text style={styles.kpiValue}>{formatGHS(totalExpenses)}</Text>
+        <Text style={styles.kpiLabel}>Total Outflows Today</Text>
+      </Card>
+
       <Card style={styles.listCard}>
-        {entries.length === 0 && <Text style={styles.empty}>No audit events yet.</Text>}
-        {entries.map(e => (
+        {expenses.map(e => (
           <View key={e.id} style={styles.row}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{e.action.replace(/_/g, ' ')}</Text>
-              <Text style={styles.rowSub}>{e.notes ?? ''}</Text>
-              <Text style={[styles.rowSub, { fontFamily: 'monospace', fontSize: 10 }]}>{e.actorRole} · {formatDateTime(e.timestamp)}</Text>
+              <Text style={styles.rowTitle}>{e.category}</Text>
+              <Text style={styles.rowSub}>{e.recipient} · {e.time}</Text>
             </View>
+            <Text style={[styles.rowTitle, { color: colors.rose }]}>-{formatGHS(e.amount)}</Text>
           </View>
         ))}
       </Card>
+
+      {/* Credit Customers */}
+      <Text style={[styles.sectionTitle, { marginTop: 12 }]}>CREDIT CUSTOMERS & DEBTORS</Text>
+      <Card style={styles.listCard}>
+        {[
+          { name: 'Metro Mass Transport', code: 'MMT-ACC', balance: 14500, limit: 30000 },
+          { name: 'VIP Jeoun Transport', code: 'VIP-01', balance: 8200, limit: 20000 },
+          { name: 'Ghana Police Service (Motor)', code: 'GPS-ACC', balance: 3400, limit: 10000 },
+        ].map(c => (
+          <View key={c.code} style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>{c.name}</Text>
+              <Text style={styles.rowSub}>{c.code} · Limit: {formatGHS(c.limit)}</Text>
+            </View>
+            <Text style={[styles.rowTitle, { color: colors.amber }]}>{formatGHS(c.balance)}</Text>
+          </View>
+        ))}
+      </Card>
+
+      {/* Add Expense Modal */}
+      {expenseModal && (
+        <View style={styles.modal}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Record Expense</Text>
+            <Text style={styles.modalSub}>Record cash paid out from forecourt</Text>
+
+            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>CATEGORY</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+              {['Generator Fuel', 'Station Supplies', 'Utilities', 'Maintenance', 'Cash Drop'].map(cat => (
+                <Pressable
+                  key={cat}
+                  onPress={() => setExpenseCategory(cat)}
+                  style={[styles.chip, expenseCategory === cat && styles.chipActive]}
+                >
+                  <Text style={[styles.chipText, expenseCategory === cat && { color: '#04130d' }]}>{cat}</Text>
+                </Pressable>
+              ))}
+            </View>
+
+            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>AMOUNT (GHS)</Text>
+            <StyledTextInput
+              value={expenseAmount}
+              onChangeText={t => setExpenseAmount(t.replace(/[^0-9.]/g, ''))}
+              placeholder="e.g. 150"
+              keyboardType="number-pad"
+            />
+
+            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>RECIPIENT / PURPOSE</Text>
+            <StyledTextInput
+              value={expenseRecipient}
+              onChangeText={setExpenseRecipient}
+              placeholder="e.g. Genset diesel refill"
+            />
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+              <PrimaryButton
+                title="Save Expense"
+                onPress={addExpense}
+                disabled={!expenseAmount || Number(expenseAmount) <= 0}
+                style={{ flex: 1 }}
+              />
+              <PrimaryButton
+                title="Cancel"
+                onPress={() => setExpenseModal(false)}
+                tone="rose"
+                style={{ flex: 1 }}
+              />
+            </View>
+          </View>
+        </View>
+      )}
     </View>
   )
 }
 
-// ---- Head office -----------------------------------------------------------
+// ---- Tab 6: HQ & Super-Admin OMCs ------------------------------------------
 
-const HqTab: React.FC = () => {
+const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isHQ: boolean }> = ({
+  session,
+  isSuperAdmin,
+  isHQ,
+}) => {
   const [data, setData] = useState<HqSummary | null>(null)
+  const [createOmcModal, setCreateOmcModal] = useState(false)
+  const [omcName, setOmcName] = useState('')
+  const [omcCode, setOmcCode] = useState('')
+  const [omcPin, setOmcPin] = useState('9999')
+  const [creating, setCreating] = useState(false)
+
   useEffect(() => {
     let active = true
     void rollupService.summary().then(d => { if (active) setData(d) })
     return () => { active = false }
   }, [])
+
+  const submitCreateOmc = async () => {
+    if (!omcName || !omcCode) return
+    setCreating(true)
+    try {
+      const base = getCloudApiBase()
+      const token = await getCloudToken()
+      await fetch(`${base}/api/companies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ name: omcName, shortCode: omcCode, adminPin: omcPin }),
+      })
+      setCreateOmcModal(false)
+      setOmcName('')
+      setOmcCode('')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   if (!data) return <View style={styles.center}><ActivityIndicator color={colors.emerald} size="large" /></View>
+
   return (
-    <View>
-      <Text style={styles.sectionTitle}>HEAD OFFICE ROLLUP</Text>
+    <View style={{ gap: 12 }}>
+      <View style={styles.cardHeader}>
+        <View>
+          <Text style={styles.sectionTitle}>{isSuperAdmin ? 'PLATFORM MASTER · OMCS' : 'HEAD OFFICE NETWORK'}</Text>
+          <Text style={styles.sub}>
+            {isSuperAdmin ? 'Manage All Downstream OMC Tenants' : 'Enterprise Station Rollup'}
+          </Text>
+        </View>
+        {isSuperAdmin && (
+          <Pressable onPress={() => setCreateOmcModal(true)} style={styles.linkBtn}>
+            <Text style={styles.linkBtnText}>+ New OMC</Text>
+          </Pressable>
+        )}
+      </View>
+
       <View style={styles.kpiRow}>
         <Card style={styles.kpi}>
           <DollarSign size={16} color={colors.emerald} />
           <Text style={styles.kpiValue}>{formatGHS(data.salesToday, { noPrefix: true })}</Text>
-          <Text style={styles.kpiLabel}>Revenue today</Text>
+          <Text style={styles.kpiLabel}>Network Revenue</Text>
         </Card>
         <Card style={styles.kpi}>
           <ClipboardCheck size={16} color={colors.amber} />
@@ -514,7 +950,7 @@ const HqTab: React.FC = () => {
         </Card>
       </View>
 
-      <Text style={styles.sectionTitle}>STATIONS</Text>
+      <Text style={styles.sectionTitle}>STATIONS & BRANCHES</Text>
       <Card style={styles.listCard}>
         {data.stations.map(st => (
           <View key={st.stationId} style={styles.row}>
@@ -530,7 +966,7 @@ const HqTab: React.FC = () => {
         ))}
       </Card>
 
-      <Text style={styles.sectionTitle}>TOP ATTENDANTS</Text>
+      <Text style={styles.sectionTitle}>TOP DISPENSING ATTENDANTS</Text>
       <Card style={styles.listCard}>
         {data.attendants.slice(0, 5).map((a, i) => (
           <View key={a.employeeCode} style={styles.row}>
@@ -542,6 +978,61 @@ const HqTab: React.FC = () => {
           </View>
         ))}
       </Card>
+
+      {/* Create OMC Modal for Super Admin */}
+      {createOmcModal && (
+        <View style={styles.modal}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Create OMC Company</Text>
+            <Text style={styles.modalSub}>Add an Oil Marketing Company to PetroView</Text>
+
+            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>COMPANY NAME</Text>
+            <StyledTextInput value={omcName} onChangeText={setOmcName} placeholder="e.g. Star Oil Ghana" />
+
+            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>SHORT CODE (MAX 8 CHARS)</Text>
+            <StyledTextInput value={omcCode} onChangeText={t => setOmcCode(t.toUpperCase())} placeholder="e.g. STAR" autoCapitalize="characters" />
+
+            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>HQ ADMIN PIN</Text>
+            <StyledTextInput value={omcPin} onChangeText={setOmcPin} placeholder="9999" keyboardType="number-pad" />
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+              <PrimaryButton title={creating ? 'Creating…' : 'Create OMC'} onPress={submitCreateOmc} disabled={creating || !omcName || !omcCode} style={{ flex: 1 }} />
+              <PrimaryButton title="Cancel" onPress={() => setCreateOmcModal(false)} tone="rose" style={{ flex: 1 }} />
+            </View>
+          </View>
+        </View>
+      )}
+    </View>
+  )
+}
+
+// ---- Tab 7: Audit Log ------------------------------------------------------
+
+const AuditTab: React.FC = () => {
+  const [entries, setEntries] = useState<AuditEntry[]>([])
+  useEffect(() => {
+    let active = true
+    void supervisorService.auditLog().then(log => { if (active) setEntries(log) })
+    return () => { active = false }
+  }, [])
+
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>AUDIT TRAIL & LOGS</Text>
+      <Card style={styles.listCard}>
+        {entries.length === 0 && <Text style={styles.empty}>No audit events yet.</Text>}
+        {entries.map(e => (
+          <View key={e.id} style={styles.row}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>{e.action.replace(/_/g, ' ')}</Text>
+              <Text style={styles.rowSub}>{e.notes ?? ''}</Text>
+              <Text style={[styles.rowSub, { fontFamily: 'monospace', fontSize: 10 }]}>
+                {e.actorRole} · {formatDateTime(e.timestamp)}
+              </Text>
+            </View>
+          </View>
+        ))}
+      </Card>
     </View>
   )
 }
@@ -549,12 +1040,36 @@ const HqTab: React.FC = () => {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
   center: { paddingVertical: 60, alignItems: 'center' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12 },
-  heading: { color: colors.text, fontSize: 20, fontWeight: '900' },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.panel,
+  },
+  heading: { color: colors.text, fontSize: 18, fontWeight: '900' },
   sub: { color: colors.textFaint, fontSize: 11, marginTop: 2, fontFamily: 'monospace' },
-  signOutBtn: { backgroundColor: colors.panel, borderColor: colors.rose, borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  iconTopBtn: {
+    backgroundColor: colors.panel2,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 8,
+  },
+  signOutBtn: {
+    backgroundColor: colors.panel2,
+    borderColor: colors.rose,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
   signOutText: { color: colors.rose, fontSize: 11, fontWeight: '700' },
-  content: { paddingHorizontal: 16, paddingBottom: 96 },
+  content: { paddingHorizontal: 16, paddingBottom: 100, paddingTop: 14 },
   kpiRow: { flexDirection: 'row', gap: 10 },
   kpi: { flex: 1, padding: 14, gap: 6 },
   kpiValue: { color: colors.text, fontSize: 18, fontWeight: '900' },
@@ -571,7 +1086,7 @@ const styles = StyleSheet.create({
   quickRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
   quickTitle: { color: colors.text, fontSize: 13, fontWeight: '700' },
   quickSub: { color: colors.textFaint, fontSize: 11, marginTop: 2 },
-  sectionTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginTop: 16, marginBottom: 8 },
+  sectionTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginTop: 12, marginBottom: 8 },
   listCard: { overflow: 'hidden' },
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.border },
   rowTitle: { color: colors.text, fontSize: 13, fontWeight: '800' },
@@ -581,7 +1096,7 @@ const styles = StyleSheet.create({
   chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.panel },
   chipActive: { backgroundColor: colors.emerald, borderColor: colors.emerald },
   chipText: { color: colors.textDim, fontSize: 11, fontWeight: '800' },
-  modal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.85)', justifyContent: 'center', padding: 24 },
+  modal: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(2,6,23,0.85)', justifyContent: 'center', padding: 20 },
   modalCard: { backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 1, borderRadius: 16, padding: 18 },
   modalTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
   modalSub: { color: colors.textFaint, fontSize: 12, marginTop: 4 },
@@ -599,7 +1114,19 @@ const styles = StyleSheet.create({
   errorText: { color: colors.rose, fontSize: 12, fontWeight: '600', marginBottom: 8 },
   miniBtn: { backgroundColor: colors.panel2, borderColor: colors.border, borderWidth: 1, borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   miniBtnText: { color: colors.emerald, fontSize: 11, fontWeight: '700' },
-  tabBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', backgroundColor: colors.panel, borderTopWidth: 1, borderTopColor: colors.border, paddingVertical: 8, paddingBottom: 20 },
+  fieldLabel: { color: colors.textDim, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
+  tabBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    backgroundColor: colors.panel,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingVertical: 8,
+    paddingBottom: 22,
+  },
   tabItem: { flex: 1, alignItems: 'center', gap: 3 },
   tabItemActive: {},
   tabLabel: { fontSize: 9, fontWeight: '800', marginTop: 1 },

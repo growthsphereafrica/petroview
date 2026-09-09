@@ -1,12 +1,23 @@
-import React, { useEffect, useState } from 'react'
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, Pressable, Modal, ActivityIndicator } from 'react-native'
-import { Fuel, Banknote, LogOut, RefreshCw, QrCode } from 'lucide-react-native'
+import React, { useCallback, useEffect, useState } from 'react'
+import {
+  View,
+  Text,
+  StyleSheet,
+  SafeAreaView,
+  ScrollView,
+  Pressable,
+  Modal,
+  ActivityIndicator,
+} from 'react-native'
+import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
+import { TankReadingsSheet } from './supervisor/TankReadingsSheet'
 import { shiftService, syncNow } from '../core/services/shiftService'
 import type { Shift } from '../core/domain/types'
 import type { MobileSession } from './LoginScreen'
+import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
 
 const PUMPS = [
   { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
@@ -26,30 +37,51 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
   const [error, setError] = useState<string | null>(null)
   const [openModal, setOpenModal] = useState(false)
   const [saleModal, setSaleModal] = useState(false)
+  const [expenseModal, setExpenseModal] = useState(false)
+  const [expenseAmt, setExpenseAmt] = useState('')
+  const [expenseNote, setExpenseNote] = useState('')
   const [closeModal, setCloseModal] = useState(false)
   const [qrOpen, setQrOpen] = useState(false)
+  const [tankOpen, setTankOpen] = useState(false)
 
-  const refresh = async () => {
+  // Look up attendant ID on startup from code
+  useEffect(() => {
+    let active = true
+    async function init() {
+      try {
+        const { findAttendantByCode, getActiveShiftForAttendant, pendingSyncCount } = await import(
+          '../core/infra/repositories'
+        )
+        const att = await findAttendantByCode(session.employeeCode)
+        if (att && active) {
+          setAttendantId(att.id)
+          const [curShift, pending] = await Promise.all([
+            getActiveShiftForAttendant(att.id),
+            pendingSyncCount(),
+          ])
+          if (active) {
+            setShift(curShift)
+            setPendingCount(pending)
+          }
+        }
+      } finally {
+        if (active) setLoading(false)
+      }
+    }
+    void init()
+    return () => { active = false }
+  }, [session.employeeCode])
+
+  const refresh = useCallback(async () => {
     if (!attendantId) return
-    const [active, pending] = await Promise.all([getActive(), getPending()])
+    const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
+    const [active, pending] = await Promise.all([
+      getActiveShiftForAttendant(attendantId),
+      pendingSyncCount(),
+    ])
     setShift(active)
     setPendingCount(pending)
     setLoading(false)
-  }
-
-  const getActive = async () => {
-    const { getActiveShiftForAttendant } = await import('../core/infra/repositories')
-    return getActiveShiftForAttendant(attendantId as string)
-  }
-
-  const getPending = async () => {
-    const { pendingSyncCount } = await import('../core/infra/repositories')
-    return pendingSyncCount()
-  }
-
-  useEffect(() => {
-    void refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attendantId])
 
   if (loading) {
@@ -57,7 +89,7 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
           <ActivityIndicator color={colors.emerald} size="large" />
-          <Text style={styles.loadText}>Loading forecourt…</Text>
+          <Text style={styles.loadText}>Connecting to Forecourt…</Text>
         </View>
       </SafeAreaView>
     )
@@ -68,32 +100,56 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
       <ScrollView contentContainerStyle={styles.content}>
         {/* Header */}
         <View style={styles.header}>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={styles.greeting}>Hello, {session.fullName.split(' ')[0]} 👋</Text>
-            <Text style={styles.subGreeting}>{session.employeeCode} · Green Valley Main</Text>
+            <Text style={styles.subGreeting}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6 }}>
+            <Pressable onPress={() => setTankOpen(true)} style={styles.iconBtn}>
+              <Droplets size={16} color={colors.blue} />
+            </Pressable>
             <Pressable onPress={() => setQrOpen(true)} style={styles.iconBtn}>
               <QrCode size={16} color={colors.violet} />
             </Pressable>
-            <Pressable onPress={async () => { setSyncing(true); await syncNow(); const p = await getPending(); setPendingCount(p); setSyncing(false) }} style={styles.iconBtn} disabled={syncing}>
-              {syncing ? <ActivityIndicator size="small" color={colors.emerald} /> : <RefreshCw size={16} color={pendingCount ? colors.amber : colors.textDim} />}
+            <Pressable
+              onPress={async () => {
+                setSyncing(true)
+                await syncNow()
+                const { pendingSyncCount } = await import('../core/infra/repositories')
+                setPendingCount(await pendingSyncCount())
+                setSyncing(false)
+              }}
+              style={styles.iconBtn}
+              disabled={syncing}
+            >
+              {syncing ? (
+                <ActivityIndicator size="small" color={colors.emerald} />
+              ) : (
+                <RefreshCw size={16} color={pendingCount ? colors.amber : colors.textDim} />
+              )}
               <Text style={styles.iconBtnText}>{pendingCount} pending</Text>
             </Pressable>
           </View>
         </View>
 
-        {/* Shift card */}
+        {/* Shift Card */}
         <Card style={styles.shiftCard}>
           <View style={styles.shiftHeader}>
             <Text style={styles.shiftTitle}>{shift ? `Shift ${shift.number}` : 'No open shift'}</Text>
-            <Text style={[styles.shiftStatus, { color: shift ? colors.emerald : colors.textFaint }]}>{shift ? '● OPEN' : '○ IDLE'}</Text>
+            <Text style={[styles.shiftStatus, { color: shift ? colors.emerald : colors.textFaint }]}>
+              {shift ? '● OPEN' : '○ IDLE'}
+            </Text>
           </View>
-          <Text style={styles.shiftMeta}>{shift ? `Pump ${shift.pumpId.replace('pump-', '')} · opened ${new Date(shift.openedAt).toLocaleTimeString()}` : 'Start a shift to begin recording sales'}</Text>
+          <Text style={styles.shiftMeta}>
+            {shift
+              ? `Pump ${shift.pumpId.replace('pump-', '')} · opened ${formatDateTime(shift.openedAt)}`
+              : 'Start a shift to begin dispensing and recording sales'}
+          </Text>
+
           {shift && (
             <View style={styles.stats}>
               <View style={styles.stat}>
-                <Text style={styles.statValue}>{ghs(shift.salesTotal)}</Text>
+                <Text style={styles.statValue}>{formatGHS(shift.salesTotal)}</Text>
                 <Text style={styles.statLabel}>Sales</Text>
               </View>
               <View style={styles.stat}>
@@ -106,95 +162,191 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
               </View>
             </View>
           )}
+
           <View style={styles.shiftActions}>
-            <PrimaryButton title="Open Shift" onPress={() => setOpenModal(true)} disabled={!!shift} tone="emerald" />
-            <PrimaryButton title="Record Sale" onPress={() => setSaleModal(true)} disabled={!shift} tone="violet" style={{ marginTop: 8 }} />
-            <PrimaryButton title="Close Shift" onPress={() => setCloseModal(true)} disabled={!shift} tone="amber" style={{ marginTop: 8 }} />
+            {!shift ? (
+              <PrimaryButton title="Open Shift" onPress={() => setOpenModal(true)} tone="emerald" />
+            ) : (
+              <>
+                <PrimaryButton title="⚡ Record Sale (POS)" onPress={() => setSaleModal(true)} tone="emerald" />
+                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                  <PrimaryButton
+                    title="Add Expense"
+                    onPress={() => setExpenseModal(true)}
+                    tone="violet"
+                    style={{ flex: 1 }}
+                  />
+                  <PrimaryButton
+                    title="Close Shift"
+                    onPress={() => setCloseModal(true)}
+                    tone="amber"
+                    style={{ flex: 1 }}
+                  />
+                </View>
+              </>
+            )}
           </View>
         </Card>
 
-        {/* Recent sales */}
-        <Text style={styles.sectionTitle}>RECENT SALES</Text>
+        {/* Recent Sales List */}
+        <Text style={styles.sectionTitle}>RECENT TRANSACTIONS</Text>
         {shift && shift.sales.length > 0 ? (
           <Card style={styles.listCard}>
-            {[...shift.sales].reverse().slice(0, 7).map((s, i) => (
-              <Pressable key={i} style={styles.listRow} onPress={() => setSaleModal(true)}>
-                <Fuel size={14} color={colors.blue} />
+            {[...shift.sales].reverse().slice(0, 8).map((s, i) => (
+              <View key={i} style={styles.listRow}>
+                <Fuel size={14} color={s.fuelCode === 'PMS' ? '#22c55e' : '#3b82f6'} />
                 <Text style={styles.listFuel}>{s.fuelCode}</Text>
-                <Text style={styles.listLitres}>{s.litres}L</Text>
-                <Text style={styles.listAmount}>{ghs(s.amount)}</Text>
-              </Pressable>
+                <Text style={styles.listLitres}>{formatLitres(s.litres)} L</Text>
+                <Text style={styles.listAmount}>{formatGHS(s.amount)}</Text>
+              </View>
             ))}
           </Card>
         ) : (
-          <Text style={styles.emptyText}>No sales yet. Record your first sale to begin the shift log.</Text>
+          <Text style={styles.emptyText}>No sales recorded yet for this shift.</Text>
         )}
 
+        {/* Sign out */}
         <Pressable onPress={() => void mobileSignOut()} style={styles.signOut} disabled={!!shift}>
-          <LogOut size={14} color={colors.rose} />
-          <Text style={styles.signOutText}>Sign out{shift ? ' (close shift first)' : ''}</Text>
+          <LogOut size={14} color={shift ? colors.textFaint : colors.rose} />
+          <Text style={[styles.signOutText, shift && { color: colors.textFaint }]}>
+            Sign out{shift ? ' (Close shift first)' : ''}
+          </Text>
         </Pressable>
       </ScrollView>
 
-      <OpenShiftModal visible={openModal} onClose={() => setOpenModal(false)} onConfirm={async pumpId => {
-        try {
-          setOpenModal(false)
-          setError(null)
-          const { findAttendantByCode } = await import('../core/infra/repositories')
-          const att = await findAttendantByCode(session.employeeCode)
-          if (!att) return
-          setAttendantId(att.id)
-          await shiftService.openShift({
-            attendant: att,
-            pumpId,
-            openingReadings: {
-              PMS: { fuelCode: 'PMS', value: 1000 },
-              AGO: { fuelCode: 'AGO', value: 500 },
-              DPK: { fuelCode: 'DPK', value: 300 },
-              KERO: { fuelCode: 'KERO', value: 200 },
-            },
-          })
-          await refresh()
-        } catch (e) {
-          const { describeError } = await import('../core/services/shiftService')
-          setError(describeError(e))
-        }
-      }} />
-      <SaleModal visible={saleModal} onClose={() => setSaleModal(false)} onSave={async (fuel, litres, method) => {
-        try {
-          setSaleModal(false)
-          if (!shift) return
-          await shiftService.recordSale({
-            shiftId: shift.id,
-            fuelCode: fuel as 'PMS' | 'AGO' | 'DPK' | 'KERO',
-            litres,
-            method: method as 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT',
-          })
-          await refresh()
-        } catch (e) {
-          const { describeError } = await import('../core/services/shiftService')
-          setError(describeError(e))
-        }
-      }} />
-      <CloseShiftModal visible={closeModal} onClose={() => setCloseModal(false)} onConfirm={async () => {
-        try {
-          setCloseModal(false)
-          if (!shift) return
-          await shiftService.closeShift({
-            shiftId: shift.id,
-            closingReadings: {
-              PMS: { fuelCode: 'PMS', value: 1050 },
-              AGO: { fuelCode: 'AGO', value: 540 },
-              DPK: { fuelCode: 'DPK', value: 320 },
-              KERO: { fuelCode: 'KERO', value: 215 },
-            },
-          })
-          await refresh()
-        } catch (e) {
-          const { describeError } = await import('../core/services/shiftService')
-          setError(describeError(e))
-        }
-      }} />
+      {/* Modals */}
+      <OpenShiftModal
+        visible={openModal}
+        onClose={() => setOpenModal(false)}
+        onConfirm={async pumpId => {
+          try {
+            setOpenModal(false)
+            setError(null)
+            const { findAttendantByCode } = await import('../core/infra/repositories')
+            const att = await findAttendantByCode(session.employeeCode)
+            if (!att) return
+            setAttendantId(att.id)
+            await shiftService.openShift({
+              attendant: att,
+              pumpId,
+              openingReadings: {
+                PMS: { fuelCode: 'PMS', value: 1000 },
+                AGO: { fuelCode: 'AGO', value: 500 },
+                DPK: { fuelCode: 'DPK', value: 300 },
+                KERO: { fuelCode: 'KERO', value: 200 },
+              },
+            })
+            await refresh()
+          } catch (e) {
+            const { describeError } = await import('../core/services/shiftService')
+            setError(describeError(e))
+          }
+        }}
+      />
+
+      <SaleModal
+        visible={saleModal}
+        onClose={() => setSaleModal(false)}
+        onSave={async (fuel, litres, method) => {
+          try {
+            setSaleModal(false)
+            if (!shift) return
+            await shiftService.recordSale({
+              shiftId: shift.id,
+              fuelCode: fuel as 'PMS' | 'AGO' | 'DPK' | 'KERO',
+              litres,
+              method: method as 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT',
+            })
+            await refresh()
+          } catch (e) {
+            const { describeError } = await import('../core/services/shiftService')
+            setError(describeError(e))
+          }
+        }}
+      />
+
+      <CloseShiftModal
+        visible={closeModal}
+        onClose={() => setCloseModal(false)}
+        onConfirm={async () => {
+          try {
+            setCloseModal(false)
+            if (!shift) return
+            await shiftService.closeShift({
+              shiftId: shift.id,
+              closingReadings: {
+                PMS: { fuelCode: 'PMS', value: 1050 },
+                AGO: { fuelCode: 'AGO', value: 540 },
+                DPK: { fuelCode: 'DPK', value: 320 },
+                KERO: { fuelCode: 'KERO', value: 215 },
+              },
+            })
+            await refresh()
+          } catch (e) {
+            const { describeError } = await import('../core/services/shiftService')
+            setError(describeError(e))
+          }
+        }}
+      />
+
+      {/* Expense Modal */}
+      {expenseModal && (
+        <Modal visible transparent animationType="slide">
+          <View style={styles.modalBack}>
+            <Card style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Record Shift Expense</Text>
+              <Text style={styles.modalSub}>Deductions & petty cash paid out from forecourt</Text>
+
+              <Text style={[styles.fieldLabel, { marginTop: 12 }]}>AMOUNT (GHS)</Text>
+              <StyledTextInput
+                value={expenseAmt}
+                onChangeText={t => setExpenseAmt(t.replace(/[^0-9.]/g, ''))}
+                placeholder="e.g. 50"
+                keyboardType="number-pad"
+              />
+
+              <Text style={[styles.fieldLabel, { marginTop: 10 }]}>RECIPIENT / PURPOSE</Text>
+              <StyledTextInput
+                value={expenseNote}
+                onChangeText={setExpenseNote}
+                placeholder="e.g. Generator petrol"
+              />
+
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+                <PrimaryButton
+                  title="Save Expense"
+                  onPress={() => {
+                    setExpenseAmt('')
+                    setExpenseNote('')
+                    setExpenseModal(false)
+                  }}
+                  disabled={!expenseAmt || Number(expenseAmt) <= 0}
+                  style={{ flex: 1 }}
+                />
+                <PrimaryButton
+                  title="Cancel"
+                  onPress={() => {
+                    setExpenseAmt('')
+                    setExpenseNote('')
+                    setExpenseModal(false)
+                  }}
+                  tone="rose"
+                  style={{ flex: 1 }}
+                />
+              </View>
+            </Card>
+          </View>
+        </Modal>
+      )}
+
+      <TankReadingsSheet
+        visible={tankOpen}
+        onClose={() => setTankOpen(false)}
+        stationId={session.stationId ?? null}
+        stationName={session.stationName}
+      />
+
+      <QrSyncSheet visible={qrOpen} onClose={() => setQrOpen(false)} onSynced={refresh} />
 
       {error && (
         <View style={styles.errorToast}>
@@ -202,7 +354,6 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
           <Pressable onPress={() => setError(null)}><Text style={{ color: colors.rose }}>✕</Text></Pressable>
         </View>
       )}
-      <QrSyncSheet visible={qrOpen} onClose={() => setQrOpen(false)} onSynced={refresh} />
     </SafeAreaView>
   )
 
@@ -214,22 +365,32 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
 
 // ---- Modals ---------------------------------------------------------------
 
-const OpenShiftModal: React.FC<{ visible: boolean; onClose: () => void; onConfirm: (pumpId: string) => Promise<void> }> = ({ visible, onClose, onConfirm }) => {
+const OpenShiftModal: React.FC<{
+  visible: boolean
+  onClose: () => void
+  onConfirm: (pumpId: string) => Promise<void>
+}> = ({ visible, onClose, onConfirm }) => {
   const [pumpId, setPumpId] = useState('pump-1')
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalBack}>
         <Card style={styles.modalCard}>
           <Text style={styles.modalTitle}>Open Shift</Text>
-          <Text style={styles.modalSub}>Select pump for this shift</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
+          <Text style={styles.modalSub}>Select dispensing pump assigned to you</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
             {PUMPS.map(p => (
-              <Pressable key={p.id} onPress={() => setPumpId(p.id)} style={[styles.pumpChip, { borderColor: pumpId === p.id ? colors.emerald : colors.border }]}>
-                <Text style={{ color: pumpId === p.id ? colors.emerald : colors.textDim, fontWeight: '800', fontSize: 13 }}>{p.name}</Text>
+              <Pressable
+                key={p.id}
+                onPress={() => setPumpId(p.id)}
+                style={[styles.pumpChip, { borderColor: pumpId === p.id ? colors.emerald : colors.border }]}
+              >
+                <Text style={{ color: pumpId === p.id ? colors.emerald : colors.textDim, fontWeight: '800', fontSize: 13 }}>
+                  {p.name}
+                </Text>
               </Pressable>
             ))}
           </View>
-          <PrimaryButton title="Start Shift" onPress={() => void onConfirm(pumpId)} style={{ marginTop: 16 }} />
+          <PrimaryButton title="Start Shift" onPress={() => void onConfirm(pumpId)} style={{ marginTop: 18 }} />
           <PrimaryButton title="Cancel" onPress={onClose} tone="rose" style={{ marginTop: 8 }} />
         </Card>
       </View>
@@ -237,43 +398,97 @@ const OpenShiftModal: React.FC<{ visible: boolean; onClose: () => void; onConfir
   )
 }
 
-const SaleModal: React.FC<{ visible: boolean; onClose: () => void; onSave: (fuel: string, litres: number, method: string) => Promise<void> }> = ({ visible, onClose, onSave }) => {
+const SaleModal: React.FC<{
+  visible: boolean
+  onClose: () => void
+  onSave: (fuel: string, litres: number, method: string) => Promise<void>
+}> = ({ visible, onClose, onSave }) => {
   const [fuel, setFuel] = useState('PMS')
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState('CASH')
   const [busy, setBusy] = useState(false)
   const f = fuel as keyof typeof FUEL_PRICES
+
+  const setAmountPreset = (ghsAmount: number) => {
+    const l = Math.round((ghsAmount / FUEL_PRICES[f]) * 100) / 100
+    setLitres(String(l))
+  }
+
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalBack}>
         <Card style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Record Sale</Text>
-          <Text style={styles.modalSub}>Price: {FUEL_PRICES[f]} GHS/L</Text>
+          <Text style={styles.modalTitle}>Record Fuel Dispensed</Text>
+          <Text style={styles.modalSub}>Price: GHS {FUEL_PRICES[f].toFixed(2)} / Litre</Text>
 
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+          {/* Fuel selection */}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
             {Object.keys(FUEL_PRICES).map(k => (
-              <Pressable key={k} onPress={() => setFuel(k)} style={[styles.pumpChip, { borderColor: fuel === k ? colors.emerald : colors.border }]}>
-                <Text style={{ color: fuel === k ? colors.emerald : colors.textDim, fontWeight: '800', fontSize: 13 }}>{k}</Text>
+              <Pressable
+                key={k}
+                onPress={() => setFuel(k)}
+                style={[styles.pumpChip, { borderColor: fuel === k ? colors.emerald : colors.border }]}
+              >
+                <Text style={{ color: fuel === k ? colors.emerald : colors.textDim, fontWeight: '800', fontSize: 13 }}>
+                  {k}
+                </Text>
               </Pressable>
             ))}
           </View>
 
-          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>LITRES</Text>
-          <StyledTextInput value={litres} onChangeText={t => setLitres(t.replace(/[^0-9.]/g, ''))} placeholder="e.g. 20" keyboardType="number-pad" />
+          {/* Quick Presets */}
+          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>QUICK PRESETS (GHS)</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+            {[50, 100, 200, 500].map(amt => (
+              <Pressable
+                key={amt}
+                onPress={() => setAmountPreset(amt)}
+                style={[styles.chip, { backgroundColor: colors.panel2 }]}
+              >
+                <Text style={{ color: colors.emerald, fontWeight: '800', fontSize: 11 }}>GHS {amt}</Text>
+              </Pressable>
+            ))}
+          </View>
 
-          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>PAYMENT</Text>
+          {/* Litres input */}
+          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>LITRES DISPENSED</Text>
+          <StyledTextInput
+            value={litres}
+            onChangeText={t => setLitres(t.replace(/[^0-9.]/g, ''))}
+            placeholder="e.g. 20"
+            keyboardType="number-pad"
+          />
+
+          {/* Payment Method */}
+          <Text style={[styles.fieldLabel, { marginTop: 12 }]}>PAYMENT METHOD</Text>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 }}>
-            {['CASH', 'MOMO', 'VOUCHER', 'CREDIT'].map(m => (
-              <Pressable key={m} onPress={() => setMethod(m)} style={[styles.pumpChip, { borderColor: method === m ? colors.violet : colors.border }]}>
-                <Text style={{ color: method === m ? colors.violet : colors.textDim, fontWeight: '800', fontSize: 12 }}>{m}</Text>
+            {['CASH', 'MOMO', 'POS', 'CREDIT'].map(m => (
+              <Pressable
+                key={m}
+                onPress={() => setMethod(m)}
+                style={[styles.pumpChip, { borderColor: method === m ? colors.violet : colors.border }]}
+              >
+                <Text style={{ color: method === m ? colors.violet : colors.textDim, fontWeight: '800', fontSize: 12 }}>
+                  {m}
+                </Text>
               </Pressable>
             ))}
           </View>
 
           <View style={{ marginTop: 14 }}>
-            <Text style={styles.amountPreview}>Amount: {ghs(Number(litres || 0) * FUEL_PRICES[f])}</Text>
+            <Text style={styles.amountPreview}>Total: {formatGHS(Number(litres || 0) * FUEL_PRICES[f])}</Text>
           </View>
-          <PrimaryButton title={busy ? 'Saving…' : 'Save Sale'} onPress={async () => { setBusy(true); await onSave(fuel, Number(litres), method); setBusy(false) }} disabled={!litres || Number(litres) <= 0} style={{ marginTop: 12 }} />
+
+          <PrimaryButton
+            title={busy ? 'Saving…' : 'Save & Confirm Sale'}
+            onPress={async () => {
+              setBusy(true)
+              await onSave(fuel, Number(litres), method)
+              setBusy(false)
+            }}
+            disabled={!litres || Number(litres) <= 0}
+            style={{ marginTop: 14 }}
+          />
           <PrimaryButton title="Cancel" onPress={onClose} tone="rose" style={{ marginTop: 8 }} />
         </Card>
       </View>
@@ -281,28 +496,41 @@ const SaleModal: React.FC<{ visible: boolean; onClose: () => void; onSave: (fuel
   )
 }
 
-const CloseShiftModal: React.FC<{ visible: boolean; onClose: () => void; onConfirm: () => Promise<void> }> = ({ visible, onClose, onConfirm }) => {
+const CloseShiftModal: React.FC<{
+  visible: boolean
+  onClose: () => void
+  onConfirm: () => Promise<void>
+}> = ({ visible, onClose, onConfirm }) => {
   const [busy, setBusy] = useState(false)
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalBack}>
         <Card style={styles.modalCard}>
           <Text style={styles.modalTitle}>Close Shift</Text>
-          <Text style={styles.modalSub}>Readings will be reconciled and variance computed. The closed shift is queued for sync.</Text>
+          <Text style={styles.modalSub}>
+            Meter readings will be reconciled and variance computed. The closed shift is queued for review & sync.
+          </Text>
           <View style={styles.warningBox}>
             <Banknote size={14} color={colors.amber} />
-            <Text style={{ color: colors.amber, fontSize: 12, flex: 1, marginLeft: 6 }}>Cash book must match reported sales. Any variance is flagged to the supervisor.</Text>
+            <Text style={{ color: colors.amber, fontSize: 12, flex: 1, marginLeft: 6 }}>
+              Cash collected must match reported sales. Any variance will be reviewed by the supervisor.
+            </Text>
           </View>
-          <PrimaryButton title={busy ? 'Closing…' : 'Confirm Close & Queue Sync'} onPress={async () => { setBusy(true); await onConfirm(); setBusy(false) }} tone="amber" style={{ marginTop: 14 }} />
+          <PrimaryButton
+            title={busy ? 'Closing…' : 'Confirm Close & Submit'}
+            onPress={async () => {
+              setBusy(true)
+              await onConfirm()
+              setBusy(false)
+            }}
+            tone="amber"
+            style={{ marginTop: 14 }}
+          />
           <PrimaryButton title="Cancel" onPress={onClose} style={{ marginTop: 8 }} />
         </Card>
       </View>
     </Modal>
   )
-}
-
-function ghs(n: number) {
-  return `GHS ${(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`
 }
 
 const styles = StyleSheet.create({
@@ -313,7 +541,17 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   greeting: { color: colors.text, fontSize: 20, fontWeight: '900' },
   subGreeting: { color: colors.textFaint, fontSize: 11, marginTop: 2 },
-  iconBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.panel, borderColor: colors.border, borderWidth: 1, borderRadius: 12, paddingHorizontal: 12, paddingVertical: 8 },
+  iconBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.panel,
+    borderColor: colors.border,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
   iconBtnText: { color: colors.textDim, fontSize: 11, fontWeight: '700' },
   shiftCard: { padding: 16, marginBottom: 16 },
   shiftHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -327,9 +565,10 @@ const styles = StyleSheet.create({
   shiftActions: { marginTop: 14 },
   sectionTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
   listCard: { overflow: 'hidden' },
-  listRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
-  listFuel: { color: colors.text, fontWeight: '800', fontSize: 13, width: 44 },
+  listRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: colors.border },
+  listFuel: { color: colors.text, fontWeight: '800', fontSize: 13, width: 42 },
   listLitres: { color: colors.textDim, fontSize: 12, flex: 1, textAlign: 'left' },
+  listPayment: { color: colors.violet, fontSize: 10, fontWeight: '700', paddingHorizontal: 6, paddingVertical: 2, backgroundColor: colors.panel2, borderRadius: 4 },
   listAmount: { color: colors.text, fontSize: 12, fontWeight: '800' },
   emptyText: { color: colors.textFaint, fontSize: 12, marginBottom: 16 },
   signOut: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8, padding: 12 },
@@ -341,8 +580,8 @@ const styles = StyleSheet.create({
   modalTitle: { color: colors.text, fontSize: 17, fontWeight: '900' },
   modalSub: { color: colors.textFaint, fontSize: 12, marginTop: 4 },
   pumpChip: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
+  chip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
   fieldLabel: { color: colors.textDim, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
-  amountPreview: { color: colors.text, fontSize: 16, fontWeight: '800' },
+  amountPreview: { color: colors.emerald, fontSize: 16, fontWeight: '900' },
   warningBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.panel2, borderRadius: 10, padding: 12, marginTop: 12 },
-  drawer: { height: 0 },
 })

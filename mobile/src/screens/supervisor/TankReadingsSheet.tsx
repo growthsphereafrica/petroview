@@ -71,9 +71,9 @@ export const TankReadingsSheet: React.FC<{
       setError('No station is linked to this account. Contact your OMC head office.')
       return
     }
-    const validEntries = entries.filter(e => /^[A-Z]{3}(\d)?$/i.test(e.tankId.trim()))
+    const validEntries = entries.filter(e => e.tankId.trim().length > 0)
     if (validEntries.length === 0) {
-      setError('Add at least one tank with a valid ID (e.g. TK1).')
+      setError('Add at least one tank with an ID (e.g. TK1, Tank 1).')
       return
     }
     setSaving(true)

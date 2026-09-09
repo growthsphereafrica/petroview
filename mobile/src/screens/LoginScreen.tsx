@@ -122,29 +122,8 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
               tone="flame"
             />
 
-            {/* SUPER-ADMIN Quick Access Only */}
-            <View style={styles.demoSection}>
-              <Text style={styles.demoTitle}>PLATFORM MASTER ACCESS</Text>
-              <TouchableOpacity
-                style={[styles.demoChip, { width: '100%' }]}
-                onPress={() => {
-                  setEmployeeCode('SUPER-ADMIN')
-                  setPin('7256')
-                  setError(null)
-                }}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <ShieldCheck size={14} color={colors.rose} />
-                  <View>
-                    <Text style={[styles.demoChipText, { color: colors.rose }]}>SUPER-ADMIN · PIN 7256</Text>
-                    <Text style={styles.demoChipSubtext}>Platform Master — Creates OMCs</Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            </View>
-
             <Text style={styles.offlineNote}>
-              Manager & Attendant accounts are created by the OMC admin.{'\n'}Contact your OMC for login credentials.
+              Manager & Attendant accounts are created by the OMC administrator.
             </Text>
           </View>
         </ScrollView>
@@ -181,17 +160,5 @@ const styles = StyleSheet.create({
   roleBanner: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12, paddingHorizontal: 4 },
   roleText: { fontSize: 11, fontWeight: '600', flex: 1 },
   error: { color: colors.rose, fontSize: 12, fontWeight: '600', marginTop: 12 },
-  demoSection: { marginTop: 16, paddingTop: 12, borderTopWidth: 1, borderTopColor: colors.border },
-  demoTitle: { color: colors.flame, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginBottom: 8 },
-  demoChip: {
-    backgroundColor: colors.bg,
-    borderColor: colors.border,
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-  },
-  demoChipText: { fontSize: 12, fontWeight: '700', fontFamily: 'monospace' },
-  demoChipSubtext: { fontSize: 10, color: colors.textDim, marginTop: 2 },
-  offlineNote: { color: colors.textDim, fontSize: 10, textAlign: 'center', marginTop: 12, lineHeight: 15 },
+  offlineNote: { color: colors.textDim, fontSize: 11, textAlign: 'center', marginTop: 12, lineHeight: 16 },
 })

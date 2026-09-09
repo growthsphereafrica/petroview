@@ -1,9 +1,11 @@
 /**
  * Native head-office rollup — live aggregates over stored shifts.
- * Mirrors the web build's rollupService.
+ * Fetches real-time multi-station data from cloud when online,
+ * with resilient offline fallback to local repositories.
  */
 
 import { listShifts, listAttendants } from '../infra/repositories'
+import { getCloudApiBase, getCloudToken } from '../infra/cloudApi'
 import type { Shift } from '../domain/types'
 
 export interface StationRollup {
@@ -47,6 +49,84 @@ function startOfToday(): string {
 
 export class RollupService {
   async summary(): Promise<HqSummary> {
+    const base = getCloudApiBase()
+    const token = await getCloudToken()
+
+    // 1. Try live backend cloud summary first
+    if (base && token) {
+      try {
+        const resp = await fetch(`${base}/api/headoffice/summary`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (resp.ok) {
+          const c = (await resp.json()) as {
+            generatedAt: string
+            totalShifts: number
+            shiftsToday: number
+            litresToday: number
+            salesToday: number
+            netVariance: number
+            pendingReview: number
+            approved: number
+            rejected: number
+            stations: Array<{
+              stationId: string
+              name: string
+              region: string
+              shiftCount: number
+              litresToday: number
+              salesToday: number
+              netVariance: number
+              pendingReview: number
+            }>
+            attendants: Array<{
+              employeeCode: string
+              name: string
+              shiftsClosed: number
+              litres: number
+              sales: number
+            }>
+            recentShifts: Shift[]
+          }
+          if (c && c.stations) {
+            return {
+              generatedAt: c.generatedAt || new Date().toISOString(),
+              totalShifts: c.totalShifts || 0,
+              openShifts: c.shiftsToday || 0,
+              litresToday: c.litresToday || 0,
+              salesToday: c.salesToday || 0,
+              netVariance: c.netVariance || 0,
+              pendingReview: c.pendingReview || 0,
+              approved: c.approved || 0,
+              rejected: c.rejected || 0,
+              stations: c.stations.map(st => ({
+                stationId: st.stationId,
+                name: st.name,
+                region: st.region,
+                shiftCount: st.shiftCount,
+                litres: st.litresToday,
+                sales: st.salesToday,
+                netVariance: st.netVariance,
+                pendingReview: st.pendingReview,
+              })),
+              attendants: (c.attendants || []).map(a => ({
+                employeeCode: a.employeeCode,
+                name: a.name,
+                stationName: 'Forecourt Network',
+                shiftsClosed: a.shiftsClosed,
+                litres: a.litres,
+                sales: a.sales,
+              })),
+              recentShifts: c.recentShifts || [],
+            }
+          }
+        }
+      } catch {
+        // Fall back to local aggregation
+      }
+    }
+
+    // 2. Offline local aggregation fallback
     const all = await listShifts()
     const today = startOfToday()
 
@@ -56,11 +136,11 @@ export class RollupService {
     const salesToday = closedToday.reduce((a, s) => a + s.actualTotal, 0)
     const netVariance = Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100
 
-    const stationNames = ['Green Valley Main', 'Airport Bypass Express', 'Takoradi Harbour Hub']
+    const stationNames = ['Green Valley Main Flagship', 'Airport City Express', 'Circle Flagship Station']
     const stations: StationRollup[] = [
-      { stationId: 'STN-GV-042', name: 'Green Valley Main', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
-      { stationId: 'STN-AB-015', name: 'Airport Bypass Express', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
-      { stationId: 'STN-TH-021', name: 'Takoradi Harbour Hub', region: 'Western Region', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
+      { stationId: 'STN-PV-01', name: 'Green Valley Main Flagship', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
+      { stationId: 'STN-PV-02', name: 'Airport City Express', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
+      { stationId: 'STN-GOIL-01', name: 'GOIL Circle Flagship', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
     ]
     for (const shift of closed) {
       const agg = stations.find(s => s.stationId === shift.stationId)

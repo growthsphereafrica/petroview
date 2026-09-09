@@ -1,5 +1,5 @@
 import React from 'react'
-import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, TextStyle, ViewStyle } from 'react-native'
+import { View, Text, TextInput, Pressable, ActivityIndicator, StyleSheet, TextStyle, ViewStyle, StyleProp, KeyboardTypeOptions } from 'react-native'
 import { colors } from '../theme'
 
 export const Screen: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -9,11 +9,11 @@ export const Screen: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 export const StyledTextInput: React.FC<{
   value: string
   onChangeText: (t: string) => void
-  placeholder: string
+  placeholder?: string
   secureTextEntry?: boolean
-  keyboardType?: 'default' | 'number-pad'
-  autoCapitalize?: 'none' | 'characters'
-  style?: TextStyle
+  keyboardType?: KeyboardTypeOptions
+  autoCapitalize?: 'none' | 'characters' | 'words' | 'sentences'
+  style?: StyleProp<TextStyle>
 }> = ({ value, onChangeText, placeholder, secureTextEntry, keyboardType, autoCapitalize, style }) => (
   <TextInput
     value={value}
@@ -33,7 +33,7 @@ export const PrimaryButton: React.FC<{
   disabled?: boolean
   loading?: boolean
   tone?: 'flame' | 'emerald' | 'amber' | 'rose' | 'violet'
-  style?: ViewStyle
+  style?: StyleProp<ViewStyle>
 }> = ({ title, onPress, disabled, loading, tone = 'flame', style }) => {
   const bg = tone === 'flame' ? colors.flame : tone === 'emerald' ? colors.emerald : tone === 'amber' ? colors.amber : tone === 'rose' ? colors.rose : colors.violet
   return (
@@ -47,7 +47,7 @@ export const PrimaryButton: React.FC<{
   )
 }
 
-export const Card: React.FC<{ children: React.ReactNode; style?: ViewStyle }> = ({ children, style }) => (
+export const Card: React.FC<{ children: React.ReactNode; style?: StyleProp<ViewStyle> }> = ({ children, style }) => (
   <View style={[styles.card, style]}>{children}</View>
 )
 

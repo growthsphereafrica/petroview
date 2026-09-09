@@ -433,66 +433,68 @@ const ShiftDetailModal: React.FC<{
 }> = ({ shift, session, onClose, onReviewed }) => {
   const [busy, setBusy] = useState<string | null>(null)
   return (
-    <View style={styles.modal}>
-      <View style={styles.modalCard}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.modalTitle}>{shift.number}</Text>
-          <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
-        </View>
-        <Text style={styles.modalSub}>{shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}</Text>
-        <View style={styles.statsGrid}>
-          <Stat label="Sales Total" value={formatGHS(shift.salesTotal)} />
-          <Stat label="Volume" value={`${formatLitres(shift.sales.reduce((a, s) => a + s.litres, 0))} L`} />
-          <Stat label="Variance" value={formatGHS(shift.variance, { showSign: true })} tone={Math.abs(shift.variance) < 5 ? colors.emerald : colors.rose} />
-          <Stat label="Opened" value={formatDateTime(shift.openedAt)} />
-        </View>
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modal}>
+        <View style={styles.modalCard}>
+          <View style={styles.cardHeader}>
+            <Text style={styles.modalTitle}>{shift.number}</Text>
+            <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
+          </View>
+          <Text style={styles.modalSub}>{shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}</Text>
+          <View style={styles.statsGrid}>
+            <Stat label="Sales Total" value={formatGHS(shift.salesTotal)} />
+            <Stat label="Volume" value={`${formatLitres(shift.sales.reduce((a, s) => a + s.litres, 0))} L`} />
+            <Stat label="Variance" value={formatGHS(shift.variance, { showSign: true })} tone={Math.abs(shift.variance) < 5 ? colors.emerald : colors.rose} />
+            <Stat label="Opened" value={formatDateTime(shift.openedAt)} />
+          </View>
 
-        {shift.status === 'CLOSED' ? (
-          <>
-            <View style={styles.reviewActions}>
-              <View style={{ flex: 1, marginRight: 6 }}>
-                <Pressable
-                  disabled={!!busy}
-                  onPress={async () => {
-                    setBusy('APPROVED')
-                    await onReviewed('APPROVED')
-                    setBusy(null)
-                  }}
-                  style={[styles.btnApprove, busy && { opacity: 0.5 }]}
-                >
-                  <CheckCircle2 size={14} color="#052e16" />
-                  <Text style={[styles.btnLabel, { color: '#052e16' }]}>{busy === 'APPROVED' ? 'Reviewing…' : 'Approve'}</Text>
-                </Pressable>
+          {shift.status === 'CLOSED' ? (
+            <>
+              <View style={styles.reviewActions}>
+                <View style={{ flex: 1, marginRight: 6 }}>
+                  <Pressable
+                    disabled={!!busy}
+                    onPress={async () => {
+                      setBusy('APPROVED')
+                      await onReviewed('APPROVED')
+                      setBusy(null)
+                    }}
+                    style={[styles.btnApprove, busy && { opacity: 0.5 }]}
+                  >
+                    <CheckCircle2 size={14} color="#052e16" />
+                    <Text style={[styles.btnLabel, { color: '#052e16' }]}>{busy === 'APPROVED' ? 'Reviewing…' : 'Approve'}</Text>
+                  </Pressable>
+                </View>
+                <View style={{ flex: 1, marginLeft: 6 }}>
+                  <Pressable
+                    disabled={!!busy}
+                    onPress={async () => {
+                      setBusy('REJECTED')
+                      await onReviewed('REJECTED', 'Flagged by supervisor')
+                      setBusy(null)
+                    }}
+                    style={[styles.btnReject, busy && { opacity: 0.5 }]}
+                  >
+                    <Text style={[styles.btnLabel, { color: '#fff' }]}>{busy === 'REJECTED' ? 'Reviewing…' : 'Reject'}</Text>
+                  </Pressable>
+                </View>
               </View>
-              <View style={{ flex: 1, marginLeft: 6 }}>
-                <Pressable
-                  disabled={!!busy}
-                  onPress={async () => {
-                    setBusy('REJECTED')
-                    await onReviewed('REJECTED', 'Flagged by supervisor')
-                    setBusy(null)
-                  }}
-                  style={[styles.btnReject, busy && { opacity: 0.5 }]}
-                >
-                  <Text style={[styles.btnLabel, { color: '#fff' }]}>{busy === 'REJECTED' ? 'Reviewing…' : 'Reject'}</Text>
-                </Pressable>
-              </View>
-            </View>
-            <Pressable onPress={onClose} style={{ marginTop: 8, alignItems: 'center', padding: 8 }}>
+              <Pressable onPress={onClose} style={{ marginTop: 8, alignItems: 'center', padding: 8 }}>
+                <Text style={{ color: colors.textFaint, fontSize: 12 }}>Close</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Pressable onPress={onClose} style={{ marginTop: 12, alignItems: 'center', padding: 8 }}>
               <Text style={{ color: colors.textFaint, fontSize: 12 }}>Close</Text>
             </Pressable>
-          </>
-        ) : (
-          <Pressable onPress={onClose} style={{ marginTop: 12, alignItems: 'center', padding: 8 }}>
-            <Text style={{ color: colors.textFaint, fontSize: 12 }}>Close</Text>
-          </Pressable>
-        )}
+          )}
 
-        {shift.reviewedBy && (
-          <Text style={styles.reviewedNote}>Reviewed by {shift.reviewedBy} — {formatDateTime(shift.reviewedAt ?? '')}</Text>
-        )}
+          {shift.reviewedBy && (
+            <Text style={styles.reviewedNote}>Reviewed by {shift.reviewedBy} — {formatDateTime(shift.reviewedAt ?? '')}</Text>
+          )}
+        </View>
       </View>
-    </View>
+    </Modal>
   )
 }
 
@@ -671,7 +673,7 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
       </Card>
 
       {/* Reset PIN Modal */}
-      {resetFor && (
+      <Modal visible={!!resetFor} transparent animationType="slide" onRequestClose={() => setResetFor(null)}>
         <View style={styles.modal}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Reset PIN</Text>
@@ -687,7 +689,7 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
               <PrimaryButton
                 title="Save PIN"
-                onPress={() => void doReset(resetFor)}
+                onPress={() => void doReset(resetFor ?? '')}
                 disabled={pin.length !== 4}
                 style={{ flex: 1 }}
               />
@@ -700,10 +702,10 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
             </View>
           </View>
         </View>
-      )}
+      </Modal>
 
       {/* Register Staff Modal */}
-      {registerOpen && (
+      <Modal visible={registerOpen} transparent animationType="slide" onRequestClose={() => setRegisterOpen(false)}>
         <View style={styles.modal}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Register Staff</Text>
@@ -745,7 +747,7 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
             </View>
           </View>
         </View>
-      )}
+      </Modal>
     </View>
   )
 }
@@ -825,7 +827,7 @@ const OperationsTab: React.FC<{ session: MobileSession }> = ({ session }) => {
       </Card>
 
       {/* Add Expense Modal */}
-      {expenseModal && (
+      <Modal visible={expenseModal} transparent animationType="slide" onRequestClose={() => setExpenseModal(false)}>
         <View style={styles.modal}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Record Expense</Text>
@@ -875,12 +877,23 @@ const OperationsTab: React.FC<{ session: MobileSession }> = ({ session }) => {
             </View>
           </View>
         </View>
-      )}
+      </Modal>
     </View>
   )
 }
 
 // ---- Tab 6: HQ & Super-Admin OMCs ------------------------------------------
+
+interface PendingUser {
+  id: string
+  employeeCode: string
+  fullName: string
+  phone?: string
+  stationId?: string
+  companyId?: string
+  role: 'attendant' | 'supervisor'
+  createdAt: string
+}
 
 const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isHQ: boolean }> = ({
   session,
@@ -888,17 +901,65 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
   isHQ,
 }) => {
   const [data, setData] = useState<HqSummary | null>(null)
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([])
+  const [approvingId, setApprovingId] = useState<string | null>(null)
   const [createOmcModal, setCreateOmcModal] = useState(false)
+  const [pricingModal, setPricingModal] = useState(false)
+  const [prices, setPrices] = useState({ PMS: '14.80', AGO: '15.20', DPK: '13.90', KERO: '13.50' })
   const [omcName, setOmcName] = useState('')
   const [omcCode, setOmcCode] = useState('')
   const [omcPin, setOmcPin] = useState('9999')
   const [creating, setCreating] = useState(false)
 
+  const loadAll = useCallback(async () => {
+    const summaryData = await rollupService.summary()
+    setData(summaryData)
+
+    // Load pending approvals from cloud if token is present
+    const base = getCloudApiBase()
+    const token = await getCloudToken()
+    if (base && token) {
+      try {
+        const resp = await fetch(`${base}/api/auth/pending-approvals`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (resp.ok) {
+          const json = (await resp.json()) as { supervisors?: PendingUser[]; attendants?: PendingUser[] }
+          const combined: PendingUser[] = [
+            ...(json.supervisors || []).map(s => ({ ...s, role: 'supervisor' as const })),
+            ...(json.attendants || []).map(a => ({ ...a, role: 'attendant' as const })),
+          ]
+          setPendingUsers(combined)
+        }
+      } catch {
+        // offline
+      }
+    }
+  }, [])
+
   useEffect(() => {
     let active = true
-    void rollupService.summary().then(d => { if (active) setData(d) })
+    void loadAll()
     return () => { active = false }
-  }, [])
+  }, [loadAll])
+
+  const handleDecision = async (userId: string, verdict: 'APPROVED' | 'REJECTED') => {
+    setApprovingId(userId)
+    try {
+      const base = getCloudApiBase()
+      const token = await getCloudToken()
+      if (base && token) {
+        await fetch(`${base}/api/auth/approve/${userId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ verdict }),
+        })
+      }
+      setPendingUsers(prev => prev.filter(u => u.id !== userId))
+    } finally {
+      setApprovingId(null)
+    }
+  }
 
   const submitCreateOmc = async () => {
     if (!omcName || !omcCode) return
@@ -906,14 +967,17 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
     try {
       const base = getCloudApiBase()
       const token = await getCloudToken()
-      await fetch(`${base}/api/companies`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ name: omcName, shortCode: omcCode, adminPin: omcPin }),
-      })
+      if (base && token) {
+        await fetch(`${base}/api/companies`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ name: omcName, shortCode: omcCode, adminPin: omcPin }),
+        })
+      }
       setCreateOmcModal(false)
       setOmcName('')
       setOmcCode('')
+      void loadAll()
     } finally {
       setCreating(false)
     }
@@ -927,14 +991,19 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
         <View>
           <Text style={styles.sectionTitle}>{isSuperAdmin ? 'PLATFORM MASTER · OMCS' : 'HEAD OFFICE NETWORK'}</Text>
           <Text style={styles.sub}>
-            {isSuperAdmin ? 'Manage All Downstream OMC Tenants' : 'Enterprise Station Rollup'}
+            {isSuperAdmin ? 'Manage All Downstream OMC Tenants' : 'Enterprise Station Rollup & Fleet Control'}
           </Text>
         </View>
-        {isSuperAdmin && (
-          <Pressable onPress={() => setCreateOmcModal(true)} style={styles.linkBtn}>
-            <Text style={styles.linkBtnText}>+ New OMC</Text>
+        <View style={{ flexDirection: 'row', gap: 6 }}>
+          <Pressable onPress={() => setPricingModal(true)} style={styles.miniBtn}>
+            <Text style={styles.miniBtnText}>Fuel Prices</Text>
           </Pressable>
-        )}
+          {isSuperAdmin && (
+            <Pressable onPress={() => setCreateOmcModal(true)} style={styles.linkBtn}>
+              <Text style={styles.linkBtnText}>+ New OMC</Text>
+            </Pressable>
+          )}
+        </View>
       </View>
 
       <View style={styles.kpiRow}>
@@ -949,6 +1018,66 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
           <Text style={styles.kpiLabel}>Awaiting review</Text>
         </Card>
       </View>
+
+      {/* Pending Staff Approvals Queue */}
+      {pendingUsers.length > 0 && (
+        <Card style={[styles.card, { borderColor: colors.amber }]}>
+          <View style={styles.cardHeader}>
+            <Text style={[styles.cardTitle, { color: colors.amber }]}>Pending Staff Approvals ({pendingUsers.length})</Text>
+            <Badge tone="warning">Action Required</Badge>
+          </View>
+          <Text style={styles.sub}>New attendants & managers awaiting your head office authorization</Text>
+          <View style={{ gap: 8, marginTop: 10 }}>
+            {pendingUsers.map(u => (
+              <View key={u.id} style={[styles.row, { backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.rowTitle}>{u.fullName}</Text>
+                  <Text style={styles.rowSub}>{u.employeeCode} · {u.role === 'supervisor' ? 'Station Manager' : 'Attendant'}</Text>
+                </View>
+                <View style={{ flexDirection: 'row', gap: 6 }}>
+                  <Pressable
+                    onPress={() => void handleDecision(u.id, 'APPROVED')}
+                    disabled={approvingId === u.id}
+                    style={[styles.miniBtn, { backgroundColor: colors.emerald }]}
+                  >
+                    <Text style={[styles.miniBtnText, { color: '#04130d' }]}>Approve</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={() => void handleDecision(u.id, 'REJECTED')}
+                    disabled={approvingId === u.id}
+                    style={[styles.miniBtn, { backgroundColor: colors.panel }]}
+                  >
+                    <Text style={[styles.miniBtnText, { color: colors.rose }]}>Reject</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
+          </View>
+        </Card>
+      )}
+
+      {/* Live Benchmark Fuel Prices Card */}
+      <Card style={styles.card}>
+        <View style={styles.cardHeader}>
+          <Text style={styles.cardTitle}>Live Station Fuel Prices (GHS / L)</Text>
+          <Pressable onPress={() => setPricingModal(true)} style={styles.miniBtn}>
+            <Text style={styles.miniBtnText}>Update</Text>
+          </Pressable>
+        </View>
+        <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
+          {[
+            { code: 'PMS', label: 'Super', color: '#22c55e', val: prices.PMS },
+            { code: 'AGO', label: 'Diesel', color: '#3b82f6', val: prices.AGO },
+            { code: 'DPK', label: 'DPK', color: '#f97316', val: prices.DPK },
+            { code: 'KERO', label: 'Kero', color: '#a855f7', val: prices.KERO },
+          ].map(f => (
+            <View key={f.code} style={{ flex: 1, backgroundColor: colors.panel2, padding: 8, borderRadius: 8, alignItems: 'center' }}>
+              <Text style={{ color: f.color, fontSize: 10, fontWeight: '900' }}>{f.code}</Text>
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '900', marginTop: 2 }}>{f.val}</Text>
+            </View>
+          ))}
+        </View>
+      </Card>
 
       <Text style={styles.sectionTitle}>STATIONS & BRANCHES</Text>
       <Card style={styles.listCard}>
@@ -979,8 +1108,42 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
         ))}
       </Card>
 
+      {/* Fuel Pricing Modal */}
+      <Modal visible={pricingModal} transparent animationType="slide" onRequestClose={() => setPricingModal(false)}>
+        <View style={styles.modal}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Update Fuel Retail Prices</Text>
+            <Text style={styles.modalSub}>Broadcast official prices across network station forecourts</Text>
+
+            <View style={{ gap: 8, marginTop: 12 }}>
+              <View>
+                <Text style={styles.fieldLabel}>PMS / SUPER PETROL (GHS/L)</Text>
+                <StyledTextInput value={prices.PMS} onChangeText={t => setPrices(p => ({ ...p, PMS: t }))} keyboardType="numeric" />
+              </View>
+              <View>
+                <Text style={styles.fieldLabel}>AGO / DIESEL (GHS/L)</Text>
+                <StyledTextInput value={prices.AGO} onChangeText={t => setPrices(p => ({ ...p, AGO: t }))} keyboardType="numeric" />
+              </View>
+              <View>
+                <Text style={styles.fieldLabel}>DPK (GHS/L)</Text>
+                <StyledTextInput value={prices.DPK} onChangeText={t => setPrices(p => ({ ...p, DPK: t }))} keyboardType="numeric" />
+              </View>
+              <View>
+                <Text style={styles.fieldLabel}>KEROSENE (GHS/L)</Text>
+                <StyledTextInput value={prices.KERO} onChangeText={t => setPrices(p => ({ ...p, KERO: t }))} keyboardType="numeric" />
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
+              <PrimaryButton title="Apply Prices" onPress={() => setPricingModal(false)} style={{ flex: 1 }} />
+              <PrimaryButton title="Close" onPress={() => setPricingModal(false)} tone="rose" style={{ flex: 1 }} />
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Create OMC Modal for Super Admin */}
-      {createOmcModal && (
+      <Modal visible={createOmcModal} transparent animationType="slide" onRequestClose={() => setCreateOmcModal(false)}>
         <View style={styles.modal}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Create OMC Company</Text>
@@ -1001,7 +1164,7 @@ const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isH
             </View>
           </View>
         </View>
-      )}
+      </Modal>
     </View>
   )
 }

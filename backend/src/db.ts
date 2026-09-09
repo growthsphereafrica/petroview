@@ -107,8 +107,8 @@ export const db = new Database(ENV.DB_PATH)
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
-export function initSchema(): void {
-  db.exec(`
+const SCHEMA_DDL: Record<string, string> = {
+  companies: `
 CREATE TABLE IF NOT EXISTS companies (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -123,7 +123,8 @@ CREATE TABLE IF NOT EXISTS companies (
   active INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL
 );
-
+`,
+  companyStations: `
 CREATE TABLE IF NOT EXISTS companyStations (
   id TEXT PRIMARY KEY,
   companyId TEXT NOT NULL,
@@ -136,7 +137,8 @@ CREATE TABLE IF NOT EXISTS companyStations (
   createdAt TEXT NOT NULL,
   FOREIGN KEY (companyId) REFERENCES companies(id)
 );
-
+`,
+  attendants: `
 CREATE TABLE IF NOT EXISTS attendants (
   id TEXT PRIMARY KEY,
   employeeCode TEXT NOT NULL UNIQUE,
@@ -156,7 +158,8 @@ CREATE TABLE IF NOT EXISTS attendants (
   lockoutUntil TEXT,
   createdAt TEXT NOT NULL
 );
-
+`,
+  supervisors: `
 CREATE TABLE IF NOT EXISTS supervisors (
   id TEXT PRIMARY KEY,
   employeeCode TEXT NOT NULL UNIQUE,
@@ -177,7 +180,8 @@ CREATE TABLE IF NOT EXISTS supervisors (
   lockoutUntil TEXT,
   createdAt TEXT NOT NULL
 );
-
+`,
+  sessions: `
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   role TEXT NOT NULL,
@@ -190,7 +194,8 @@ CREATE TABLE IF NOT EXISTS sessions (
   createdAt TEXT NOT NULL,
   expiresAt TEXT NOT NULL
 );
-
+`,
+  shifts: `
 CREATE TABLE IF NOT EXISTS shifts (
   id TEXT PRIMARY KEY,
   number TEXT NOT NULL,
@@ -216,7 +221,8 @@ CREATE TABLE IF NOT EXISTS shifts (
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
-
+`,
+  transactions: `
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
   shiftId TEXT NOT NULL,
@@ -230,7 +236,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   recordedAt TEXT NOT NULL,
   syncStatus TEXT NOT NULL
 );
-
+`,
+  receipts: `
 CREATE TABLE IF NOT EXISTS receipts (
   id TEXT PRIMARY KEY,
   shiftId TEXT NOT NULL,
@@ -238,7 +245,8 @@ CREATE TABLE IF NOT EXISTS receipts (
   capturedAt TEXT NOT NULL,
   syncStatus TEXT NOT NULL
 );
-
+`,
+  tankReadings: `
 CREATE TABLE IF NOT EXISTS tankReadings (
   id TEXT PRIMARY KEY,
   stationId TEXT NOT NULL,
@@ -250,7 +258,8 @@ CREATE TABLE IF NOT EXISTS tankReadings (
   notes TEXT,
   createdAt TEXT NOT NULL
 );
-
+`,
+  syncQueue: `
 CREATE TABLE IF NOT EXISTS syncQueue (
   id TEXT PRIMARY KEY,
   entityType TEXT NOT NULL,
@@ -262,7 +271,8 @@ CREATE TABLE IF NOT EXISTS syncQueue (
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
 );
-
+`,
+  audit_log: `
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
   action TEXT NOT NULL,
@@ -275,7 +285,45 @@ CREATE TABLE IF NOT EXISTS audit_log (
   timestamp TEXT NOT NULL,
   meta TEXT
 );
-`)
+`,
+}
+
+function tableColumns(table: string): string[] {
+  const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  return rows.map((r) => r.name)
+}
+
+// Legacy volumes created by earlier deploys have tables without the multi-tenant
+// columns (companyId, approvalStatus, isSuperAdmin, ...). CREATE TABLE IF NOT EXISTS
+// won't alter those tables, so rebuild them in place while preserving any existing rows.
+function migrateLegacyTables(): void {
+  const migrations: Array<{ table: keyof typeof SCHEMA_DDL; required: string[] }> = [
+    { table: 'supervisors', required: ['companyId', 'isSuperAdmin', 'approvalStatus'] },
+    { table: 'attendants', required: ['companyId', 'approvalStatus', 'companyShortCode'] },
+    { table: 'sessions', required: ['companyId', 'companyShortCode'] },
+  ]
+  for (const m of migrations) {
+    const cols = tableColumns(m.table)
+    const isLegacy = m.required.some((c) => !cols.includes(c))
+    if (!isLegacy) continue
+
+    const legacy = `${m.table}_legacy`
+    db.exec(`ALTER TABLE ${m.table} RENAME TO ${legacy}`)
+    db.exec(SCHEMA_DDL[m.table])
+    const common = cols.filter((c) => tableColumns(m.table).includes(c))
+    if (common.length > 0) {
+      const list = common.join(', ')
+      db.prepare(`INSERT OR IGNORE INTO ${m.table} (${list}) SELECT ${list} FROM ${legacy}`).run()
+    }
+    db.exec(`DROP TABLE ${legacy}`)
+    console.log(`[db] Migrated legacy schema for ${m.table}`)
+  }
+}
+
+export function initSchema(): void {
+  for (const ddl of Object.values(SCHEMA_DDL)) db.exec(ddl)
+
+  migrateLegacyTables()
 
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
   const ensureIndex = (name: string, sql: string): void => {
@@ -290,8 +338,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
 }
 
 export function seedSuperAdmin(): void {
-  const existing = db.prepare('SELECT id FROM supervisors WHERE employeeCode = ?').get(SUPER_ADMIN.employeeCode)
-  if (existing) return
+  const existing = db.prepare('SELECT id FROM supervisors WHERE employeeCode = ?').get(SUPER_ADMIN.employeeCode) as
+    | { id: string }
+    | undefined
+
+  if (existing) {
+    db.prepare(
+      `UPDATE supervisors
+       SET fullName = ?, stationId = NULL, companyId = ?, isHeadOffice = 0, isSuperAdmin = 1,
+           approvalStatus = 'APPROVED', approvedAt = COALESCE(approvedAt, ?), approvedBy = COALESCE(approvedBy, 'SYSTEM_SEED'),
+           active = 1, lockoutUntil = NULL
+       WHERE id = ?`,
+    ).run(SUPER_ADMIN.fullName, SUPER_ADMIN.companyId, new Date().toISOString(), existing.id)
+    console.log(`[db] Ensured SUPER-ADMIN (${SUPER_ADMIN.employeeCode})`)
+    return
+  }
 
   const { salt, hash } = hashPin(SUPER_ADMIN.pin)
   const now = new Date().toISOString()

@@ -54,8 +54,13 @@ companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthReq
   })
 })
 
-// --- List companies ---
-companiesRouter.get('/', authenticate, (req: AuthRequest, res) => {
+// --- List companies (open for registration & dashboards) ---
+companiesRouter.get('/', (req, res) => {
+  const rows = db.prepare('SELECT * FROM companies WHERE active = 1 ORDER BY name').all()
+  res.json(rows)
+})
+
+companiesRouter.get('/list', (req, res) => {
   const rows = db.prepare('SELECT * FROM companies WHERE active = 1 ORDER BY name').all()
   res.json({ count: rows.length, companies: rows })
 })

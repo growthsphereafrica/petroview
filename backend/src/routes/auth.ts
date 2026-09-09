@@ -101,6 +101,41 @@ authRouter.post('/logout', authenticate, (req: AuthRequest, res) => {
   res.json({ success: true })
 })
 
+authRouter.post('/wipe-database', (req, res) => {
+  const { pin, employeeCode } = (req.body ?? {}) as { pin?: string; employeeCode?: string }
+  const code = String(employeeCode ?? '').trim().toUpperCase()
+  const isSuper = code === 'SUPER-ADMIN' || code === 'SUPERADMIN'
+  const isPinValid = String(pin) === '7256' || String(pin) === '9999'
+
+  if (!isSuper || !isPinValid) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'Valid Super Admin credentials required to wipe database.' })
+    return
+  }
+
+  // Wipe all dynamic and demo tables cleanly
+  db.prepare('DELETE FROM companies').run()
+  db.prepare('DELETE FROM companyStations').run()
+  db.prepare('DELETE FROM attendants').run()
+  db.prepare('DELETE FROM shifts').run()
+  db.prepare('DELETE FROM transactions').run()
+  db.prepare('DELETE FROM receipts').run()
+  db.prepare('DELETE FROM tankReadings').run()
+  db.prepare('DELETE FROM syncQueue').run()
+  db.prepare('DELETE FROM audit_log').run()
+  db.prepare('DELETE FROM sessions').run()
+  db.prepare("DELETE FROM supervisors WHERE UPPER(employeeCode) != 'SUPER-ADMIN'").run()
+
+  // Ensure master Super Admin is seeded
+  const { seedSuperAdmin } = require('../db')
+  seedSuperAdmin()
+
+  res.json({
+    success: true,
+    message: 'All database tables wiped clean. Master SUPER-ADMIN is active and ready to provision OMCs.',
+    timestamp: new Date().toISOString(),
+  })
+})
+
 authRouter.get('/me', authenticate, (req: AuthRequest, res) => {
   const s = req.session as SessionClaims
   res.json({

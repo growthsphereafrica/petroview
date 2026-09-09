@@ -224,7 +224,7 @@ export async function listAudit(): Promise<AuditEntry[]> {
 
 // ---- Seeds ----------------------------------------------------------------
 
-const SCHEMA_VERSION = 'clean-slate-4'
+const SCHEMA_VERSION = 'clean-slate-5'
 
 let seeded = false
 
@@ -263,16 +263,17 @@ export async function seedProductionData(): Promise<void> {
     pinHash: saHash,
     role: 'SUPERVISOR',
     isSuperAdmin: true,
+    isHeadOffice: true,
     active: true,
     createdAt: existingSA?.createdAt || now,
   })
 
   // 2. Seed HQ Admins (PIN 9999)
   const hqAdmins = [
-    { id: 'sup-pv-hq01', code: 'PV-HQ01', name: 'PetroView HQ Administrator' },
-    { id: 'sup-goil-hq01', code: 'GOIL-HQ01', name: 'GOIL Operations HQ Admin' },
-    { id: 'sup-total-hq01', code: 'TOTAL-HQ01', name: 'TotalEnergies HQ Admin' },
-    { id: 'sup-shell-hq01', code: 'SHELL-HQ01', name: 'Shell Ghana HQ Admin' },
+    { id: 'sup-pv-hq01', code: 'PV-HQ01', name: 'PetroView HQ Administrator', companyId: 'COMP-PV', companyShortCode: 'PV' },
+    { id: 'sup-goil-hq01', code: 'GOIL-HQ01', name: 'GOIL Operations HQ Admin', companyId: 'COMP-GOIL', companyShortCode: 'GOIL' },
+    { id: 'sup-total-hq01', code: 'TOTAL-HQ01', name: 'TotalEnergies HQ Admin', companyId: 'COMP-TOTAL', companyShortCode: 'TOTAL' },
+    { id: 'sup-shell-hq01', code: 'SHELL-HQ01', name: 'Shell Ghana HQ Admin', companyId: 'COMP-SHELL', companyShortCode: 'SHELL' },
   ]
 
   for (const hq of hqAdmins) {
@@ -285,7 +286,10 @@ export async function seedProductionData(): Promise<void> {
       fullName: hq.name,
       pinSalt: hqSalt,
       pinHash: hqHash,
+      companyId: hq.companyId,
+      companyShortCode: hq.companyShortCode,
       role: 'SUPERVISOR',
+      isHeadOffice: true,
       active: true,
       createdAt: existing?.createdAt || now,
     })
@@ -293,10 +297,11 @@ export async function seedProductionData(): Promise<void> {
 
   // 3. Seed Station Managers (PIN 1234)
   const managers = [
-    { id: 'sup-pv-acc-001-m', code: 'PV-ACC-001-M', name: 'Samuel Kofi Mensah (Manager)' },
-    { id: 'sup-goil001m', code: 'GOIL001M', name: 'Yaw Osei Tutu (Manager)' },
-    { id: 'sup-tot001m', code: 'TOT001M', name: 'Kwesi Arthur (Manager)' },
-    { id: 'sup-shell001m', code: 'SHELL001M', name: 'Richard Appiah (Manager)' },
+    { id: 'sup-pv-acc-001-m', code: 'PV-ACC-001-M', name: 'Samuel Kofi Mensah (Manager)', stationId: 'STN-PV-01', companyShortCode: 'PV' },
+    { id: 'sup-pv-001-m', code: 'PV-001-M', name: 'Samuel Kofi Mensah (Manager)', stationId: 'STN-PV-01', companyShortCode: 'PV' },
+    { id: 'sup-goil001m', code: 'GOIL-001-M', name: 'Yaw Osei Tutu (Manager)', stationId: 'STN-GOIL-01', companyShortCode: 'GOIL' },
+    { id: 'sup-tot001m', code: 'TOTAL-001-M', name: 'Kwesi Arthur (Manager)', stationId: 'STN-TOTAL-01', companyShortCode: 'TOTAL' },
+    { id: 'sup-shell001m', code: 'SHELL-001-M', name: 'Richard Appiah (Manager)', stationId: 'STN-SHELL-01', companyShortCode: 'SHELL' },
   ]
 
   for (const mgr of managers) {

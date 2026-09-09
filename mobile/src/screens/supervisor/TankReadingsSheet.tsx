@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator } from 'react-native'
+import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Modal } from 'react-native'
 import { Droplets, Gauge, Plus, Save, History } from 'lucide-react-native'
 import { colors } from '../../theme'
 import { Card } from '../../components/ui'
@@ -53,6 +53,8 @@ export const TankReadingsSheet: React.FC<{
     }
   }, [visible, load])
 
+  if (!visible) return null
+
   const updateEntry = (index: number, field: keyof TankReadingEntry, value: string) => {
     setEntries(prev =>
       prev.map((e, i) => {
@@ -96,15 +98,16 @@ export const TankReadingsSheet: React.FC<{
   const totalDip = rows.reduce((a, r) => a + r.readings.reduce((x, y) => x + (y.dipStock || 0), 0), 0)
 
   return (
-    <View style={styles.backdrop}>
-      <View style={styles.sheet}>
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.title}>Tank Readings</Text>
-            {!!stationName && <Text style={styles.sub}>{stationName}</Text>}
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <View style={styles.sheet}>
+          <View style={styles.header}>
+            <View>
+              <Text style={styles.title}>Tank Readings</Text>
+              {!!stationName && <Text style={styles.sub}>{stationName}</Text>}
+            </View>
+            <Pressable onPress={onClose} style={styles.closeBtn}><Text style={styles.closeText}>✕</Text></Pressable>
           </View>
-          <Pressable onPress={onClose} style={styles.closeBtn}><Text style={styles.closeText}>✕</Text></Pressable>
-        </View>
 
         <View style={styles.seg}>
           {(['history', 'record'] as const).map(m => (
@@ -225,6 +228,7 @@ export const TankReadingsSheet: React.FC<{
         )}
       </View>
     </View>
+    </Modal>
   )
 }
 

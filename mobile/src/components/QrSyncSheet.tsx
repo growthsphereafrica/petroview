@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform } from 'react-native'
+import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform, Modal } from 'react-native'
 import QRCode from 'react-native-qrcode-svg'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { QrCode, Camera, ArrowLeft, CheckCircle2 } from 'lucide-react-native'
@@ -51,6 +51,8 @@ export const QrSyncSheet: React.FC<{ visible: boolean; onClose: () => void; onSy
     }
   }, [visible, mode, permission, requestPermission])
 
+  if (!visible) return null
+
   const onScan = async (data: string) => {
     const outcome = await collector.feed(data)
     const label = decodeLabel(outcome)
@@ -64,14 +66,15 @@ export const QrSyncSheet: React.FC<{ visible: boolean; onClose: () => void; onSy
   const currentFrame = frames[frameIdx]
 
   return (
-    <View style={styles.backdrop}>
-      <View style={styles.sheet}>
-        <View style={styles.header}>
-          <Text style={styles.title}>
-            {mode === 'choose' ? 'QR Code Sync' : mode === 'send' ? 'Send — show this code' : 'Receive — scan a code'}
-          </Text>
-          <Pressable onPress={onClose} style={styles.closeBtn}><Text style={styles.closeText}>✕</Text></Pressable>
-        </View>
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.backdrop}>
+        <View style={styles.sheet}>
+          <View style={styles.header}>
+            <Text style={styles.title}>
+              {mode === 'choose' ? 'QR Code Sync' : mode === 'send' ? 'Send — show this code' : 'Receive — scan a code'}
+            </Text>
+            <Pressable onPress={onClose} style={styles.closeBtn}><Text style={styles.closeText}>✕</Text></Pressable>
+          </View>
 
         {mode === 'choose' && (
           <View style={styles.choices}>
@@ -160,6 +163,7 @@ export const QrSyncSheet: React.FC<{ visible: boolean; onClose: () => void; onSy
         )}
       </View>
     </View>
+    </Modal>
   )
 }
 

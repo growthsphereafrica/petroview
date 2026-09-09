@@ -31,9 +31,10 @@ export class MobileAuthService {
     const code = raw.toUpperCase()
 
     // 1. Try backend API first — the single source of truth
-    const cloudResult = await cloudLogin(code, pin)
+    const cloudRes = await cloudLogin(code, pin)
 
-    if (cloudResult) {
+    if (cloudRes.ok) {
+      const cloudResult = cloudRes.session
       // Backend is reachable and authenticated
       const role: MobileRole = cloudResult.role === 'superadmin' ? 'superadmin'
         : cloudResult.role === 'headoffice' ? 'headoffice'
@@ -97,8 +98,55 @@ export class MobileAuthService {
       }
     }
 
-    // 2. Backend unreachable — show clear error (no more silent local fallback with demo data)
-    throw new Error('Unable to reach the server. Please check your connection and try again.')
+    // 2. If the backend rejected the login (e.g. invalid PIN, unapproved account), surface server message
+    if (!cloudRes.isNetworkError) {
+      throw new Error(cloudRes.message)
+    }
+
+    // 3. Backend is unreachable (offline mode) — attempt local PIN verification against seeded/cached accounts
+    const { findSupervisorByCode, findAttendantByCode } = await import('../infra/repositories')
+    const { verifyPin: localVerifyPin } = await import('../infra/password')
+
+    const localSup = await findSupervisorByCode(code)
+    if (localSup && localSup.active && localSup.pinSalt && localSup.pinHash) {
+      const valid = await localVerifyPin(pin, localSup.pinSalt, localSup.pinHash)
+      if (valid) {
+        const sess: SupervisorSession = {
+          id: uid('sess'),
+          token: uid('tok'),
+          supervisorId: localSup.id,
+          employeeCode: localSup.employeeCode,
+          fullName: localSup.fullName,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        }
+        await sSet(keys.sessionToken, sess.token)
+        const role: MobileRole = localSup.isSuperAdmin ? 'superadmin' : localSup.isHeadOffice ? 'headoffice' : 'supervisor'
+        return { role, supervisor: localSup, session: sess }
+      }
+      throw new Error('Incorrect PIN.')
+    }
+
+    const localAtt = await findAttendantByCode(code)
+    if (localAtt && localAtt.active && localAtt.pinSalt && localAtt.pinHash) {
+      const valid = await localVerifyPin(pin, localAtt.pinSalt, localAtt.pinHash)
+      if (valid) {
+        const sess: AttendantSession = {
+          id: uid('sess'),
+          token: uid('tok'),
+          attendantId: localAtt.id,
+          employeeCode: localAtt.employeeCode,
+          fullName: localAtt.fullName,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        }
+        await sSet(keys.sessionToken, sess.token)
+        return { role: 'attendant', attendant: localAtt, session: sess }
+      }
+      throw new Error('Incorrect PIN.')
+    }
+
+    throw new Error(cloudRes.message || 'Unable to reach the server. Please check your connection and try again.')
   }
 
   async restore(): Promise<AuthenticateResult | null> {

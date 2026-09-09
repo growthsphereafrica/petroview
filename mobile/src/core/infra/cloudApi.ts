@@ -51,13 +51,19 @@ export interface CloudSession {
   expiresAt: string
 }
 
+export type CloudLoginResult =
+  | { ok: true; session: CloudSession }
+  | { ok: false; message: string; isNetworkError: boolean }
+
 /**
  * Exchanges employeeCode + PIN for a backend session token.
- * Returns null when the backend is unreachable or credentials are rejected.
+ * Returns structured result preserving actual server error message.
  */
-export async function cloudLogin(employeeCode: string, pin: string): Promise<CloudSession | null> {
+export async function cloudLogin(employeeCode: string, pin: string): Promise<CloudLoginResult> {
   const base = getCloudApiBase()
-  if (!base) return null
+  if (!base) {
+    return { ok: false, message: 'Server URL is not configured.', isNetworkError: true }
+  }
 
   let resp: Response
   try {
@@ -67,14 +73,21 @@ export async function cloudLogin(employeeCode: string, pin: string): Promise<Clo
       body: JSON.stringify({ employeeCode, pin }),
     })
   } catch {
-    return null
+    return {
+      ok: false,
+      message: 'Unable to reach the server. Please check your internet connection.',
+      isNetworkError: true,
+    }
   }
 
   const json = (await resp.json().catch(() => ({}))) as Partial<CloudSession> & { error?: string; message?: string }
-  if (!resp.ok || !json.token) return null
+  if (!resp.ok || !json.token) {
+    const msg = json.message || json.error || `Authentication failed (HTTP ${resp.status})`
+    return { ok: false, message: msg, isNetworkError: false }
+  }
 
   await setCloudToken(json.token)
-  return json as CloudSession
+  return { ok: true, session: json as CloudSession }
 }
 
 // ---- Register -------------------------------------------------------------

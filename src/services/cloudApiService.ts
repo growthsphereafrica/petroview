@@ -119,9 +119,12 @@ export async function uploadShiftToCloud(shift: ShiftRecord): Promise<{ success:
  * Returns null when unconfigured, in which case the app runs in
  * simulated-sync (demo) mode.
  */
-export function getApiBase(): string | null {
+export function getApiBase(): string {
   const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
-  return configured && configured.length > 4 ? configured.replace(/\/+$/, '') : null
+  if (configured && configured.length > 4) {
+    return configured.replace(/\/+$/, '')
+  }
+  return 'https://petroviewapi.growthspheregh.com'
 }
 
 function getStoredToken(): string | null {

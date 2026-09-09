@@ -12,13 +12,16 @@ function pumpNameFor(id: string | null | undefined): string {
   return PRODUCTION_PUMPS.find(p => p.id === id)?.name ?? ''
 }
 
-export function getCloudApiBase(): string | null {
+export function getCloudApiBase(): string {
   const configured = (process.env.EXPO_PUBLIC_API_URL as string | undefined)?.trim()
-  return configured && configured.length > 4 ? configured.replace(/\/+$/, '') : null
+  if (configured && configured.length > 4) {
+    return configured.replace(/\/+$/, '')
+  }
+  return 'https://petroviewapi.growthspheregh.com'
 }
 
 export function isCloudConfigured(): boolean {
-  return getCloudApiBase() !== null
+  return true
 }
 
 // ---- Token storage --------------------------------------------------------

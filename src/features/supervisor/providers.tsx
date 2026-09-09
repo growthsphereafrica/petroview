@@ -6,8 +6,10 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { supervisorService, type SupervisorStats } from '../../core/services/supervisorService'
 import { syncService, type SyncResult } from '../../core/services/syncService'
-import { seedProductionData } from '../../core/infra/db'
+import { prodDb, seedProductionData } from '../../core/infra/db'
+import { supervisorRepo } from '../../core/infra/repositories'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
+import { loadUnifiedSession, clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import type { AuditEntry, Attendant, Shift, ShiftStatus, Supervisor } from '../../core/domain/types'
 
 const SESSION_STORAGE_KEY = 'mvp_prod_supervisor_token'
@@ -27,7 +29,10 @@ interface SessionContextValue {
 
 const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
-export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; session?: UnifiedSession | null }> = ({
+  children,
+  session,
+}) => {
   const [ready, setReady] = useState(false)
   const [supervisor, setSupervisor] = useState<Supervisor | null>(null)
   const [signingIn, setSigningIn] = useState(false)
@@ -36,13 +41,53 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode }> 
     let cancelled = false
     async function restore() {
       await seedProductionData()
-      const token = localStorage.getItem(SESSION_STORAGE_KEY)
-      if (token) {
-        try {
-          const { supervisor } = await supervisorService.verifySession(token)
-          if (!cancelled) setSupervisor(supervisor)
-        } catch {
-          localStorage.removeItem(SESSION_STORAGE_KEY)
+      const activeUni = session || loadUnifiedSession()
+      if (activeUni && (activeUni.role === 'supervisor' || activeUni.role === 'headoffice')) {
+        let sup = await supervisorRepo.findByEmployeeCode(activeUni.employeeCode)
+        if (!sup) {
+          sup = {
+            id: `sup-${activeUni.employeeCode.toLowerCase()}`,
+            employeeCode: activeUni.employeeCode,
+            fullName: activeUni.fullName,
+            pinSalt: 'synced_session',
+            pinHash: 'synced_session',
+            stationId: activeUni.stationId || 'stn-01',
+            companyId: activeUni.companyId,
+            companyShortCode: activeUni.companyShortCode,
+            isHeadOffice: activeUni.role === 'headoffice',
+            isSuperAdmin: false,
+            approvalStatus: 'APPROVED',
+            approvedAt: new Date().toISOString(),
+            approvedBy: 'Super Admin',
+            active: true,
+            failedAttempts: 0,
+            lockoutUntil: null,
+            createdAt: new Date().toISOString(),
+          }
+          await prodDb.supervisors.put(sup)
+        }
+        const token = localStorage.getItem(SESSION_STORAGE_KEY) || `sess_${crypto.randomUUID()}`
+        localStorage.setItem(SESSION_STORAGE_KEY, token)
+        await prodDb.supervisorSessions.put({
+          id: `sess-${crypto.randomUUID()}`,
+          token,
+          supervisorId: sup.id,
+          employeeCode: sup.employeeCode,
+          fullName: sup.fullName,
+          stationId: sup.stationId || 'stn-01',
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        })
+        if (!cancelled) setSupervisor(sup)
+      } else {
+        const token = localStorage.getItem(SESSION_STORAGE_KEY)
+        if (token) {
+          try {
+            const { supervisor } = await supervisorService.verifySession(token)
+            if (!cancelled) setSupervisor(supervisor)
+          } catch {
+            localStorage.removeItem(SESSION_STORAGE_KEY)
+          }
         }
       }
       if (!cancelled) setReady(true)
@@ -51,7 +96,7 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode }> 
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [session])
 
   const signIn = useCallback(async (employeeCode: string, pin: string) => {
     setSigningIn(true)
@@ -67,8 +112,9 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode }> 
   const signOut = useCallback(async () => {
     const token = localStorage.getItem(SESSION_STORAGE_KEY)
     if (token) await supervisorService.logout(token)
-    localStorage.removeItem(SESSION_STORAGE_KEY)
+    clearUnifiedSession()
     setSupervisor(null)
+    window.location.reload()
   }, [])
 
   const value = useMemo(() => ({ ready, supervisor, signingIn, signIn, signOut }), [ready, supervisor, signingIn, signIn, signOut])

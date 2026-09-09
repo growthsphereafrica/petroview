@@ -249,3 +249,34 @@ companiesRouter.post('/:id/deactivate', authenticate, requireRole('superadmin'),
   )
   res.json({ id: row.id, active: false })
 })
+
+// --- SUPER-ADMIN: permanently delete company and all associated records ---
+companiesRouter.delete('/:id', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  const row = db.prepare('SELECT id, name, shortCode FROM companies WHERE id = ? OR shortCode = ? COLLATE NOCASE').get(req.params.id, req.params.id) as
+    | { id: string; name: string; shortCode: string }
+    | undefined
+  if (!row) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found.' })
+    return
+  }
+  const now = new Date().toISOString()
+  db.prepare('DELETE FROM companyStations WHERE companyId = ?').run(row.id)
+  db.prepare(`
+    DELETE FROM supervisors
+    WHERE isSuperAdmin = 0
+      AND UPPER(employeeCode) != 'SUPER-ADMIN'
+      AND (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+  `).run(row.id, row.shortCode, `${row.shortCode}%`)
+  db.prepare(`
+    DELETE FROM attendants
+    WHERE companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?
+  `).run(row.id, row.shortCode, `${row.shortCode}%`)
+  db.prepare('DELETE FROM sessions WHERE companyId = ?').run(row.id)
+  db.prepare('DELETE FROM companies WHERE id = ?').run(row.id)
+  db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    newToken(), 'COMPANY_DELETED', req.session?.userId ?? '', req.session?.fullName ?? '', 'SUPERADMIN',
+    row.id, `${row.name} (${row.shortCode})`, 'Permanently deleted company from system', now, null,
+  )
+  res.json({ success: true, message: `Company ${row.name} (${row.shortCode}) deleted successfully.` })
+})
+

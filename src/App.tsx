@@ -253,12 +253,12 @@ const MainAppLayout: React.FC = () => {
                     title="Attendant Mobile Forecourt OS"
                     subtitle="Simulated handheld device terminal"
                   >
-                    <ProductionAttendantApp />
+                    <ProductionAttendantApp session={session} />
                   </DeviceFrame>
                 </div>
               ) : (
                 <div className="flex-1 flex flex-col w-full max-w-2xl mx-auto">
-                  <ProductionAttendantApp />
+                  <ProductionAttendantApp session={session} />
                 </div>
               )}
             </div>
@@ -269,7 +269,7 @@ const MainAppLayout: React.FC = () => {
             <div className={`flex-1 overflow-y-auto ${
               theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
             }`}>
-              <ProductionSupervisorApp />
+              <ProductionSupervisorApp session={session} />
             </div>
           )}
 

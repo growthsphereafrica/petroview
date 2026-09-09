@@ -6,7 +6,7 @@
 import React, { useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 import { AttendantSessionProvider, ShiftProvider, useAttendantSession, useShift } from './providers'
-import { LoginScreen } from './screens/LoginScreen'
+import { clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import { DashboardScreen } from './screens/DashboardScreen'
 import { StartShiftScreen } from './screens/StartShiftScreen'
 import { MeterReadingsScreen } from './screens/MeterReadingsScreen'
@@ -130,7 +130,11 @@ const ShiftNavigator: React.FC = () => {
 const AuthenticatedApp: React.FC = () => {
   const { ready, attendant } = useAttendantSession()
   if (!ready) return <Splash />
-  if (!attendant) return <LoginScreen />
+  if (!attendant) {
+    clearUnifiedSession()
+    window.location.reload()
+    return <Splash />
+  }
   return (
     <ShiftProvider attendant={attendant}>
       <ShiftNavigator />
@@ -138,8 +142,8 @@ const AuthenticatedApp: React.FC = () => {
   )
 }
 
-export const ProductionAttendantApp: React.FC = () => (
-  <AttendantSessionProvider>
+export const ProductionAttendantApp: React.FC<{ session?: UnifiedSession }> = ({ session }) => (
+  <AttendantSessionProvider session={session}>
     <AuthenticatedApp />
   </AttendantSessionProvider>
 )

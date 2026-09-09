@@ -12,6 +12,7 @@ import type { Company, CompanyStation, Supervisor } from '../domain/types'
 import {
   backendGetCompanies,
   backendCreateCompany,
+  backendDeleteCompany,
   backendGetCompanyStations,
   backendCreateStation,
   backendDeleteStation,
@@ -350,23 +351,43 @@ export class CompanyService {
     return updated
   }
 
-  /** Deletes an OMC and its associated stations and staff */
+  /** Deletes an OMC and its associated stations and staff globally */
   async deleteCompany(companyId: string): Promise<void> {
     const company = await this.getCompanyById(companyId)
-    if (!company) throw new Error('Company not found.')
+    const shortCode = company?.shortCode
 
-    await prodDb.companies.delete(companyId)
-    await prodDb.companyStations.where('companyId').equals(companyId).delete()
-
-    // Deactivate / remove supervisors and attendants associated with this company
-    const supervisors = await prodDb.supervisors.where('companyId').equals(companyId).toArray()
-    for (const sup of supervisors) {
-      await prodDb.supervisors.delete(sup.id)
+    // 1. Delete on live backend server first
+    try {
+      await backendDeleteCompany(companyId)
+    } catch (err) {
+      console.warn('[companyService] Backend delete company warning:', err)
     }
 
-    const attendants = await prodDb.attendants.where('companyId').equals(companyId).toArray()
+    // 2. Cascade delete in local Dexie DB
+    await prodDb.companies.delete(companyId)
+    if (shortCode) {
+      const byShortCode = await prodDb.companies.where('shortCode').equalsIgnoreCase(shortCode).toArray()
+      for (const c of byShortCode) {
+        await prodDb.companies.delete(c.id)
+      }
+    }
+    await prodDb.companyStations.where('companyId').equals(companyId).delete()
+
+    // Deactivate / remove supervisors associated with this company (strictly exclude Super Admin)
+    const supervisors = await prodDb.supervisors.toArray()
+    for (const sup of supervisors) {
+      if (sup.isSuperAdmin || sup.employeeCode === 'SUPER-ADMIN') continue
+      if (sup.companyId === companyId || (shortCode && (sup.companyShortCode === shortCode || sup.employeeCode.startsWith(shortCode)))) {
+        await prodDb.supervisors.delete(sup.id)
+      }
+    }
+
+    // Deactivate / remove attendants associated with this company
+    const attendants = await prodDb.attendants.toArray()
     for (const att of attendants) {
-      await prodDb.attendants.delete(att.id)
+      if (att.companyId === companyId || (shortCode && (att.companyShortCode === shortCode || att.employeeCode.startsWith(shortCode)))) {
+        await prodDb.attendants.delete(att.id)
+      }
     }
 
     await auditLogRepo.add({
@@ -376,10 +397,12 @@ export class CompanyService {
       actorName: 'Super Super Admin',
       actorRole: 'SUPERVISOR',
       targetId: companyId,
-      targetDescription: `Deleted OMC tenant: ${company.name} (${company.shortCode})`,
-      notes: 'Company and associated branches removed',
+      targetDescription: `Permanently deleted OMC tenant: ${company?.name || companyId} (${shortCode || ''})`,
+      notes: 'Company and all associated branches and staff permanently removed',
       timestamp: new Date().toISOString(),
     })
+
+    liveSyncBus.publish({ table: 'COMPANIES', reason: 'DELETE', key: companyId })
   }
 
   /** Updates a station branch */

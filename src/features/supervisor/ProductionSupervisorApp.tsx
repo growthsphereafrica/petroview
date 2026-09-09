@@ -6,7 +6,7 @@
 import React, { useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 import { SupervisorSessionProvider, SupervisorDataProvider, useSupervisorSession } from './providers'
-import { SupervisorLoginScreen } from './screens/LoginScreen'
+import { clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import { SupervisorDashboardScreen } from './screens/DashboardScreen'
 import { SupervisorShiftsScreen } from './screens/ShiftsScreen'
 import { SupervisorShiftDetailScreen } from './screens/ShiftDetailScreen'
@@ -107,7 +107,11 @@ const SupervisorNavigator: React.FC = () => {
 const AuthenticatedApp: React.FC = () => {
   const { ready, supervisor } = useSupervisorSession()
   if (!ready) return <Splash />
-  if (!supervisor) return <SupervisorLoginScreen />
+  if (!supervisor) {
+    clearUnifiedSession()
+    window.location.reload()
+    return <Splash />
+  }
   return (
     <SupervisorDataProvider>
       <SupervisorNavigator />
@@ -115,8 +119,8 @@ const AuthenticatedApp: React.FC = () => {
   )
 }
 
-export const ProductionSupervisorApp: React.FC = () => (
-  <SupervisorSessionProvider>
+export const ProductionSupervisorApp: React.FC<{ session?: UnifiedSession }> = ({ session }) => (
+  <SupervisorSessionProvider session={session}>
     <AuthenticatedApp />
   </SupervisorSessionProvider>
 )

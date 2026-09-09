@@ -8,9 +8,11 @@ import { authService } from '../../core/services/authService'
 import { shiftService } from '../../core/services/shiftService'
 import { syncService } from '../../core/services/syncService'
 import { describeError, DomainError } from '../../core/domain/errors'
-import { seedProductionData } from '../../core/infra/db'
+import { prodDb, seedProductionData } from '../../core/infra/db'
+import { attendantRepo } from '../../core/infra/repositories'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { formatGHS } from '../../utils/currencyFormatter'
+import { loadUnifiedSession, clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import type { Attendant, Shift } from '../../core/domain/types'
 
 const AUTO_SYNC_INTERVAL_MS = 15_000
@@ -31,7 +33,10 @@ const SESSION_STORAGE_KEY = 'mvp_prod_session_token'
 
 const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
-export const AttendantSessionProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; session?: UnifiedSession | null }> = ({
+  children,
+  session,
+}) => {
   const [ready, setReady] = useState(false)
   const [attendant, setAttendant] = useState<Attendant | null>(null)
   const [signingIn, setSigningIn] = useState(false)
@@ -41,22 +46,60 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode }> =
     let cancelled = false
     async function restore() {
       await seedProductionData()
-      const token = localStorage.getItem(SESSION_STORAGE_KEY)
-      if (token) {
-        try {
-          const { attendant } = await authService.verifySession(token)
-          if (!cancelled) setAttendant(attendant)
-        } catch {
-          localStorage.removeItem(SESSION_STORAGE_KEY)
+      const activeUni = session || loadUnifiedSession()
+      if (activeUni && activeUni.role === 'attendant') {
+        let att = await attendantRepo.findByEmployeeCode(activeUni.employeeCode)
+        if (!att) {
+          att = {
+            id: `att-${activeUni.employeeCode.toLowerCase()}`,
+            employeeCode: activeUni.employeeCode,
+            fullName: activeUni.fullName,
+            pinSalt: 'synced_session',
+            pinHash: 'synced_session',
+            stationId: activeUni.stationId || 'stn-01',
+            pumpId: 'pump-01',
+            companyId: activeUni.companyId,
+            companyShortCode: activeUni.companyShortCode,
+            approvalStatus: 'APPROVED',
+            approvedAt: new Date().toISOString(),
+            approvedBy: 'OMC HQ Admin',
+            active: true,
+            failedAttempts: 0,
+            lockoutUntil: null,
+            createdAt: new Date().toISOString(),
+          }
+          await prodDb.attendants.put(att)
+        }
+        const token = localStorage.getItem(SESSION_STORAGE_KEY) || `sess_${crypto.randomUUID()}`
+        localStorage.setItem(SESSION_STORAGE_KEY, token)
+        await prodDb.sessions.put({
+          id: `sess-${crypto.randomUUID()}`,
+          token,
+          attendantId: att.id,
+          employeeCode: att.employeeCode,
+          fullName: att.fullName,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 86400000).toISOString(),
+        })
+        if (!cancelled) setAttendant(att)
+      } else {
+        const token = localStorage.getItem(SESSION_STORAGE_KEY)
+        if (token) {
+          try {
+            const { attendant } = await authService.verifySession(token)
+            if (!cancelled) setAttendant(attendant)
+          } catch {
+            localStorage.removeItem(SESSION_STORAGE_KEY)
+          }
         }
       }
       if (!cancelled) setReady(true)
     }
-    restore()
+    void restore()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [session])
 
   const signIn = useCallback(async (employeeCode: string, pin: string) => {
     setSigningIn(true)
@@ -72,8 +115,9 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode }> =
   const signOut = useCallback(async () => {
     const token = localStorage.getItem(SESSION_STORAGE_KEY)
     if (token) await authService.logout(token)
-    localStorage.removeItem(SESSION_STORAGE_KEY)
+    clearUnifiedSession()
     setAttendant(null)
+    window.location.reload()
   }, [])
 
   const value = useMemo(

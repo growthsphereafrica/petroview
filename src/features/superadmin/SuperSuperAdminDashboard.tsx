@@ -392,12 +392,13 @@ export const SuperSuperAdminDashboard: React.FC = () => {
 
   // Delete OMC
   const handleDeleteCompany = async (comp: Company) => {
-    if (!window.confirm(`Are you sure you want to permanently delete OMC "${comp.name}" and all its stations and staff?`)) {
+    if (!window.confirm(`Are you sure you want to permanently delete OMC "${comp.name}" (${comp.shortCode}) and all its stations and staff from the entire system?`)) {
       return
     }
     try {
       await companyService.deleteCompany(comp.id)
-      setActionNotice({ text: `Deleted OMC ${comp.name}`, type: 'success' })
+      setCompanies(prev => prev.filter(c => c.id !== comp.id && c.shortCode !== comp.shortCode))
+      setActionNotice({ text: `Permanently deleted OMC ${comp.name} (${comp.shortCode}) globally.`, type: 'success' })
       void loadData()
       setTimeout(() => setActionNotice(null), 4000)
     } catch (err: any) {

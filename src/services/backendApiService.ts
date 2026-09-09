@@ -259,6 +259,13 @@ export async function backendDeleteStation(companyId: string, stationId: string)
   })
 }
 
+export async function backendDeleteCompany(companyId: string): Promise<{ success: boolean; message?: string }> {
+  return apiCall(`/api/companies/${encodeURIComponent(companyId)}`, {
+    method: 'DELETE',
+  })
+}
+
+
 export async function backendGetTankReadings(stationId?: string, days?: number): Promise<{ count: number; readings: Array<Record<string, unknown>> }> {
   const params = new URLSearchParams()
   if (stationId) params.set('station', stationId)

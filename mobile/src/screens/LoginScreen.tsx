@@ -25,8 +25,11 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     setSigningIn(true)
     try {
       const { role, attendant, supervisor, cloudSession } = await mobileAuth.authenticate(employeeCode, pin)
-      const fullName = cloudSession?.fullName
-        ?? (role === 'supervisor' ? (supervisor as NonNullable<typeof supervisor>).fullName : (attendant as NonNullable<typeof attendant>).fullName)
+      const fullName =
+        cloudSession?.fullName ||
+        supervisor?.fullName ||
+        attendant?.fullName ||
+        (role === 'superadmin' ? 'Platform Master Admin' : employeeCode.toUpperCase())
       onAuthenticated({
         role,
         fullName,

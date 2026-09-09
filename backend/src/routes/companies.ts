@@ -124,3 +124,24 @@ companiesRouter.put('/:id', authenticate, requireRole('superadmin'), (req: AuthR
   db.prepare(`UPDATE companies SET ${updates.join(', ')} WHERE id = ?`).run(...params)
   res.json({ success: true })
 })
+
+// --- SUPER-ADMIN: deactivate company ---
+companiesRouter.post('/:id/deactivate', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  const row = db.prepare('SELECT id, name, shortCode FROM companies WHERE id = ? AND active = 1').get(req.params.id) as
+    | { id: string; name: string; shortCode: string }
+    | undefined
+  if (!row) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found or already inactive.' })
+    return
+  }
+  const now = new Date().toISOString()
+  db.prepare('UPDATE companies SET active = 0 WHERE id = ?').run(row.id)
+  db.prepare('UPDATE companyStations SET active = 0 WHERE companyId = ?').run(row.id)
+  db.prepare('UPDATE supervisors SET active = 0, approvalStatus = ? WHERE companyId = ?').run('REJECTED', row.id)
+  db.prepare('DELETE FROM sessions WHERE companyId = ?').run(row.id)
+  db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    newToken(), 'COMPANY_DEACTIVATED', req.session?.userId ?? '', req.session?.fullName ?? '', 'SUPERADMIN',
+    row.id, `${row.name} (${row.shortCode})`, null, now, null,
+  )
+  res.json({ id: row.id, active: false })
+})

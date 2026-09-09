@@ -134,6 +134,7 @@ CREATE TABLE IF NOT EXISTS companyStations (
   region TEXT NOT NULL,
   pumpsCount INTEGER NOT NULL DEFAULT 4,
   supervisorName TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   FOREIGN KEY (companyId) REFERENCES companies(id)
 );
@@ -301,6 +302,7 @@ function migrateLegacyTables(): void {
     { table: 'supervisors', required: ['companyId', 'isSuperAdmin', 'approvalStatus'] },
     { table: 'attendants', required: ['companyId', 'approvalStatus', 'companyShortCode'] },
     { table: 'sessions', required: ['companyId', 'companyShortCode'] },
+    { table: 'companyStations', required: ['active'] },
   ]
   for (const m of migrations) {
     const cols = tableColumns(m.table)

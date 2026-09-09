@@ -451,50 +451,6 @@ export const UnifiedLoginScreen: React.FC<{
                 <KeyRound className="w-4 h-4" />
                 {signingIn ? 'Verifying & Authenticating…' : 'Sign In'}
               </button>
-
-              {/* Quick Access: SUPER-ADMIN only */}
-              <div className={`mt-2 p-3.5 rounded-2xl border transition-colors ${
-                theme === 'light' ? 'bg-slate-50/90 border-slate-200' : 'bg-slate-900/60 border-slate-800/80'
-              }`}>
-                <div className="flex items-center justify-between mb-2.5">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    <span>Platform Master Access</span>
-                  </span>
-                  <span className="text-[9px] font-mono text-slate-500">Super Admin Only</span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLoginCode('SUPER-ADMIN')
-                    setLoginPin('7256')
-                    setLoginError(null)
-                    setIsPendingApproval(false)
-                  }}
-                  className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between transition active:scale-[0.98] ${
-                    loginCode === 'SUPER-ADMIN'
-                      ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
-                      : theme === 'light'
-                      ? 'border-slate-200 bg-white hover:border-slate-300'
-                      : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center">
-                      <ShieldCheck className="w-4 h-4 text-rose-400" />
-                    </div>
-                    <div>
-                      <span className="text-[11px] font-bold text-rose-400 block">Platform Master Admin</span>
-                      <span className="text-[10px] font-mono text-slate-300 font-semibold">SUPER-ADMIN</span>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <span className="text-[10px] font-mono font-bold text-slate-400">PIN 7256</span>
-                    <span className="text-[9px] text-slate-500 block">Creates OMCs</span>
-                  </div>
-                </button>
-              </div>
             </form>
           </div>
         )}

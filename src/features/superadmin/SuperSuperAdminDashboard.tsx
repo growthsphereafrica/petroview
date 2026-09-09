@@ -42,7 +42,7 @@ import { productService } from '../../core/services/productService'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS } from '../../utils/currencyFormatter'
-import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
+import { GHANA_REGIONS, getStationName } from '../../core/domain/config'
 import type { Company, CompanyStation, Attendant, Supervisor, Product, ProductCategory } from '../../core/domain/types'
 
 type SuperAdminTab = 'companies' | 'staff' | 'products' | 'telemetry'
@@ -1309,10 +1309,11 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                     onChange={e => setNewStationRegion(e.target.value)}
                     className="w-full rounded-lg bg-slate-900 border border-slate-800 px-2.5 py-1.5 text-xs text-white focus:border-orange-500 outline-none"
                   >
-                    <option value="Greater Accra">Greater Accra</option>
-                    <option value="Ashanti Region">Ashanti Region</option>
-                    <option value="Western Region">Western Region</option>
-                    <option value="Eastern Region">Eastern Region</option>
+                    {GHANA_REGIONS.map(reg => (
+                      <option key={reg} value={reg}>
+                        {reg}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1560,11 +1561,11 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                   onChange={e => setAddStRegion(e.target.value)}
                   className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
                 >
-                  <option value="Greater Accra">Greater Accra</option>
-                  <option value="Ashanti Region">Ashanti Region</option>
-                  <option value="Western Region">Western Region</option>
-                  <option value="Eastern Region">Eastern Region</option>
-                  <option value="Central Region">Central Region</option>
+                  {GHANA_REGIONS.map(reg => (
+                    <option key={reg} value={reg}>
+                      {reg}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -1591,34 +1592,27 @@ export const SuperSuperAdminDashboard: React.FC = () => {
               </div>
               <button
                 onClick={() => setResetPinTarget(null)}
-                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-white"
               >
                 ✕
               </button>
             </div>
 
-            <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
-              <p className="text-xs font-bold text-white">{resetPinTarget.name}</p>
-              <p className="text-[10px] font-mono text-slate-400">
-                Staff ID: <span className="text-orange-400 font-bold">{resetPinTarget.code}</span> · Role:{' '}
-                <span className="capitalize">{resetPinTarget.role}</span>
-              </p>
-            </div>
+            <p className="text-xs text-slate-400">
+              Enter a new 4-digit security PIN for <strong className="text-white">{resetPinTarget.name}</strong> ({resetPinTarget.code}).
+            </p>
 
             <form onSubmit={handleExecuteResetPin} className="flex flex-col gap-3">
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
-                  Enter New 4-Digit PIN
-                </label>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">New 4-Digit PIN</label>
                 <input
                   value={newPinValue}
                   onChange={e => setNewPinValue(e.target.value.replace(/\D/g, '').slice(0, 4))}
                   placeholder="••••"
                   type="password"
-                  inputMode="numeric"
-                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2.5 text-base font-mono tracking-widest text-center text-white focus:border-amber-500 outline-none"
+                  maxLength={4}
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-base font-mono tracking-widest text-center text-white focus:border-amber-500 outline-none"
                   required
-                  autoFocus
                 />
               </div>
 
@@ -1627,31 +1621,31 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                 disabled={resetPinBusy || newPinValue.length !== 4}
                 className="w-full rounded-xl bg-gradient-to-r from-amber-600 to-amber-500 text-white py-2.5 text-xs font-bold transition disabled:opacity-40"
               >
-                {resetPinBusy ? 'Resetting PIN…' : 'Confirm New PIN'}
+                {resetPinBusy ? 'Resetting PIN…' : 'Confirm PIN Reset'}
               </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL 6: Edit Staff Profile */}
+      {/* MODAL 6: Edit Staff */}
       {editStaffTarget && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="max-w-sm w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-800">
               <div className="flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-orange-400" />
-                <h3 className="text-sm font-extrabold text-white">Edit Staff Account</h3>
+                <UserCog className="w-4 h-4 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Edit Staff Profile</h3>
               </div>
               <button
                 onClick={() => setEditStaffTarget(null)}
-                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                className="text-slate-400 hover:text-white"
               >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleSaveEditStaff} className="flex flex-col gap-3 text-xs">
+            <form onSubmit={handleSaveEditStaff} className="flex flex-col gap-3">
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Full Name</label>
                 <input
@@ -1663,9 +1657,9 @@ export const SuperSuperAdminDashboard: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Phone Number</label>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Phone</label>
                 <input
-                  value={editStaffTarget.phone}
+                  value={editStaffTarget.phone || ''}
                   onChange={e => setEditStaffTarget({ ...editStaffTarget, phone: e.target.value })}
                   className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
                 />
@@ -1678,11 +1672,15 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                   onChange={e => setEditStaffTarget({ ...editStaffTarget, stationId: e.target.value })}
                   className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none"
                 >
-                  {PRODUCTION_STATIONS.map(s => (
-                    <option key={s.id} value={s.id}>
-                      {s.name}
-                    </option>
-                  ))}
+                  {Object.values(stationsMap).flat().length > 0 ? (
+                    Object.values(stationsMap).flat().map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name} ({s.location} · {s.region})
+                      </option>
+                    ))
+                  ) : (
+                    <option value="">No stations registered yet</option>
+                  )}
                 </select>
               </div>
 

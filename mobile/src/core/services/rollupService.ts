@@ -136,15 +136,22 @@ export class RollupService {
     const salesToday = closedToday.reduce((a, s) => a + s.actualTotal, 0)
     const netVariance = Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100
 
-    const stationNames = ['Green Valley Main Flagship', 'Airport City Express', 'Circle Flagship Station']
-    const stations: StationRollup[] = [
-      { stationId: 'STN-PV-01', name: 'Green Valley Main Flagship', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
-      { stationId: 'STN-PV-02', name: 'Airport City Express', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
-      { stationId: 'STN-GOIL-01', name: 'GOIL Circle Flagship', region: 'Greater Accra', shiftCount: 0, litres: 0, sales: 0, netVariance: 0, pendingReview: 0 },
-    ]
+    const stations: StationRollup[] = []
     for (const shift of closed) {
-      const agg = stations.find(s => s.stationId === shift.stationId)
-      if (!agg) continue
+      let agg = stations.find(s => s.stationId === shift.stationId)
+      if (!agg) {
+        agg = {
+          stationId: shift.stationId,
+          name: shift.stationName || `Station ${shift.stationId}`,
+          region: 'Active Region',
+          shiftCount: 0,
+          litres: 0,
+          sales: 0,
+          netVariance: 0,
+          pendingReview: 0,
+        }
+        stations.push(agg)
+      }
       agg.shiftCount += 1
       agg.litres += Math.round(shift.sales.reduce((x, y) => x + y.litres, 0))
       agg.sales += shift.actualTotal
@@ -161,7 +168,7 @@ export class RollupService {
         return {
           employeeCode: a.employeeCode,
           name: a.fullName,
-          stationName: stationNames[0],
+          stationName: a.stationId || 'Main Station',
           shiftsClosed: shifts.length,
           litres: Math.round(shifts.reduce((acc, s) => acc + s.sales.reduce((x, y) => x + y.litres, 0), 0)),
           sales: shifts.reduce((acc, s) => acc + s.actualTotal, 0),

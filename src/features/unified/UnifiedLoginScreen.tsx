@@ -31,7 +31,7 @@ import {
 } from 'lucide-react'
 import { MVPLogo } from '../../components/common/MVPLogo'
 import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
-import { backendLogin, backendRegister, backendGetCompanies, type BackendLoginResponse } from '../../services/backendApiService'
+import { backendLogin, backendRegister, backendGetCompanies, backendGetCompanyStations, type BackendLoginResponse } from '../../services/backendApiService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
 
@@ -109,60 +109,81 @@ export const UnifiedLoginScreen: React.FC<{
     pin: string
   } | null>(null)
 
-  // Load companies on mount
-  useEffect(() => {
-    void (async () => {
-      try {
-        const result = await backendGetCompanies()
-        const mapped: Company[] = result.companies.map(c => ({
-          id: c.id,
-          name: c.name,
-          shortCode: c.shortCode,
-          tagline: '',
-          logoText: c.name.charAt(0),
-          primaryColor: '#F97316',
-          primaryDark: '#EA580C',
-          accentColor: '#FBBF24',
-          currency: 'GHS',
-          adminCode: `${c.shortCode}-HQ01`,
-          adminName: `${c.name} HQ Admin`,
-          active: true,
-          createdAt: new Date().toISOString(),
-        }))
-        setCompanies(mapped)
-        if (mapped.length > 0 && !regCompanyId) {
-          setRegCompanyId(mapped[0].id)
-        }
-      } catch {
-        // Backend unavailable — use empty list
-        setCompanies([])
+  // Load companies on mount & when switching to register tab
+  const fetchCompanies = async () => {
+    try {
+      const result = await backendGetCompanies()
+      const list = result.companies || []
+      const mapped: Company[] = list.map(c => ({
+        id: c.id,
+        name: c.name,
+        shortCode: c.shortCode,
+        tagline: '',
+        logoText: c.name.charAt(0),
+        primaryColor: '#F97316',
+        primaryDark: '#EA580C',
+        accentColor: '#FBBF24',
+        currency: 'GHS',
+        adminCode: `${c.shortCode}-HQ01`,
+        adminName: `${c.name} HQ Admin`,
+        active: true,
+        createdAt: new Date().toISOString(),
+      }))
+      setCompanies(mapped)
+      if (mapped.length > 0 && (!regCompanyId || !mapped.some(m => m.id === regCompanyId))) {
+        setRegCompanyId(mapped[0].id)
       }
-    })()
-  }, [])
+    } catch {
+      setCompanies([])
+    }
+  }
+
+  useEffect(() => {
+    void fetchCompanies()
+  }, [activeTab])
 
   // Load company stations & calculate auto-generated staff code whenever company or role changes
   useEffect(() => {
-    if (!regCompanyId && companies.length > 0) return
     const activeCompId = regCompanyId || companies[0]?.id
-    if (!activeCompId) return
+    if (!activeCompId) {
+      setCompanyStations([])
+      setRegStationId('')
+      return
+    }
 
     const selectedComp = companies.find(c => c.id === activeCompId)
     const shortCode = selectedComp?.shortCode || 'PV'
 
     void (async () => {
-      // Use backend or fallback to local stations
       try {
-        const { backendGetCompanies: _ } = await import('../../services/backendApiService')
-        // For now, set stations from config
-      } catch { /* */ }
-      setCompanyStations([])
-      setRegStationId(PRODUCTION_STATIONS[0].id)
+        const stations = await backendGetCompanyStations(activeCompId)
+        const mappedStations: CompanyStation[] = stations.map(s => ({
+          id: s.id,
+          companyId: s.companyId,
+          name: s.name,
+          code: s.code,
+          location: s.location,
+          region: s.region,
+          pumpsCount: s.pumpsCount,
+          active: true,
+          createdAt: new Date().toISOString(),
+        }))
+        setCompanyStations(mappedStations)
+        if (mappedStations.length > 0) {
+          setRegStationId(mappedStations[0].id)
+        } else {
+          setRegStationId('')
+        }
+      } catch {
+        setCompanyStations([])
+        setRegStationId('')
+      }
 
       // Generate next code based on role and company prefix
       const prefix = shortCode
       setRegGeneratedCode(`${prefix}001${regRole === 'attendant' ? 'A' : 'M'}`)
     })()
-  }, [regCompanyId, regRole, companies, activeTab])
+  }, [regCompanyId, regRole, companies])
 
   const selectedCompany = companies.find(c => c.id === regCompanyId) || companies[0]
 
@@ -245,7 +266,7 @@ export const UnifiedLoginScreen: React.FC<{
         fullName: regFullName.trim(),
         pin: regPin,
         phone: regPhone.trim(),
-        stationId: regStationId || PRODUCTION_STATIONS[0].id,
+        stationId: regStationId.trim() || `${targetCompany?.shortCode || 'OMC'} Flagship Station`,
         companyId: targetCompany?.id,
         companyShortCode: targetCompany?.shortCode,
       })
@@ -591,27 +612,33 @@ export const UnifiedLoginScreen: React.FC<{
               {/* 6. Station Selection (Scoped to Company) */}
               <div>
                 <label className="block text-[11px] font-bold text-slate-400 mb-1.5 uppercase tracking-wide">
-                  Assigned Station Branch ({selectedCompany?.name})
+                  Assigned Station Branch ({selectedCompany?.name || 'Selected OMC'})
                 </label>
-                <select
-                  value={regStationId}
-                  onChange={e => setRegStationId(e.target.value)}
-                  className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
-                >
-                  {companyStations.length > 0 ? (
-                    companyStations.map(s => (
+                {companyStations.length > 0 ? (
+                  <select
+                    value={regStationId}
+                    onChange={e => setRegStationId(e.target.value)}
+                    className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
+                  >
+                    {companyStations.map(s => (
                       <option key={s.id} value={s.id}>
-                        {s.name} ({s.location})
+                        {s.name} ({s.location} · {s.region})
                       </option>
-                    ))
-                  ) : (
-                    PRODUCTION_STATIONS.map(s => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.location})
-                      </option>
-                    ))
-                  )}
-                </select>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      value={regStationId}
+                      onChange={e => setRegStationId(e.target.value)}
+                      placeholder={`e.g. ${selectedCompany?.shortCode || 'OMC'} Main Flagship Station`}
+                      className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white placeholder:text-slate-600 focus:border-orange-500 outline-none transition"
+                    />
+                    <span className="text-[10px] text-amber-400/80">
+                      No pre-configured stations found for this OMC. Enter your station branch name above.
+                    </span>
+                  </div>
+                )}
               </div>
 
               {/* 7. Pump Selection (if Attendant) */}

@@ -7,13 +7,20 @@ export const companiesRouter = Router()
 
 // --- SUPER-ADMIN: create company (OMC) ---
 companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
-  const { name, shortCode, tagline, phone, adminFullName, adminPin } = (req.body ?? {}) as {
+  const { name, shortCode, tagline, phone, adminFullName, adminPin, initialStations } = (req.body ?? {}) as {
     name?: string
     shortCode?: string
     tagline?: string
     phone?: string
     adminFullName?: string
     adminPin?: string
+    initialStations?: Array<{
+      name: string
+      code?: string
+      location?: string
+      region?: string
+      pumpsCount?: number
+    }>
   }
 
   const code = String(shortCode ?? '').trim().toUpperCase()
@@ -33,6 +40,25 @@ companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthReq
      VALUES (?, ?, ?, ?, ?, '#F97316', '#EA580C', '#FBBF24', 'GHS', ?, 1, ?)`,
   ).run(id, name.trim(), code, tagline ?? '', name.trim().charAt(0), phone ?? null, now)
 
+  // Insert initial stations if provided
+  const createdStations: Array<{ id: string; name: string; code: string; location: string; region: string; pumpsCount: number }> = []
+  if (Array.isArray(initialStations) && initialStations.length > 0) {
+    for (let i = 0; i < initialStations.length; i++) {
+      const st = initialStations[i]
+      if (st && st.name?.trim()) {
+        const stCode = (st.code?.trim() || `${code}-${String(i + 1).padStart(2, '0')}`).toUpperCase()
+        const stId = `stn-${code.toLowerCase()}-${stCode.toLowerCase()}`
+        const stLoc = st.location?.trim() || 'Forecourt'
+        const stReg = st.region?.trim() || 'Greater Accra'
+        const stPumps = Number(st.pumpsCount) || 4
+        db.prepare(
+          'INSERT OR REPLACE INTO companyStations (id, companyId, name, code, location, region, pumpsCount, createdAt) VALUES (?,?,?,?,?,?,?,?)',
+        ).run(stId, id, st.name.trim(), stCode, stLoc, stReg, stPumps, now)
+        createdStations.push({ id: stId, name: st.name.trim(), code: stCode, location: stLoc, region: stReg, pumpsCount: stPumps })
+      }
+    }
+  }
+
   // Create HQ admin for this company
   const adminCode = `${code}-HQ01`
   const pin = adminPin || '9999'
@@ -46,12 +72,25 @@ companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthReq
 
   db.prepare(
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(newToken(), 'COMPANY_CREATED', req.session?.userId ?? '', req.session?.fullName ?? '', 'SUPERADMIN', id, `${name.trim()} (${code})`, `Admin: ${adminCode}`, now, null)
+  ).run(newToken(), 'COMPANY_CREATED', req.session?.userId ?? '', req.session?.fullName ?? '', 'SUPERADMIN', id, `${name.trim()} (${code})`, `Admin: ${adminCode}, Stations: ${createdStations.length}`, now, null)
 
   res.status(201).json({
     company: { id, name: name.trim(), shortCode: code, active: true },
     admin: { id: adminId, employeeCode: adminCode, pin, fullName: adminFullName || `${name.trim()} HQ Admin` },
+    stations: createdStations,
   })
+})
+
+// --- List all active stations across companies (open for registration & dropdowns) ---
+companiesRouter.get('/all/stations', (req, res) => {
+  const rows = db.prepare(
+    `SELECT cs.*, c.name as companyName, c.shortCode as companyShortCode
+     FROM companyStations cs
+     JOIN companies c ON cs.companyId = c.id
+     WHERE cs.active = 1 AND c.active = 1
+     ORDER BY cs.name`,
+  ).all()
+  res.json(rows)
 })
 
 // --- List companies (open for registration & dashboards) ---
@@ -65,6 +104,12 @@ companiesRouter.get('/list', (req, res) => {
   res.json({ count: rows.length, companies: rows })
 })
 
+// --- Get stations for a specific company (open for registration) ---
+companiesRouter.get('/:id/stations', (req, res) => {
+  const stations = db.prepare('SELECT * FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY name').all(req.params.id)
+  res.json(stations)
+})
+
 // --- Get company details ---
 companiesRouter.get('/:id', authenticate, (req, res) => {
   const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id)
@@ -72,12 +117,12 @@ companiesRouter.get('/:id', authenticate, (req, res) => {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found.' })
     return
   }
-  const stations = db.prepare('SELECT * FROM companyStations WHERE companyId = ? ORDER BY name').all(req.params.id)
+  const stations = db.prepare('SELECT * FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY name').all(req.params.id)
   res.json({ company, stations })
 })
 
-// --- SUPER-ADMIN: add station to company ---
-companiesRouter.post('/:id/stations', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+// --- Add station to company (Super Admin or OMC HQ Admin) ---
+companiesRouter.post('/:id/stations', authenticate, requireRole('superadmin', 'headoffice'), (req: AuthRequest, res) => {
   const { name, code, location, region, pumpsCount } = (req.body ?? {}) as {
     name?: string
     code?: string
@@ -85,6 +130,13 @@ companiesRouter.post('/:id/stations', authenticate, requireRole('superadmin'), (
     region?: string
     pumpsCount?: number
   }
+
+  // If HQ admin, ensure they can only add stations to their own company
+  if (req.session?.role === 'headoffice' && req.session.companyId !== req.params.id) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You can only manage stations for your own OMC.' })
+    return
+  }
+
   if (!name?.trim() || !code?.trim() || !location?.trim() || !region?.trim()) {
     res.status(400).json({ error: 'BAD_REQUEST', message: 'name, code, location, and region are required.' })
     return
@@ -97,9 +149,24 @@ companiesRouter.post('/:id/stations', authenticate, requireRole('superadmin'), (
   const stationId = `stn-${company.shortCode.toLowerCase()}-${code.trim().toLowerCase()}`
   const now = new Date().toISOString()
   db.prepare(
-    'INSERT INTO companyStations (id, companyId, name, code, location, region, pumpsCount, createdAt) VALUES (?,?,?,?,?,?,?,?)',
-  ).run(stationId, company.id, name.trim(), code.trim(), location.trim(), region.trim(), pumpsCount ?? 4, now)
-  res.status(201).json({ id: stationId, companyId: company.id, name: name.trim(), code: code.trim(), location: location.trim(), region: region.trim(), pumpsCount: pumpsCount ?? 4 })
+    'INSERT OR REPLACE INTO companyStations (id, companyId, name, code, location, region, pumpsCount, createdAt) VALUES (?,?,?,?,?,?,?,?)',
+  ).run(stationId, company.id, name.trim(), code.trim().toUpperCase(), location.trim(), region.trim(), pumpsCount ?? 4, now)
+
+  db.prepare(
+    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+  ).run(newToken(), 'STATION_CREATED', req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'HQ', stationId, `${name.trim()} (${code.trim().toUpperCase()})`, location.trim(), now, null)
+
+  res.status(201).json({ id: stationId, companyId: company.id, name: name.trim(), code: code.trim().toUpperCase(), location: location.trim(), region: region.trim(), pumpsCount: pumpsCount ?? 4 })
+})
+
+// --- Delete station branch ---
+companiesRouter.delete('/:id/stations/:stationId', authenticate, requireRole('superadmin', 'headoffice'), (req: AuthRequest, res) => {
+  if (req.session?.role === 'headoffice' && req.session.companyId !== req.params.id) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You can only manage stations for your own OMC.' })
+    return
+  }
+  db.prepare('UPDATE companyStations SET active = 0 WHERE id = ? AND companyId = ?').run(req.params.stationId, req.params.id)
+  res.json({ success: true, message: 'Station deleted.' })
 })
 
 // --- SUPER-ADMIN: update company ---

@@ -9,6 +9,13 @@ import { hashPin } from '../infra/password'
 import { liveSyncBus } from './liveSyncBus'
 import { auditLogRepo } from '../infra/repositories'
 import type { Company, CompanyStation, Supervisor } from '../domain/types'
+import {
+  backendGetCompanies,
+  backendCreateCompany,
+  backendGetCompanyStations,
+  backendCreateStation,
+  backendDeleteStation,
+} from '../../services/backendApiService'
 
 export interface CreateCompanyInput {
   name: string
@@ -33,6 +40,31 @@ export interface CreateCompanyInput {
 export class CompanyService {
   /** Lists all registered Oil Marketing Companies */
   async listAllCompanies(): Promise<Company[]> {
+    try {
+      const cloud = await backendGetCompanies()
+      if (cloud && Array.isArray(cloud.companies) && cloud.companies.length > 0) {
+        const mapped: Company[] = cloud.companies.map(c => ({
+          id: c.id,
+          name: c.name,
+          shortCode: c.shortCode,
+          tagline: c.tagline || '',
+          logoText: c.logoText || c.name.charAt(0),
+          primaryColor: c.primaryColor || '#F97316',
+          primaryDark: '#0B2545',
+          accentColor: '#F59E0B',
+          currency: 'GHS',
+          adminCode: `${c.shortCode}-HQ01`,
+          adminName: `${c.name} HQ Admin`,
+          active: c.active !== false,
+          createdAt: c.createdAt || new Date().toISOString(),
+        }))
+        for (const m of mapped) {
+          await prodDb.companies.put(m)
+        }
+      }
+    } catch {
+      // fallback to local IndexedDB
+    }
     const companies = await prodDb.companies.toArray()
     return companies.sort((a, b) => a.name.localeCompare(b.name))
   }
@@ -63,15 +95,39 @@ export class CompanyService {
     stations: CompanyStation[]
   }> {
     const trimmedShortCode = input.shortCode.trim().toUpperCase()
-    const existing = await this.getCompanyByShortCode(trimmedShortCode)
-    if (existing) {
-      throw new Error(`An Oil Marketing Company with short code "${trimmedShortCode}" is already registered.`)
-    }
-
     const now = new Date().toISOString()
-    const companyId = `COMP-${trimmedShortCode}-${crypto.randomUUID().slice(0, 6)}`
     const adminCode = `${trimmedShortCode}-HQ01`
     const { salt, hash } = await hashPin(input.adminPin)
+
+    const initialStationsToPass = input.initialStations?.length
+      ? input.initialStations.map((st, idx) => ({
+          name: st.name.trim(),
+          code: st.code.trim().toUpperCase() || `${trimmedShortCode}-${String(idx + 1).padStart(2, '0')}`,
+          location: st.location.trim(),
+          region: st.region.trim(),
+          pumpsCount: st.pumpsCount || 4,
+        }))
+      : undefined
+
+    let companyId = `comp-${trimmedShortCode.toLowerCase()}`
+
+    // Call backend API to create company & auto-provision HQ admin on live server
+    try {
+      const backendRes = await backendCreateCompany({
+        name: input.name.trim(),
+        shortCode: trimmedShortCode,
+        tagline: input.tagline,
+        phone: input.phone,
+        adminFullName: input.adminName.trim(),
+        adminPin: input.adminPin,
+        initialStations: initialStationsToPass,
+      })
+      if (backendRes.company?.id) {
+        companyId = backendRes.company.id
+      }
+    } catch (backendErr: any) {
+      console.warn('[companyService] Backend sync warning:', backendErr)
+    }
 
     const company: Company = {
       id: companyId,
@@ -90,40 +146,30 @@ export class CompanyService {
       createdAt: now,
     }
 
-    await prodDb.companies.add(company)
+    await prodDb.companies.put(company)
 
     // Create Initial Station(s)
     const stations: CompanyStation[] = []
-    const initialList = input.initialStations?.length
-      ? input.initialStations
-      : [
-          {
-            name: `${input.name.trim()} Main Flagship`,
-            code: `${trimmedShortCode}-01`,
-            location: 'Central Highway Station',
-            region: 'Greater Accra',
-            pumpsCount: 4,
-          },
-        ]
-
-    for (let i = 0; i < initialList.length; i++) {
-      const st = initialList[i]
-      const stationObj: CompanyStation = {
-        id: `STN-${trimmedShortCode}-${i + 1}`,
-        companyId,
-        name: st.name.trim(),
-        code: st.code.trim().toUpperCase(),
-        location: st.location.trim(),
-        region: st.region.trim(),
-        pumpsCount: st.pumpsCount || 4,
-        createdAt: now,
+    if (initialStationsToPass && initialStationsToPass.length > 0) {
+      for (let i = 0; i < initialStationsToPass.length; i++) {
+        const st = initialStationsToPass[i]
+        const stationObj: CompanyStation = {
+          id: `stn-${trimmedShortCode.toLowerCase()}-${st.code.toLowerCase()}`,
+          companyId,
+          name: st.name,
+          code: st.code,
+          location: st.location,
+          region: st.region,
+          pumpsCount: st.pumpsCount,
+          createdAt: now,
+        }
+        stations.push(stationObj)
+        await prodDb.companyStations.put(stationObj)
       }
-      stations.push(stationObj)
-      await prodDb.companyStations.add(stationObj)
     }
 
     // Provision the Company HQ Admin account
-    const primaryStationId = stations[0]?.id || `STN-${trimmedShortCode}-1`
+    const primaryStationId = stations[0]?.id || `stn-${trimmedShortCode.toLowerCase()}-01`
     const hqAdminSupervisor: Supervisor = {
       id: `sup-${adminCode.toLowerCase()}`,
       employeeCode: adminCode,
@@ -144,7 +190,7 @@ export class CompanyService {
       createdAt: now,
     }
 
-    await prodDb.supervisors.add(hqAdminSupervisor)
+    await prodDb.supervisors.put(hqAdminSupervisor)
 
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,
@@ -170,6 +216,25 @@ export class CompanyService {
 
   /** Lists all station branches for a given company */
   async listCompanyStations(companyId: string): Promise<CompanyStation[]> {
+    try {
+      const cloudStations = await backendGetCompanyStations(companyId)
+      if (cloudStations && Array.isArray(cloudStations)) {
+        for (const cs of cloudStations) {
+          await prodDb.companyStations.put({
+            id: cs.id,
+            companyId: cs.companyId || companyId,
+            name: cs.name,
+            code: cs.code,
+            location: cs.location,
+            region: cs.region,
+            pumpsCount: cs.pumpsCount,
+            createdAt: new Date().toISOString(),
+          })
+        }
+      }
+    } catch {
+      // fallback to local
+    }
     return prodDb.companyStations.where('companyId').equals(companyId).toArray()
   }
 
@@ -179,30 +244,45 @@ export class CompanyService {
     station: { name: string; code: string; location: string; region: string; pumpsCount: number },
   ): Promise<CompanyStation> {
     const company = await this.getCompanyById(companyId)
-    if (!company) throw new Error('Company not found.')
-
+    const shortCode = company?.shortCode || 'OMC'
     const now = new Date().toISOString()
+    const stationCode = station.code.trim().toUpperCase()
+    const stId = `stn-${shortCode.toLowerCase()}-${stationCode.toLowerCase()}`
+
+    // Sync to backend API
+    try {
+      await backendCreateStation(companyId, {
+        name: station.name.trim(),
+        code: stationCode,
+        location: station.location.trim(),
+        region: station.region.trim(),
+        pumpsCount: station.pumpsCount || 4,
+      })
+    } catch (err) {
+      console.warn('[companyService] Backend create station warning:', err)
+    }
+
     const stObj: CompanyStation = {
-      id: `STN-${company.shortCode}-${crypto.randomUUID().slice(0, 6)}`,
+      id: stId,
       companyId,
       name: station.name.trim(),
-      code: station.code.trim().toUpperCase(),
+      code: stationCode,
       location: station.location.trim(),
       region: station.region.trim(),
       pumpsCount: station.pumpsCount || 4,
       createdAt: now,
     }
 
-    await prodDb.companyStations.add(stObj)
+    await prodDb.companyStations.put(stObj)
 
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,
       action: 'STATION_CREATED',
       actorId: 'hq-admin',
-      actorName: company.name,
+      actorName: company?.name || 'OMC HQ',
       actorRole: 'SUPERVISOR',
       targetId: stObj.id,
-      targetDescription: `New station ${stObj.name} (${stObj.code}) added to ${company.name}`,
+      targetDescription: `New station ${stObj.name} (${stObj.code}) added to ${company?.name || 'OMC'}`,
       notes: stObj.location,
       timestamp: now,
     })
@@ -325,6 +405,14 @@ export class CompanyService {
 
   /** Deletes a station branch */
   async deleteStation(stationId: string): Promise<void> {
+    const station = await prodDb.companyStations.get(stationId)
+    if (station) {
+      try {
+        await backendDeleteStation(station.companyId, stationId)
+      } catch (err) {
+        console.warn('[companyService] Backend delete station warning:', err)
+      }
+    }
     await prodDb.companyStations.delete(stationId)
   }
 }

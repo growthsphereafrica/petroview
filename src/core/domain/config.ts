@@ -31,10 +31,10 @@ export interface ProductionStationEntry {
 }
 
 export const PRODUCTION_STATION: ProductionStationConfig = {
-  id: 'STN-GV-042',
-  name: 'Green Valley Main',
-  code: 'GV-042',
-  location: 'Accra - Tema Motorway Corridor',
+  id: 'STN-01',
+  name: 'Forecourt Station',
+  code: 'STN-01',
+  location: 'Station Forecourt',
   currency: 'GHS',
   fuelPrices: {
     PMS: 14.8,
@@ -52,48 +52,28 @@ export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
   { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] },
 ]
 
-export const PRODUCTION_STATIONS: ProductionStationEntry[] = [
-  {
-    id: 'STN-PV-01',
-    name: 'Green Valley Main Flagship (PetroView)',
-    code: 'PV-01',
-    location: 'Accra - Tema Motorway Corridor',
-    region: 'Greater Accra',
-    pumps: 4,
-  },
-  {
-    id: 'STN-PV-02',
-    name: 'Airport City Express (PetroView)',
-    code: 'PV-02',
-    location: 'Liberation Road, Airport City',
-    region: 'Greater Accra',
-    pumps: 4,
-  },
-  {
-    id: 'STN-GOIL-01',
-    name: 'GOIL Kwame Nkrumah Circle Flagship',
-    code: 'GOIL-01',
-    location: 'Ring Road Central, Circle',
-    region: 'Greater Accra',
-    pumps: 6,
-  },
-  {
-    id: 'STN-TOTAL-01',
-    name: 'TotalEnergies 37 Flagship Station',
-    code: 'TOTAL-01',
-    location: 'Liberation Road, 37 Roundabout',
-    region: 'Greater Accra',
-    pumps: 4,
-  },
-  {
-    id: 'STN-SHELL-01',
-    name: 'Shell Airport Bypass Express',
-    code: 'SHELL-01',
-    location: 'Airport Bypass Road, Accra',
-    region: 'Greater Accra',
-    pumps: 4,
-  },
-]
+export const GHANA_REGIONS = [
+  'Greater Accra',
+  'Ashanti',
+  'Eastern',
+  'Western',
+  'Western North',
+  'Central',
+  'Volta',
+  'Oti',
+  'Northern',
+  'North East',
+  'Savannah',
+  'Upper East',
+  'Upper West',
+  'Bono',
+  'Bono East',
+  'Ahafo',
+] as const
+
+export type GhanaRegion = typeof GHANA_REGIONS[number]
+
+export const PRODUCTION_STATIONS: ProductionStationEntry[] = []
 
 const dynamicStationMap = new Map<string, ProductionStationEntry>()
 

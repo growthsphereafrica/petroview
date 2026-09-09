@@ -125,8 +125,48 @@ export async function backendHealthCheck(): Promise<{ status: string; attendants
   return apiCall('/api/health')
 }
 
-export async function backendGetCompanies(): Promise<{ count: number; companies: Array<{ id: string; name: string; shortCode: string }> }> {
-  return apiCall('/api/companies')
+export interface BackendCompany {
+  id: string
+  name: string
+  shortCode: string
+  tagline?: string
+  logoText?: string
+  primaryColor?: string
+  active?: boolean
+  createdAt?: string
+}
+
+export interface BackendCompanyStation {
+  id: string
+  companyId: string
+  name: string
+  code: string
+  location: string
+  region: string
+  pumpsCount: number
+  active?: boolean
+  companyName?: string
+  companyShortCode?: string
+}
+
+export async function backendGetCompanies(): Promise<{ count: number; companies: BackendCompany[] }> {
+  const data = await apiCall<any>('/api/companies')
+  if (Array.isArray(data)) {
+    return { count: data.length, companies: data }
+  }
+  if (data && Array.isArray(data.companies)) {
+    return data
+  }
+  return { count: 0, companies: [] }
+}
+
+export async function backendGetCompanyStations(companyId?: string): Promise<BackendCompanyStation[]> {
+  if (companyId) {
+    const data = await apiCall<any>(`/api/companies/${companyId}/stations`)
+    return Array.isArray(data) ? data : []
+  }
+  const data = await apiCall<any>('/api/companies/all/stations')
+  return Array.isArray(data) ? data : []
 }
 
 export async function backendCreateCompany(input: {
@@ -136,10 +176,33 @@ export async function backendCreateCompany(input: {
   phone?: string
   adminFullName?: string
   adminPin?: string
-}): Promise<{ company: { id: string; name: string; shortCode: string }; admin: { employeeCode: string; pin: string } }> {
+  initialStations?: Array<{
+    name: string
+    code?: string
+    location?: string
+    region?: string
+    pumpsCount?: number
+  }>
+}): Promise<{ company: { id: string; name: string; shortCode: string }; admin: { employeeCode: string; pin: string }; stations?: BackendCompanyStation[] }> {
   return apiCall('/api/companies', {
     method: 'POST',
     body: JSON.stringify(input),
+  })
+}
+
+export async function backendCreateStation(
+  companyId: string,
+  station: { name: string; code: string; location: string; region: string; pumpsCount?: number },
+): Promise<BackendCompanyStation> {
+  return apiCall(`/api/companies/${companyId}/stations`, {
+    method: 'POST',
+    body: JSON.stringify(station),
+  })
+}
+
+export async function backendDeleteStation(companyId: string, stationId: string): Promise<{ success: boolean }> {
+  return apiCall(`/api/companies/${companyId}/stations/${stationId}`, {
+    method: 'DELETE',
   })
 }
 

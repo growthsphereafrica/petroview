@@ -5,6 +5,8 @@ import { colors } from './src/theme'
 import { LoginScreen, type MobileSession } from './src/screens/LoginScreen'
 import { AttendantDashboard } from './src/screens/AttendantDashboard'
 import { SupervisorConsole } from './src/screens/supervisor/SupervisorConsole'
+import { HeadOfficeDashboard } from './src/screens/HeadOfficeDashboard'
+import { SuperAdminDashboard } from './src/screens/SuperAdminDashboard'
 import { mobileAuth } from './src/core/services/authService'
 import { seedProductionData } from './src/core/infra/repositories'
 
@@ -50,7 +52,10 @@ export default function App() {
       await seedProductionData()
       const auth = await mobileAuth.restore()
       if (auth && (auth.attendant || auth.supervisor)) {
-        const info = auth.role === 'supervisor' ? auth.supervisor : auth.attendant
+        const info =
+          auth.role === 'supervisor' || auth.role === 'headoffice' || auth.role === 'superadmin'
+            ? auth.supervisor
+            : auth.attendant
         if (info) {
           setSession({
             role: auth.role,
@@ -122,20 +127,29 @@ export default function App() {
     )
   }
 
+  const handleSignOut = async () => {
+    await mobileAuth.logout()
+    setSession(null)
+  }
+
+  const renderDashboard = () => {
+    switch (session.role) {
+      case 'superadmin':
+        return <SuperAdminDashboard session={session} onSignOut={handleSignOut} />
+      case 'headoffice':
+        return <HeadOfficeDashboard session={session} onSignOut={handleSignOut} />
+      case 'supervisor':
+        return <SupervisorConsole session={session} onSignOut={handleSignOut} />
+      case 'attendant':
+      default:
+        return <AttendantDashboard session={session} onSignOut={handleSignOut} />
+    }
+  }
+
   return (
     <ErrorBoundary>
       <StatusBar style="light" />
-      {session.role === 'attendant' ? (
-        <AttendantDashboard session={session} />
-      ) : (
-        <SupervisorConsole
-          session={session}
-          onSignOut={async () => {
-            await mobileAuth.logout()
-            setSession(null)
-          }}
-        />
-      )}
+      {renderDashboard()}
     </ErrorBoundary>
   )
 }

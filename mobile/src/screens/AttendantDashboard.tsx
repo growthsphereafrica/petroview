@@ -28,7 +28,10 @@ const PUMPS = [
 
 const FUEL_PRICES: Record<string, number> = { PMS: 14.8, AGO: 15.2, DPK: 13.9, KERO: 13.5 }
 
-export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ session }) => {
+export const AttendantDashboard: React.FC<{
+  session: MobileSession
+  onSignOut?: () => void
+}> = ({ session, onSignOut }) => {
   const [shift, setShift] = useState<Shift | null>(null)
   const [attendantId, setAttendantId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -104,7 +107,12 @@ export const AttendantDashboard: React.FC<{ session: MobileSession }> = ({ sessi
             <Text style={styles.greeting}>Hello, {session.fullName.split(' ')[0]} 👋</Text>
             <Text style={styles.subGreeting}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
           </View>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
+          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+            {onSignOut && (
+              <Pressable onPress={onSignOut} style={styles.iconBtn}>
+                <LogOut size={16} color={colors.rose} />
+              </Pressable>
+            )}
             <Pressable onPress={() => setTankOpen(true)} style={styles.iconBtn}>
               <Droplets size={16} color={colors.blue} />
             </Pressable>

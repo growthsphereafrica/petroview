@@ -184,7 +184,8 @@ export class MobileAuthService {
     }
     const supervisor = await findSupervisorByCode(session.employeeCode ?? '')
     if (!supervisor) return null
-    return { role: 'supervisor', supervisor, session: session as unknown as SupervisorSession }
+    const role: MobileRole = supervisor.isSuperAdmin ? 'superadmin' : supervisor.isHeadOffice ? 'headoffice' : 'supervisor'
+    return { role, supervisor, session: session as unknown as SupervisorSession }
   }
 
   async logout(): Promise<void> {

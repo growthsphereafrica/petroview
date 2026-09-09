@@ -113,17 +113,19 @@ authRouter.post('/wipe-database', (req, res) => {
   }
 
   // Wipe all dynamic and demo tables cleanly
-  db.prepare('DELETE FROM companies').run()
-  db.prepare('DELETE FROM companyStations').run()
-  db.prepare('DELETE FROM attendants').run()
-  db.prepare('DELETE FROM shifts').run()
-  db.prepare('DELETE FROM transactions').run()
-  db.prepare('DELETE FROM receipts').run()
-  db.prepare('DELETE FROM tankReadings').run()
+  db.pragma('foreign_keys = OFF')
   db.prepare('DELETE FROM syncQueue').run()
+  db.prepare('DELETE FROM receipts').run()
+  db.prepare('DELETE FROM transactions').run()
+  db.prepare('DELETE FROM tankReadings').run()
+  db.prepare('DELETE FROM shifts').run()
   db.prepare('DELETE FROM audit_log').run()
   db.prepare('DELETE FROM sessions').run()
+  db.prepare('DELETE FROM attendants').run()
   db.prepare("DELETE FROM supervisors WHERE UPPER(employeeCode) != 'SUPER-ADMIN'").run()
+  db.prepare('DELETE FROM companyStations').run()
+  db.prepare('DELETE FROM companies').run()
+  db.pragma('foreign_keys = ON')
 
   // Ensure master Super Admin is seeded
   const { seedSuperAdmin } = require('../db')

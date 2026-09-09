@@ -249,7 +249,7 @@ export async function seedProductionData(): Promise<void> {
 
   const now = new Date().toISOString()
 
-  // 1. Seed SUPER-ADMIN (PIN 7256)
+  // 1. Seed SUPER-ADMIN only (all other accounts must be provisioned by Super Admin/OMC admin)
   const supervisors = await listSupervisors()
   const existingSA = supervisors.find(s => s.employeeCode.toUpperCase() === 'SUPER-ADMIN')
   const saSalt = randomSaltHex()
@@ -267,88 +267,6 @@ export async function seedProductionData(): Promise<void> {
     active: true,
     createdAt: existingSA?.createdAt || now,
   })
-
-  // 2. Seed HQ Admins (PIN 9999)
-  const hqAdmins = [
-    { id: 'sup-pv-hq01', code: 'PV-HQ01', name: 'PetroView HQ Administrator', companyId: 'COMP-PV', companyShortCode: 'PV' },
-    { id: 'sup-goil-hq01', code: 'GOIL-HQ01', name: 'GOIL Operations HQ Admin', companyId: 'COMP-GOIL', companyShortCode: 'GOIL' },
-    { id: 'sup-total-hq01', code: 'TOTAL-HQ01', name: 'TotalEnergies HQ Admin', companyId: 'COMP-TOTAL', companyShortCode: 'TOTAL' },
-    { id: 'sup-shell-hq01', code: 'SHELL-HQ01', name: 'Shell Ghana HQ Admin', companyId: 'COMP-SHELL', companyShortCode: 'SHELL' },
-  ]
-
-  for (const hq of hqAdmins) {
-    const existing = supervisors.find(s => cleanCode(s.employeeCode) === cleanCode(hq.code))
-    const hqSalt = randomSaltHex()
-    const { hash: hqHash } = await seal('9999', hqSalt)
-    await upsertSupervisor({
-      id: existing?.id || hq.id,
-      employeeCode: hq.code,
-      fullName: hq.name,
-      pinSalt: hqSalt,
-      pinHash: hqHash,
-      companyId: hq.companyId,
-      companyShortCode: hq.companyShortCode,
-      role: 'SUPERVISOR',
-      isHeadOffice: true,
-      active: true,
-      createdAt: existing?.createdAt || now,
-    })
-  }
-
-  // 3. Seed Station Managers (PIN 1234)
-  const managers = [
-    { id: 'sup-pv-acc-001-m', code: 'PV-ACC-001-M', name: 'Samuel Kofi Mensah (Manager)', stationId: 'STN-PV-01', companyShortCode: 'PV' },
-    { id: 'sup-pv-001-m', code: 'PV-001-M', name: 'Samuel Kofi Mensah (Manager)', stationId: 'STN-PV-01', companyShortCode: 'PV' },
-    { id: 'sup-goil001m', code: 'GOIL-001-M', name: 'Yaw Osei Tutu (Manager)', stationId: 'STN-GOIL-01', companyShortCode: 'GOIL' },
-    { id: 'sup-tot001m', code: 'TOTAL-001-M', name: 'Kwesi Arthur (Manager)', stationId: 'STN-TOTAL-01', companyShortCode: 'TOTAL' },
-    { id: 'sup-shell001m', code: 'SHELL-001-M', name: 'Richard Appiah (Manager)', stationId: 'STN-SHELL-01', companyShortCode: 'SHELL' },
-  ]
-
-  for (const mgr of managers) {
-    const existing = supervisors.find(s => cleanCode(s.employeeCode) === cleanCode(mgr.code))
-    const mgrSalt = randomSaltHex()
-    const { hash: mgrHash } = await seal('1234', mgrSalt)
-    await upsertSupervisor({
-      id: existing?.id || mgr.id,
-      employeeCode: mgr.code,
-      fullName: mgr.name,
-      pinSalt: mgrSalt,
-      pinHash: mgrHash,
-      role: 'SUPERVISOR',
-      active: true,
-      createdAt: existing?.createdAt || now,
-    })
-  }
-
-  // 4. Seed Fuel Attendants (PIN 1234)
-  const attendants = await listAttendants()
-  const defaultAttendants = [
-    { id: 'att-pv-acc-001-a', code: 'PV-ACC-001-A', name: 'Emmanuel Mensah (Attendant)', pump: 'pump-1', stn: 'STN-PV-01' },
-    { id: 'att-pv002a', code: 'PV002A', name: 'Grace Addo (Attendant)', pump: 'pump-2', stn: 'STN-PV-01' },
-    { id: 'att-goil001a', code: 'GOIL001A', name: 'Kojo Antwi (Attendant)', pump: 'pump-1', stn: 'STN-GOIL-01' },
-    { id: 'att-tot001a', code: 'TOT001A', name: 'Abena Boateng (Attendant)', pump: 'pump-1', stn: 'STN-TOTAL-01' },
-    { id: 'att-shell001a', code: 'SHELL001A', name: 'Derrick Mensah (Attendant)', pump: 'pump-1', stn: 'STN-SHELL-01' },
-  ]
-
-  for (const att of defaultAttendants) {
-    const existing = attendants.find(a => cleanCode(a.employeeCode) === cleanCode(att.code))
-    const attSalt = randomSaltHex()
-    const { hash: attHash } = await seal('1234', attSalt)
-    await upsertAttendant({
-      id: existing?.id || att.id,
-      employeeCode: att.code,
-      fullName: att.name,
-      pinSalt: attSalt,
-      pinHash: attHash,
-      stationId: att.stn,
-      pumpId: att.pump,
-      approvalStatus: 'APPROVED',
-      active: true,
-      failedAttempts: 0,
-      lockoutUntil: null,
-      createdAt: existing?.createdAt || now,
-    })
-  }
 }
 
 // hash/verify re-exported here to avoid a circular import of password directly.

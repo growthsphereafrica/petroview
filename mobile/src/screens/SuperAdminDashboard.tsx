@@ -101,17 +101,6 @@ export const SuperAdminDashboard: React.FC<{
         }
       }
     } finally {
-      // If empty (e.g. offline), provide default seeded data
-      setCompanies(prev =>
-        prev.length > 0
-          ? prev
-          : [
-              { id: 'COMP-PV', name: 'PetroView Oil & Gas Ltd', shortCode: 'PV', primaryColor: '#F97316', phone: '030 200 1100', active: true },
-              { id: 'COMP-GOIL', name: 'Ghana Oil Company (GOIL)', shortCode: 'GOIL', primaryColor: '#EAB308', phone: '030 200 2200', active: true },
-              { id: 'COMP-TOTAL', name: 'TotalEnergies Marketing Ghana', shortCode: 'TOTAL', primaryColor: '#EF4444', phone: '030 200 3300', active: true },
-              { id: 'COMP-SHELL', name: 'Shell (Vivo Energy Ghana)', shortCode: 'SHELL', primaryColor: '#FACC15', phone: '030 200 4400', active: true },
-            ],
-      )
       setLoading(false)
     }
   }, [])
@@ -188,7 +177,7 @@ export const SuperAdminDashboard: React.FC<{
               </Card>
               <Card style={styles.kpi}>
                 <Building2 size={16} color={colors.emerald} />
-                <Text style={styles.kpiValue}>{stations.length || 6}</Text>
+                <Text style={styles.kpiValue}>{stations.length}</Text>
                 <Text style={styles.kpiLabel}>Total Stations</Text>
                 <Text style={styles.kpiSub}>Active across Ghana</Text>
               </Card>
@@ -204,23 +193,29 @@ export const SuperAdminDashboard: React.FC<{
                   </Pressable>
                 </View>
 
-                <Card style={styles.listCard}>
-                  {companies.map(c => (
-                    <View key={c.id} style={[styles.row, { paddingVertical: 14 }]}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
-                        <View style={[styles.colorChip, { backgroundColor: c.primaryColor || colors.flame }]}>
-                          <Text style={styles.colorChipText}>{c.shortCode.slice(0, 3)}</Text>
+                {companies.length === 0 ? (
+                  <Card style={styles.card}>
+                    <Text style={styles.empty}>No OMCs registered yet. Tap '+ Onboard OMC' above to provision your first downstream enterprise tenant.</Text>
+                  </Card>
+                ) : (
+                  <Card style={styles.listCard}>
+                    {companies.map(c => (
+                      <View key={c.id} style={[styles.row, { paddingVertical: 14 }]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
+                          <View style={[styles.colorChip, { backgroundColor: c.primaryColor || colors.flame }]}>
+                            <Text style={styles.colorChipText}>{c.shortCode.slice(0, 3)}</Text>
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={styles.rowTitle}>{c.name}</Text>
+                            <Text style={styles.rowSub}>Code: {c.shortCode} · ID: {c.id}</Text>
+                            {!!c.phone && <Text style={styles.rowSub}>Phone: {c.phone}</Text>}
+                          </View>
                         </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.rowTitle}>{c.name}</Text>
-                          <Text style={styles.rowSub}>Code: {c.shortCode} · ID: {c.id}</Text>
-                          {!!c.phone && <Text style={styles.rowSub}>Phone: {c.phone}</Text>}
-                        </View>
+                        <Badge tone="success">Active</Badge>
                       </View>
-                      <Badge tone="success">Active</Badge>
-                    </View>
-                  ))}
-                </Card>
+                    ))}
+                  </Card>
+                )}
               </View>
             )}
 
@@ -228,24 +223,23 @@ export const SuperAdminDashboard: React.FC<{
             {tab === 'stations' && (
               <View style={{ gap: 12 }}>
                 <Text style={styles.sectionTitle}>NATIONWIDE FORECOURT NETWORK</Text>
-                <Card style={styles.listCard}>
-                  {[
-                    { id: 'STN-PV-01', name: 'Green Valley Main Flagship (PetroView)', region: 'Greater Accra', code: 'PV-01' },
-                    { id: 'STN-PV-02', name: 'Airport City Express (PetroView)', region: 'Greater Accra', code: 'PV-02' },
-                    { id: 'STN-GOIL-01', name: 'GOIL Kwame Nkrumah Circle Flagship', region: 'Greater Accra', code: 'GOIL-01' },
-                    { id: 'STN-GOIL-02', name: 'GOIL Spintex Road Service Station', region: 'Greater Accra', code: 'GOIL-02' },
-                    { id: 'STN-TOTAL-01', name: 'TotalEnergies 37 Flagship Station', region: 'Greater Accra', code: 'TOTAL-01' },
-                    { id: 'STN-SHELL-01', name: 'Shell Airport Bypass Express', region: 'Greater Accra', code: 'SHELL-01' },
-                  ].map(st => (
-                    <View key={st.id} style={styles.row}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.rowTitle}>{st.name}</Text>
-                        <Text style={styles.rowSub}><MapPin size={10} color={colors.textFaint} /> {st.region} · Code: {st.code}</Text>
+                {stations.length === 0 ? (
+                  <Card style={styles.card}>
+                    <Text style={styles.empty}>No stations registered in the network. Stations are created by OMC administrators.</Text>
+                  </Card>
+                ) : (
+                  <Card style={styles.listCard}>
+                    {stations.map(st => (
+                      <View key={st.id} style={styles.row}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.rowTitle}>{st.name}</Text>
+                          <Text style={styles.rowSub}><MapPin size={10} color={colors.textFaint} /> {st.region} · Code: {st.code}</Text>
+                        </View>
+                        <Badge tone="default">Live</Badge>
                       </View>
-                      <Badge tone="default">Live</Badge>
-                    </View>
-                  ))}
-                </Card>
+                    ))}
+                  </Card>
+                )}
               </View>
             )}
 
@@ -391,6 +385,7 @@ const styles = StyleSheet.create({
   kpiSub: { color: colors.textDim, fontSize: 11 },
   card: { padding: 14, marginBottom: 4 },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  empty: { color: colors.textFaint, fontSize: 12, padding: 18, textAlign: 'center' },
   sectionTitle: { color: colors.textFaint, fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 },
   linkBtn: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
   linkBtnText: { fontSize: 11, fontWeight: '800' },

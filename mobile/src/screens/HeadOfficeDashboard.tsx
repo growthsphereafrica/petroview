@@ -79,8 +79,8 @@ export const HeadOfficeDashboard: React.FC<{
           if (resp.ok) {
             const json = (await resp.json()) as { supervisors?: PendingUser[]; attendants?: PendingUser[] }
             const combined: PendingUser[] = [
-              ...(json.supervisors || []).map(s => ({ ...s, role: 'supervisor' as const })),
-              ...(json.attendants || []).map(a => ({ ...a, role: 'attendant' as const })),
+              ...(json.supervisors || []).filter(s => s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER').map(s => ({ ...s, role: 'supervisor' as const })),
+              ...(json.attendants || []).filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER').map(a => ({ ...a, role: 'attendant' as const })),
             ]
             setPendingUsers(combined)
           }

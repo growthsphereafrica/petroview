@@ -463,8 +463,12 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
   // Filtered list of all staff
   const combinedStaff = [
-    ...allStaff.supervisors.map(s => ({ ...s, staffType: 'supervisor' as const })),
-    ...allStaff.attendants.map(a => ({ ...a, staffType: 'attendant' as const })),
+    ...allStaff.supervisors
+      .filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
+      .map(s => ({ ...s, staffType: 'supervisor' as const })),
+    ...allStaff.attendants
+      .filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
+      .map(a => ({ ...a, staffType: 'attendant' as const })),
   ].filter(s => {
     const matchStation = stationFilter === 'ALL' || s.stationId === stationFilter
     const matchSearch =

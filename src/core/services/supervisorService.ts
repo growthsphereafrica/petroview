@@ -350,35 +350,203 @@ export class SupervisorService {
     return { employeeCode: code, fullName: input.fullName.trim(), role: input.role }
   }
 
-  /** Lists all pending staff waiting for HQ Super Admin approval, optionally scoped by company. */
+  /** Lists all pending staff waiting for HQ OMC approval, dynamically synchronized from backend. */
   async listPendingStaff(companyId?: string): Promise<{ attendants: Attendant[]; supervisors: Supervisor[] }> {
-    const [attendants, supervisors] = await Promise.all([
-      attendantRepo.listPending(),
-      supervisorRepo.listPending(),
-    ])
-    return {
-      attendants: companyId ? attendants.filter(a => a.companyId === companyId) : attendants,
-      supervisors: companyId ? supervisors.filter(s => s.companyId === companyId) : supervisors,
+    try {
+      const { backendGetPendingApprovals } = await import('../../services/backendApiService')
+      const livePending = await backendGetPendingApprovals(companyId)
+
+      const liveAtts: Attendant[] = livePending.attendants
+        .filter(a => {
+          if (a.employeeCode === 'SUPER-ADMIN' || a.employeeCode === 'PETRO-MASTER') return false
+          if (companyId) {
+            return (
+              a.companyId === companyId ||
+              a.companyShortCode === companyId ||
+              (a.employeeCode && a.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()))
+            )
+          }
+          return true
+        })
+        .map(a => ({
+          id: a.id,
+          employeeCode: a.employeeCode,
+          fullName: a.fullName,
+          pinSalt: '',
+          pinHash: '',
+          pumpId: null,
+          stationId: a.stationId || '',
+          companyId: a.companyId || undefined,
+          companyShortCode: a.companyShortCode || undefined,
+          phone: a.phone || '',
+          approvalStatus: 'PENDING',
+          active: true,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: a.createdAt || new Date().toISOString(),
+        }))
+
+      const liveSups: Supervisor[] = livePending.supervisors
+        .filter(s => {
+          if (s.employeeCode === 'SUPER-ADMIN' || s.employeeCode === 'PETRO-MASTER') return false
+          if (companyId) {
+            return (
+              s.companyId === companyId ||
+              s.companyShortCode === companyId ||
+              (s.employeeCode && s.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()))
+            )
+          }
+          return true
+        })
+        .map(s => ({
+          id: s.id,
+          employeeCode: s.employeeCode,
+          fullName: s.fullName,
+          pinSalt: '',
+          pinHash: '',
+          stationId: s.stationId || '',
+          companyId: s.companyId || undefined,
+          companyShortCode: s.companyShortCode || undefined,
+          phone: s.phone || '',
+          isHeadOffice: false,
+          isSuperAdmin: false,
+          approvalStatus: 'PENDING',
+          active: true,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: s.createdAt || new Date().toISOString(),
+        }))
+
+      // Persist to local Dexie for offline backup
+      for (const a of liveAtts) {
+        await prodDb.attendants.put(a)
+      }
+      for (const s of liveSups) {
+        await prodDb.supervisors.put(s)
+      }
+
+      return { attendants: liveAtts, supervisors: liveSups }
+    } catch (err) {
+      console.warn('[supervisorService] Fallback to local DB for pending staff:', err)
+      const [attendants, supervisors] = await Promise.all([
+        attendantRepo.listPending(),
+        supervisorRepo.listPending(),
+      ])
+      return {
+        attendants: companyId
+          ? attendants.filter(a => a.companyId === companyId || a.companyShortCode === companyId)
+          : attendants,
+        supervisors: (companyId
+          ? supervisors.filter(s => s.companyId === companyId || s.companyShortCode === companyId)
+          : supervisors
+        ).filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER'),
+      }
     }
   }
 
-  /** Lists all staff across all stations with role & approval status, optionally scoped by company. */
+  /** Lists all staff across all stations with role & approval status, dynamically synchronized from backend. */
   async listAllStaff(companyId?: string): Promise<{ attendants: Attendant[]; supervisors: Supervisor[] }> {
-    const [attendants, supervisors] = await Promise.all([
-      attendantRepo.listAll(),
-      supervisorRepo.listAll(),
-    ])
-    const filteredAttendants = companyId ? attendants.filter(a => a.companyId === companyId) : attendants
-    const filteredSupervisors = companyId ? supervisors.filter(s => s.companyId === companyId) : supervisors
+    try {
+      const { backendGetStaff } = await import('../../services/backendApiService')
+      const liveStaff = await backendGetStaff(companyId)
 
-    return {
-      attendants: filteredAttendants.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
-      supervisors: filteredSupervisors.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+      const liveAtts: Attendant[] = liveStaff.attendants
+        .filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
+        .map(a => ({
+          id: a.id,
+          employeeCode: a.employeeCode,
+          fullName: a.fullName,
+          pinSalt: '',
+          pinHash: '',
+          pumpId: a.pumpId || undefined,
+          stationId: a.stationId || '',
+          companyId: a.companyId || undefined,
+          companyShortCode: a.companyShortCode || undefined,
+          phone: a.phone || '',
+          approvalStatus: a.approvalStatus,
+          approvedAt: a.approvedAt || undefined,
+          approvedBy: a.approvedBy || undefined,
+          active: a.active,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: a.createdAt || new Date().toISOString(),
+        }))
+
+      const liveSups: Supervisor[] = liveStaff.supervisors
+        .filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
+        .map(s => ({
+          id: s.id,
+          employeeCode: s.employeeCode,
+          fullName: s.fullName,
+          pinSalt: '',
+          pinHash: '',
+          stationId: s.stationId || '',
+          companyId: s.companyId || undefined,
+          companyShortCode: s.companyShortCode || undefined,
+          phone: s.phone || '',
+          isHeadOffice: !!s.isHeadOffice,
+          isSuperAdmin: false,
+          approvalStatus: s.approvalStatus,
+          approvedAt: s.approvedAt || undefined,
+          approvedBy: s.approvedBy || undefined,
+          active: s.active,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: s.createdAt || new Date().toISOString(),
+        }))
+
+      // Persist to local Dexie
+      for (const a of liveAtts) {
+        await prodDb.attendants.put(a)
+      }
+      for (const s of liveSups) {
+        await prodDb.supervisors.put(s)
+      }
+
+      return {
+        attendants: liveAtts.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+        supervisors: liveSups.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+      }
+    } catch (err) {
+      console.warn('[supervisorService] Fallback to local DB for all staff:', err)
+      const [attendants, supervisors] = await Promise.all([
+        attendantRepo.listAll(),
+        supervisorRepo.listAll(),
+      ])
+      const filteredAttendants = companyId
+        ? attendants.filter(
+            a =>
+              a.companyId === companyId ||
+              a.companyShortCode === companyId ||
+              a.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()),
+          )
+        : attendants
+      const filteredSupervisors = (companyId
+        ? supervisors.filter(
+            s =>
+              s.companyId === companyId ||
+              s.companyShortCode === companyId ||
+              s.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()),
+          )
+        : supervisors
+      ).filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
+
+      return {
+        attendants: filteredAttendants.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+        supervisors: filteredSupervisors.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
+      }
     }
   }
 
   /** Approves a pending staff account (Attendant or Manager). */
-  async approveStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Super Admin'): Promise<void> {
+  async approveStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Admin'): Promise<void> {
+    try {
+      const { backendApproveUser } = await import('../../services/backendApiService')
+      await backendApproveUser(id, 'APPROVED')
+    } catch (backendErr) {
+      console.warn('[supervisorService] Backend approve warning:', backendErr)
+    }
+
     if (role === 'attendant') {
       await attendantRepo.approve(id, approverName)
       liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
@@ -394,13 +562,20 @@ export class SupervisorService {
       actorRole: 'SUPERVISOR',
       targetId: id,
       targetDescription: `Approved ${role} account (${id})`,
-      notes: 'Authorized by HQ Super Admin',
+      notes: 'Authorized by OMC Head Office Admin',
       timestamp: new Date().toISOString(),
     })
   }
 
   /** Rejects a pending staff account. */
-  async rejectStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Super Admin', reason?: string): Promise<void> {
+  async rejectStaff(id: string, role: 'attendant' | 'supervisor', approverName = 'HQ Admin', reason?: string): Promise<void> {
+    try {
+      const { backendApproveUser } = await import('../../services/backendApiService')
+      await backendApproveUser(id, 'REJECTED')
+    } catch (backendErr) {
+      console.warn('[supervisorService] Backend reject warning:', backendErr)
+    }
+
     if (role === 'attendant') {
       await attendantRepo.reject(id, approverName)
       liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
@@ -416,7 +591,7 @@ export class SupervisorService {
       actorRole: 'SUPERVISOR',
       targetId: id,
       targetDescription: `Rejected ${role} account (${id})`,
-      notes: reason || 'Rejected by HQ Super Admin',
+      notes: reason || 'Rejected by OMC Head Office Admin',
       timestamp: new Date().toISOString(),
     })
   }

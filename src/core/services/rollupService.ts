@@ -129,7 +129,28 @@ export class RollupService {
         }
       }
     } else if (options?.companyId) {
-      const dbCompanyStations = await prodDb.companyStations.where('companyId').equals(options.companyId).toArray()
+      let dbCompanyStations = await prodDb.companyStations.where('companyId').equals(options.companyId).toArray()
+      if (dbCompanyStations.length === 0) {
+        try {
+          const { backendGetCompanyStations } = await import('../../services/backendApiService')
+          const liveStations = await backendGetCompanyStations(options.companyId)
+          if (liveStations.length > 0) {
+            for (const st of liveStations) {
+              await prodDb.companyStations.put({
+                id: st.id,
+                companyId: st.companyId,
+                name: st.name,
+                code: st.code,
+                location: st.location,
+                region: st.region,
+                pumpsCount: st.pumpsCount,
+                createdAt: new Date().toISOString(),
+              })
+            }
+            dbCompanyStations = await prodDb.companyStations.where('companyId').equals(options.companyId).toArray()
+          }
+        } catch { /* offline */ }
+      }
       targetStations = dbCompanyStations.map(s => ({
         id: s.id,
         name: s.name,
@@ -158,11 +179,15 @@ export class RollupService {
     const allShifts = await shiftRepo.listAll()
 
     let companyShifts = options?.companyId
-      ? allShifts.filter(s => stationIdSet.has(s.stationId))
+      ? allShifts.filter(
+          s =>
+            stationIdSet.has(s.stationId) ||
+            s.stationId.toLowerCase().includes(options.companyId!.toLowerCase().replace('comp-', '')) ||
+            (s.attendantName && s.attendantName.startsWith(options.companyId!.replace('comp-', '').toUpperCase())),
+        )
       : allShifts
 
-    // If no shifts matched target stations but companyId is set, check if shifts match any station or attendant company
-    if (options?.companyId && companyShifts.length === 0) {
+    if (options?.companyId && companyShifts.length === 0 && stationIdSet.size > 0) {
       companyShifts = allShifts.filter(s => stationIdSet.has(s.stationId))
     }
 
@@ -243,11 +268,18 @@ export class RollupService {
 
     // 4. Compute Attendant Staff Rollup
     const allAttendants = await prodDb.attendants.toArray()
-    const targetAttendants = options?.stationId
+    const targetAttendants = (options?.stationId
       ? allAttendants.filter(a => a.stationId === options.stationId)
       : options?.companyId
-      ? allAttendants.filter(a => a.companyId === options.companyId || (stationIdSet.size > 0 && stationIdSet.has(a.stationId)))
+      ? allAttendants.filter(
+          a =>
+            a.companyId === options.companyId ||
+            a.companyShortCode === options.companyId ||
+            (stationIdSet.size > 0 && stationIdSet.has(a.stationId)) ||
+            (a.employeeCode && a.employeeCode.startsWith(options.companyId.replace('comp-', '').toUpperCase())),
+        )
       : allAttendants
+    ).filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
 
     const attendantRollups: AttendantRollup[] = (await Promise.all(targetAttendants
       .map(async att => {

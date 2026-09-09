@@ -110,6 +110,38 @@ companiesRouter.get('/:id/stations', (req, res) => {
   res.json(stations)
 })
 
+// --- Get all staff for a specific company (Super Admin or OMC HQ) ---
+companiesRouter.get('/:id/staff', authenticate, (req: AuthRequest, res) => {
+  const company = db.prepare('SELECT id, shortCode FROM companies WHERE id = ?').get(req.params.id) as
+    | { id: string; shortCode: string }
+    | undefined
+  if (!company) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found.' })
+    return
+  }
+  const sups = db.prepare(`
+    SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, isHeadOffice, isSuperAdmin, approvalStatus, approvedAt, approvedBy, active, createdAt
+    FROM supervisors
+    WHERE isSuperAdmin = 0
+      AND UPPER(employeeCode) != 'SUPER-ADMIN'
+      AND (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+    ORDER BY employeeCode
+  `).all(company.id, company.shortCode, `${company.shortCode}%`)
+
+  const atts = db.prepare(`
+    SELECT id, employeeCode, fullName, phone, pumpId, stationId, companyId, companyShortCode, approvalStatus, approvedAt, approvedBy, active, createdAt
+    FROM attendants
+    WHERE (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+    ORDER BY employeeCode
+  `).all(company.id, company.shortCode, `${company.shortCode}%`)
+
+  res.json({
+    supervisors: sups.map((r: any) => ({ ...r, role: 'supervisor' })),
+    attendants: atts.map((r: any) => ({ ...r, role: 'attendant' })),
+    total: sups.length + atts.length,
+  })
+})
+
 // --- Get company details ---
 companiesRouter.get('/:id', authenticate, (req, res) => {
   const company = db.prepare('SELECT * FROM companies WHERE id = ?').get(req.params.id)

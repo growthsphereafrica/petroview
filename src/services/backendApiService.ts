@@ -110,8 +110,61 @@ export async function backendLogout(): Promise<void> {
   clearCloudToken()
 }
 
-export async function backendGetPendingApprovals(): Promise<{ supervisors: BackendPendingApproval[]; attendants: BackendPendingApproval[]; total: number }> {
-  return apiCall('/api/auth/pending-approvals')
+export async function backendGetPendingApprovals(companyId?: string): Promise<{ supervisors: BackendPendingApproval[]; attendants: BackendPendingApproval[]; total: number }> {
+  const params = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+  const data = await apiCall<any>(`/api/auth/pending-approvals${params}`)
+  return {
+    supervisors: Array.isArray(data?.supervisors) ? data.supervisors : [],
+    attendants: Array.isArray(data?.attendants) ? data.attendants : [],
+    total: typeof data?.total === 'number' ? data.total : (data?.supervisors?.length || 0) + (data?.attendants?.length || 0),
+  }
+}
+
+export interface BackendStaffResponse {
+  supervisors: Array<{
+    id: string
+    employeeCode: string
+    fullName: string
+    phone: string | null
+    stationId: string | null
+    companyId: string | null
+    companyShortCode: string | null
+    isHeadOffice?: boolean
+    isSuperAdmin?: boolean
+    approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED'
+    approvedAt?: string | null
+    approvedBy?: string | null
+    active: boolean
+    createdAt: string
+    role: 'supervisor'
+  }>
+  attendants: Array<{
+    id: string
+    employeeCode: string
+    fullName: string
+    phone: string | null
+    pumpId?: string | null
+    stationId: string | null
+    companyId: string | null
+    companyShortCode: string | null
+    approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED'
+    approvedAt?: string | null
+    approvedBy?: string | null
+    active: boolean
+    createdAt: string
+    role: 'attendant'
+  }>
+  total: number
+}
+
+export async function backendGetStaff(companyId?: string): Promise<BackendStaffResponse> {
+  const params = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+  const data = await apiCall<any>(`/api/auth/staff${params}`)
+  return {
+    supervisors: Array.isArray(data?.supervisors) ? data.supervisors : [],
+    attendants: Array.isArray(data?.attendants) ? data.attendants : [],
+    total: typeof data?.total === 'number' ? data.total : (data?.supervisors?.length || 0) + (data?.attendants?.length || 0),
+  }
 }
 
 export async function backendApproveUser(userId: string, verdict: 'APPROVED' | 'REJECTED'): Promise<{ id: string; approvalStatus: string }> {

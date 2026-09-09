@@ -208,22 +208,97 @@ authRouter.post('/register', (req, res) => {
 
 // --- OMC HQ: list pending approvals ---
 authRouter.get('/pending-approvals', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const companyId = req.session?.role === 'superadmin' ? null : req.session?.companyId
+  const companyId = req.session?.role === 'superadmin' ? (req.query.companyId as string | undefined) : req.session?.companyId
+  const shortCode = req.session?.companyShortCode
   let pendingSup: Array<Record<string, unknown>>
   let pendingAtt: Array<Record<string, unknown>>
 
   if (companyId) {
-    pendingSup = db.prepare("SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt FROM supervisors WHERE approvalStatus = 'PENDING' AND companyId = ? ORDER BY createdAt DESC").all(companyId) as Array<Record<string, unknown>>
-    pendingAtt = db.prepare("SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt FROM attendants WHERE approvalStatus = 'PENDING' AND companyId = ? ORDER BY createdAt DESC").all(companyId) as Array<Record<string, unknown>>
+    pendingSup = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt
+      FROM supervisors
+      WHERE approvalStatus = 'PENDING'
+        AND isSuperAdmin = 0
+        AND UPPER(employeeCode) != 'SUPER-ADMIN'
+        AND (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+      ORDER BY createdAt DESC
+    `).all(companyId, shortCode || companyId, `${shortCode || companyId.replace('comp-', '').toUpperCase()}%`) as Array<Record<string, unknown>>
+
+    pendingAtt = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt
+      FROM attendants
+      WHERE approvalStatus = 'PENDING'
+        AND (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+      ORDER BY createdAt DESC
+    `).all(companyId, shortCode || companyId, `${shortCode || companyId.replace('comp-', '').toUpperCase()}%`) as Array<Record<string, unknown>>
   } else {
-    pendingSup = db.prepare("SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt FROM supervisors WHERE approvalStatus = 'PENDING' ORDER BY createdAt DESC").all() as Array<Record<string, unknown>>
-    pendingAtt = db.prepare("SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt FROM attendants WHERE approvalStatus = 'PENDING' ORDER BY createdAt DESC").all() as Array<Record<string, unknown>>
+    pendingSup = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt
+      FROM supervisors
+      WHERE approvalStatus = 'PENDING'
+        AND isSuperAdmin = 0
+        AND UPPER(employeeCode) != 'SUPER-ADMIN'
+      ORDER BY createdAt DESC
+    `).all() as Array<Record<string, unknown>>
+
+    pendingAtt = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, createdAt
+      FROM attendants
+      WHERE approvalStatus = 'PENDING'
+      ORDER BY createdAt DESC
+    `).all() as Array<Record<string, unknown>>
   }
 
   res.json({
     supervisors: pendingSup.map(r => ({ ...r, role: 'supervisor' })),
     attendants: pendingAtt.map(r => ({ ...r, role: 'attendant' })),
     total: pendingSup.length + pendingAtt.length,
+  })
+})
+
+// --- OMC HQ / Superadmin: list all staff ---
+authRouter.get('/staff', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
+  const companyId = req.session?.role === 'superadmin' ? (req.query.companyId as string | undefined) : req.session?.companyId
+  const shortCode = req.session?.companyShortCode
+  let sups: Array<Record<string, unknown>>
+  let atts: Array<Record<string, unknown>>
+
+  if (companyId) {
+    sups = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, isHeadOffice, isSuperAdmin, approvalStatus, approvedAt, approvedBy, active, createdAt
+      FROM supervisors
+      WHERE isSuperAdmin = 0
+        AND UPPER(employeeCode) != 'SUPER-ADMIN'
+        AND (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+      ORDER BY employeeCode
+    `).all(companyId, shortCode || companyId, `${shortCode || companyId.replace('comp-', '').toUpperCase()}%`) as Array<Record<string, unknown>>
+
+    atts = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, pumpId, stationId, companyId, companyShortCode, approvalStatus, approvedAt, approvedBy, active, createdAt
+      FROM attendants
+      WHERE (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+      ORDER BY employeeCode
+    `).all(companyId, shortCode || companyId, `${shortCode || companyId.replace('comp-', '').toUpperCase()}%`) as Array<Record<string, unknown>>
+  } else {
+    sups = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, stationId, companyId, companyShortCode, isHeadOffice, isSuperAdmin, approvalStatus, approvedAt, approvedBy, active, createdAt
+      FROM supervisors
+      WHERE isSuperAdmin = 0
+        AND UPPER(employeeCode) != 'SUPER-ADMIN'
+      ORDER BY employeeCode
+    `).all() as Array<Record<string, unknown>>
+
+    atts = db.prepare(`
+      SELECT id, employeeCode, fullName, phone, pumpId, stationId, companyId, companyShortCode, approvalStatus, approvedAt, approvedBy, active, createdAt
+      FROM attendants
+      ORDER BY employeeCode
+    `).all() as Array<Record<string, unknown>>
+  }
+
+  res.json({
+    supervisors: sups.map(r => ({ ...r, role: 'supervisor' })),
+    attendants: atts.map(r => ({ ...r, role: 'attendant' })),
+    total: sups.length + atts.length,
   })
 })
 
@@ -250,7 +325,7 @@ authRouter.post('/approve/:userId', authenticate, requireRole('headoffice', 'sup
       res.status(409).json({ error: 'CONFLICT', message: `Account is already ${row.approvalStatus}.` })
       return
     }
-    db.prepare('UPDATE supervisors SET approvalStatus = ?, approvedAt = ?, approvedBy = ? WHERE id = ?').run(verdict, now, actorName, userId)
+    db.prepare('UPDATE supervisors SET approvalStatus = ?, approvedAt = ?, approvedBy = ?, active = ? WHERE id = ?').run(verdict, now, actorName, verdict === 'APPROVED' ? 1 : 0, userId)
     const action = verdict === 'APPROVED' ? 'SUPERVISOR_APPROVED' : 'SUPERVISOR_REJECTED'
     db.prepare(
       'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -272,10 +347,11 @@ authRouter.post('/approve/:userId', authenticate, requireRole('headoffice', 'sup
     res.status(409).json({ error: 'CONFLICT', message: `Account is already ${row.approvalStatus}.` })
     return
   }
-  db.prepare('UPDATE attendants SET approvalStatus = ?, approvedAt = ?, approvedBy = ? WHERE id = ?').run(verdict, now, actorName, userId)
+  db.prepare('UPDATE attendants SET approvalStatus = ?, approvedAt = ?, approvedBy = ?, active = ? WHERE id = ?').run(verdict, now, actorName, verdict === 'APPROVED' ? 1 : 0, userId)
   const action = verdict === 'APPROVED' ? 'ATTENDANT_APPROVED' : 'ATTENDANT_REJECTED'
   db.prepare(
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
   ).run(newToken(), action, req.session?.userId ?? '', actorName, actorRole, userId, `${row.employeeCode} (${row.fullName})`, null, now, null)
   res.json({ id: userId, employeeCode: row.employeeCode, approvalStatus: verdict })
 })
+

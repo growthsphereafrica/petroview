@@ -171,8 +171,19 @@ export const SuperSuperAdminDashboard: React.FC = () => {
         stMap[comp.id] = compStations
 
         const count =
-          staff.attendants.filter(a => a.companyId === comp.id || a.employeeCode.startsWith(comp.shortCode)).length +
-          staff.supervisors.filter(s => s.companyId === comp.id || s.employeeCode.startsWith(comp.shortCode)).length
+          staff.attendants.filter(
+            a =>
+              (a.companyId === comp.id || a.companyShortCode === comp.shortCode || a.employeeCode.startsWith(comp.shortCode)) &&
+              a.employeeCode !== 'SUPER-ADMIN' &&
+              a.employeeCode !== 'PETRO-MASTER',
+          ).length +
+          staff.supervisors.filter(
+            s =>
+              (s.companyId === comp.id || s.companyShortCode === comp.shortCode || s.employeeCode.startsWith(comp.shortCode)) &&
+              !s.isSuperAdmin &&
+              s.employeeCode !== 'SUPER-ADMIN' &&
+              s.employeeCode !== 'PETRO-MASTER',
+          ).length
         staffMap[comp.id] = count
       }
 
@@ -522,24 +533,28 @@ export const SuperSuperAdminDashboard: React.FC = () => {
   const handleExportStaffCsv = () => {
     const rows = [
       ['Employee Code', 'Full Name', 'Role', 'Company', 'Station', 'Phone', 'Status'],
-      ...allStaff.supervisors.map(s => [
-        s.employeeCode,
-        s.fullName,
-        'Station Manager',
-        s.companyShortCode || 'PV',
-        getStationName(s.stationId),
-        s.phone || '',
-        s.active ? 'ACTIVE' : s.approvalStatus,
-      ]),
-      ...allStaff.attendants.map(a => [
-        a.employeeCode,
-        a.fullName,
-        'Fuel Attendant',
-        a.companyShortCode || 'PV',
-        getStationName(a.stationId),
-        a.phone || '',
-        a.active ? 'ACTIVE' : a.approvalStatus,
-      ]),
+      ...allStaff.supervisors
+        .filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
+        .map(s => [
+          s.employeeCode,
+          s.fullName,
+          'Station Manager',
+          s.companyShortCode || 'PV',
+          getStationName(s.stationId),
+          s.phone || '',
+          s.active ? 'ACTIVE' : s.approvalStatus,
+        ]),
+      ...allStaff.attendants
+        .filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
+        .map(a => [
+          a.employeeCode,
+          a.fullName,
+          'Fuel Attendant',
+          a.companyShortCode || 'PV',
+          getStationName(a.stationId),
+          a.phone || '',
+          a.active ? 'ACTIVE' : a.approvalStatus,
+        ]),
     ]
     const csvContent = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n')
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
@@ -559,8 +574,12 @@ export const SuperSuperAdminDashboard: React.FC = () => {
   )
 
   const combinedStaff = [
-    ...allStaff.supervisors.map(s => ({ ...s, staffType: 'supervisor' as const })),
-    ...allStaff.attendants.map(a => ({ ...a, staffType: 'attendant' as const })),
+    ...allStaff.supervisors
+      .filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
+      .map(s => ({ ...s, staffType: 'supervisor' as const })),
+    ...allStaff.attendants
+      .filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
+      .map(a => ({ ...a, staffType: 'attendant' as const })),
   ].filter(s => {
     const matchCompany =
       selectedCompanyFilter === 'ALL' ||

@@ -721,6 +721,17 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
             <Card className="p-4 bg-slate-900/90 shadow-md">
               <div className="flex items-center gap-2 mb-2">
+                <Zap className="w-4 h-4 text-emerald-400" />
+                <p className="text-[9px] uppercase font-bold text-slate-500">Cars Served</p>
+              </div>
+              <p className="text-2xl font-black text-emerald-400">{summary.carsServedToday ?? 0}</p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {summary.carsServedTotal ?? 0} total transactions in period
+              </p>
+            </Card>
+
+            <Card className="p-4 bg-slate-900/90 shadow-md">
+              <div className="flex items-center gap-2 mb-2">
                 <UserCheck className="w-4 h-4 text-emerald-400" />
                 <p className="text-[9px] uppercase font-bold text-slate-500">Pending Approvals</p>
               </div>
@@ -759,8 +770,9 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 <MapPin className="w-3.5 h-3.5 text-orange-400" /> {companyName} Station Branches ({summary.stations.length})
               </h4>
               <Card className="divide-y divide-slate-800/70 overflow-hidden">
-                <div className="px-4 py-2 grid grid-cols-[1fr_auto_auto_auto] gap-3 text-[9px] uppercase font-bold text-slate-500 bg-slate-950/60">
+                <div className="px-4 py-2 grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 text-[9px] uppercase font-bold text-slate-500 bg-slate-950/60">
                   <span>Station</span>
+                  <span className="text-right">Cars</span>
                   <span className="text-right">Litres</span>
                   <span className="text-right">Sales</span>
                   <span className="text-right">Var</span>
@@ -769,13 +781,14 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                   <p className="px-4 py-6 text-center text-xs text-slate-500">No stations registered under {companyName}.</p>
                 ) : (
                   topStations.map(st => (
-                    <div key={st.stationId} className="px-4 py-3 grid grid-cols-[1fr_auto_auto_auto] gap-3 items-center">
+                    <div key={st.stationId} className="px-4 py-3 grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 items-center">
                       <div className="min-w-0">
                         <p className="text-[12px] font-bold text-white truncate">{st.name}</p>
                         <p className="text-[10px] text-slate-500 truncate flex items-center gap-1">
                           <MapPin className="w-3 h-3 text-orange-400" /> {st.region} · {st.code}
                         </p>
                       </div>
+                      <span className="text-[11px] font-mono text-emerald-400 font-bold text-right">{st.carsServedToday ?? 0}</span>
                       <span className="text-[11px] font-mono text-slate-300 text-right">{Math.round(st.litresToday)}L</span>
                       <span className="text-[11px] font-mono text-white font-bold text-right">
                         {formatGHS(st.salesToday, { noPrefix: true })}

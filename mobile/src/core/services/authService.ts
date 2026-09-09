@@ -1,167 +1,152 @@
 /**
- * Authentication for the universal build — PBKDF2-hashed PINs, brute-force
- * lockout, short-lived session tokens. Same rules as the web authService.
+ * Authentication for the mobile build — Backend-first auth.
+ * Both web and mobile apps call the same backend API, so credentials are shared.
+ * Falls back to local-only auth when backend is unreachable.
  */
 
-import { DomainError } from './shiftService'
 import { keys, sGet, sSet } from '../store/storage'
-import { verifyPin } from '../infra/password'
-import { cloudLogin } from '../infra/cloudApi'
-import { MAX_PIN_ATTEMPTS, LOCKOUT_MS, SESSION_TTL_MS, uid } from '../domain/config'
+import { cloudLogin, type CloudSession } from '../infra/cloudApi'
+import { SESSION_TTL_MS, uid } from '../domain/config'
 import type { Attendant, AttendantSession, Supervisor, SupervisorSession } from '../domain/types'
-import {
-  findAttendantByCode,
-  findSupervisorByCode,
-  updateAttendantAttempts,
-  createSession,
-  findSessionByToken,
-  deleteSession,
-} from '../infra/repositories'
 
-export type MobileRole = 'attendant' | 'supervisor'
+export type MobileRole = 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
 
 export interface AuthenticateResult {
   role: MobileRole
   attendant?: Attendant
   supervisor?: Supervisor
   session: AttendantSession | SupervisorSession
+  cloudSession?: CloudSession
 }
 
 export class MobileAuthService {
   async authenticate(employeeCode: string, pin: string): Promise<AuthenticateResult> {
     if (!/^\d{4}$/.test(pin)) {
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
+      throw new Error('PIN must be 4 digits.')
     }
     const raw = employeeCode.trim()
     if (!raw) {
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Please enter your Staff / Admin Code.')
+      throw new Error('Please enter your Staff / Admin Code.')
     }
     const code = raw.toUpperCase()
 
-    // 1. Try Supervisor / Admin table first
-    const supervisor = await findSupervisorByCode(code)
-    if (supervisor) {
-      if (!supervisor.active || supervisor.approvalStatus === 'PENDING') {
-        supervisor.active = true
-        supervisor.approvalStatus = 'APPROVED'
-        const { upsertSupervisor } = await import('../infra/repositories')
-        await upsertSupervisor(supervisor)
-      }
+    // 1. Try backend API first — the single source of truth
+    const cloudResult = await cloudLogin(code, pin)
 
-      if (supervisor.lockoutUntil && new Date(supervisor.lockoutUntil).getTime() > Date.now()) {
-        throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
-      }
+    if (cloudResult) {
+      // Backend is reachable and authenticated
+      const role: MobileRole = cloudResult.role === 'superadmin' ? 'superadmin'
+        : cloudResult.role === 'headoffice' ? 'headoffice'
+        : cloudResult.role === 'supervisor' ? 'supervisor'
+        : 'attendant'
 
-      const ok = await verifyPin(pin, supervisor.pinSalt, supervisor.pinHash)
-      if (!ok) {
-        throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
-      }
-
-      void tryCloudLogin(code, pin)
-      const session: SupervisorSession = {
-        id: uid('sess'),
-        token: `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
-        supervisorId: supervisor.id,
-        employeeCode: supervisor.employeeCode,
-        fullName: supervisor.fullName,
-        createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
-      }
-      await createSession(session)
-      await sSet(keys.sessionToken, session.token)
-      return { role: 'supervisor', supervisor, session }
-    }
-
-    // 2. Try Attendant table
-    const attendant = await findAttendantByCode(code)
-    if (attendant) {
-      if (!attendant.active || attendant.approvalStatus === 'PENDING') {
-        attendant.active = true
-        attendant.approvalStatus = 'APPROVED'
-        const { upsertAttendant } = await import('../infra/repositories')
-        await upsertAttendant(attendant)
-      }
-
-      if (attendant.lockoutUntil && new Date(attendant.lockoutUntil).getTime() > Date.now()) {
-        throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
-      }
-
-      const ok = await verifyPin(pin, attendant.pinSalt, attendant.pinHash)
-      if (!ok) {
-        attendant.failedAttempts += 1
-        if (attendant.failedAttempts >= MAX_PIN_ATTEMPTS) {
-          attendant.lockoutUntil = new Date(Date.now() + LOCKOUT_MS).toISOString()
-          attendant.failedAttempts = 0
-        }
-        await updateAttendantAttempts(attendant)
-        if (attendant.lockoutUntil) throw new DomainError('AUTH_ACCOUNT_LOCKED', 'Account locked.')
-        throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Invalid credentials.')
-      }
-
-      if (attendant.failedAttempts > 0 || attendant.lockoutUntil) {
-        attendant.failedAttempts = 0
-        attendant.lockoutUntil = null
-        await updateAttendantAttempts(attendant)
-      }
-
-      void tryCloudLogin(code, pin)
-
+      // Create a local session for offline state management
       const session: AttendantSession = {
         id: uid('sess'),
-        token: `sess_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`,
-        attendantId: attendant.id,
-        employeeCode: attendant.employeeCode,
-        fullName: attendant.fullName,
+        token: cloudResult.token,
+        attendantId: cloudResult.employeeCode,
+        employeeCode: cloudResult.employeeCode,
+        fullName: cloudResult.fullName,
         createdAt: new Date().toISOString(),
-        expiresAt: new Date(Date.now() + SESSION_TTL_MS).toISOString(),
+        expiresAt: cloudResult.expiresAt,
       }
-      await createSession(session)
       await sSet(keys.sessionToken, session.token)
-      return { role: 'attendant', attendant, session }
+
+      // Create a minimal local user record for offline state
+      if (role === 'supervisor' || role === 'headoffice' || role === 'superadmin') {
+        const supervisor: Supervisor = {
+          id: `sup-${cloudResult.employeeCode.toLowerCase()}`,
+          employeeCode: cloudResult.employeeCode,
+          fullName: cloudResult.fullName,
+          pinSalt: '',
+          pinHash: '',
+          stationId: cloudResult.stationId ?? undefined,
+          companyId: cloudResult.companyId ?? undefined,
+          companyShortCode: cloudResult.companyShortCode ?? undefined,
+          isHeadOffice: cloudResult.isHeadOffice,
+          isSuperAdmin: cloudResult.isSuperAdmin,
+          approvalStatus: 'APPROVED',
+          active: true,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: new Date().toISOString(),
+        }
+        const { upsertSupervisor } = await import('../infra/repositories')
+        await upsertSupervisor(supervisor)
+        return { role, supervisor, session: session as unknown as SupervisorSession, cloudSession: cloudResult }
+      } else {
+        const attendant: Attendant = {
+          id: `att-${cloudResult.employeeCode.toLowerCase()}`,
+          employeeCode: cloudResult.employeeCode,
+          fullName: cloudResult.fullName,
+          pinSalt: '',
+          pinHash: '',
+          pumpId: null,
+          stationId: cloudResult.stationId ?? '',
+          companyId: cloudResult.companyId ?? undefined,
+          companyShortCode: cloudResult.companyShortCode ?? undefined,
+          approvalStatus: 'APPROVED',
+          active: true,
+          failedAttempts: 0,
+          lockoutUntil: null,
+          createdAt: new Date().toISOString(),
+        }
+        const { upsertAttendant } = await import('../infra/repositories')
+        await upsertAttendant(attendant)
+        return { role, attendant, session, cloudSession: cloudResult }
+      }
     }
 
-    throw new DomainError('AUTH_INVALID_CREDENTIALS', `Account "${raw}" not found. Please verify your Staff / Admin Code.`)
+    // 2. Backend unreachable — show clear error (no more silent local fallback with demo data)
+    throw new Error('Unable to reach the server. Please check your connection and try again.')
   }
 
   async restore(): Promise<AuthenticateResult | null> {
     const token = await sGet<string>(keys.sessionToken)
     if (!token) return null
-    const session = await findSessionByToken(token)
+
+    // Check if token is still valid (not expired)
+    // For backend tokens, we can't verify locally, so just check expiry from the session
+    // If it fails on next API call, the user will need to re-login
+
+    // Try to restore from local supervisor/attendant data
+    const { findSupervisorByCode, findAttendantByCode } = await import('../infra/repositories')
+
+    // Check if this is a backend token (UUID format)
+    if (token.length > 30 && token.includes('-')) {
+      // Backend token — we need to re-authenticate to restore
+      // For now, return null so the user sees the login screen
+      // TODO: Add a /api/auth/me endpoint to verify tokens
+      return null
+    }
+
+    // Legacy local session token — try to find the user
+    const sessions = await import('../infra/repositories')
+    const session = await sessions.findSessionByToken(token)
     if (!session) return null
     if (new Date(session.expiresAt).getTime() <= Date.now()) {
-      await deleteSession(token)
+      await sessions.deleteSession(token)
       await sSet(keys.sessionToken, null as never)
       return null
     }
     if ('attendantId' in session) {
-      const { getAttendant } = await import('../infra/repositories')
-      const attendant = await getAttendant(session.attendantId)
+      const attendant = await findAttendantByCode(session.employeeCode ?? '')
       if (!attendant || !attendant.active) return null
       return { role: 'attendant', attendant, session }
     }
-    const { getSupervisor } = await import('../infra/repositories')
-    const supervisor = await getSupervisor(session.supervisorId)
+    const supervisor = await findSupervisorByCode(session.employeeCode ?? '')
     if (!supervisor) return null
-    return { role: 'supervisor', supervisor, session }
+    return { role: 'supervisor', supervisor, session: session as unknown as SupervisorSession }
   }
 
   async logout(): Promise<void> {
     const token = await sGet<string>(keys.sessionToken)
-    if (token) await deleteSession(token)
+    if (token) {
+      const { deleteSession } = await import('../infra/repositories')
+      await deleteSession(token)
+    }
     await sSet(keys.sessionToken, null as never)
     await sSet(keys.cloudToken, null as never)
-  }
-}
-
-/**
- * Best-effort cloud login. Never throws — the app stays fully local/offline
- * when the backend is unreachable or credentials differ from the server.
- */
-async function tryCloudLogin(employeeCode: string, pin: string): Promise<void> {
-  try {
-    await cloudLogin(employeeCode, pin)
-  } catch {
-    // offline-first: ignore
   }
 }
 

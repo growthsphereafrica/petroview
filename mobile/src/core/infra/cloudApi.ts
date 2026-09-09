@@ -1,7 +1,7 @@
 /**
  * Cloud sync client for the universal app.
  * Reads the backend base URL from EXPO_PUBLIC_API_URL (inlined at build time).
- * When the URL is unset the app runs fully offline (QR-only sync, as before).
+ * Both web and mobile use this same backend — single source of truth.
  */
 
 import { keys, sGet, sSet } from '../store/storage'
@@ -36,10 +36,15 @@ export async function setCloudToken(token: string | null): Promise<void> {
 
 export interface CloudSession {
   token: string
-  role: 'attendant' | 'supervisor'
+  role: 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
   fullName: string
   employeeCode: string
   stationId: string | null
+  stationName?: string
+  companyId: string | null
+  companyShortCode: string | null
+  isSuperAdmin: boolean
+  isHeadOffice: boolean
   expiresAt: string
 }
 
@@ -62,19 +67,53 @@ export async function cloudLogin(employeeCode: string, pin: string): Promise<Clo
     return null
   }
 
-  const json = (await resp.json().catch(() => ({}))) as Partial<CloudSession> & { error?: string }
+  const json = (await resp.json().catch(() => ({}))) as Partial<CloudSession> & { error?: string; message?: string }
   if (!resp.ok || !json.token) return null
 
   await setCloudToken(json.token)
   return json as CloudSession
 }
 
+// ---- Register -------------------------------------------------------------
+
+export interface CloudRegisterResult {
+  id: string
+  employeeCode: string
+  fullName: string
+  role: 'attendant' | 'supervisor'
+  approvalStatus: 'PENDING' | 'APPROVED' | 'REJECTED'
+}
+
+export async function cloudRegister(input: {
+  employeeCode: string
+  fullName: string
+  pin: string
+  phone?: string
+  stationId?: string
+  companyId?: string
+  companyShortCode?: string
+}): Promise<CloudRegisterResult> {
+  const base = getCloudApiBase()
+  if (!base) throw new Error('BACKEND_UNREACHABLE')
+
+  let resp: Response
+  try {
+    resp = await fetch(`${base}/api/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+  } catch {
+    throw new Error('BACKEND_UNREACHABLE')
+  }
+
+  const json = await resp.json().catch(() => ({})) as CloudRegisterResult & { error?: string; message?: string }
+  if (!resp.ok) throw new Error(json.message ?? json.error ?? `HTTP ${resp.status}`)
+  return json
+}
+
 // ---- Sync -----------------------------------------------------------------
 
-/**
- * Maps the local mobile Shift into the backend's expected wire shape
- * (backend reads array-format readings and expectedTotal).
- */
 function toBackendShift(shift: Shift) {
   return {
     id: shift.id,
@@ -109,10 +148,6 @@ export interface SyncUploadResult {
   rejected: Array<{ id: string; reason: string }>
 }
 
-/**
- * Posts queued shifts to the backend. Throws on network/HTTP failure so the
- * caller can mark items PENDING/FAILED and retry later.
- */
 export async function uploadShiftsToCloud(shifts: Shift[]): Promise<SyncUploadResult> {
   const base = getCloudApiBase()
   if (!base) throw new Error('CLOUD_UNCONFIGURED')
@@ -151,4 +186,82 @@ export async function uploadShiftsToCloud(shifts: Shift[]): Promise<SyncUploadRe
     accepted: json.accepted ?? [],
     rejected: json.rejected ?? [],
   }
+}
+
+// ---- Tank readings --------------------------------------------------------
+
+export interface TankReadingEntry {
+  tankId: string
+  fuelCode: string
+  openingLevel: number
+  closingLevel: number
+  dipStock: number
+  received: number
+  notes?: string
+}
+
+export interface TankReadingRow {
+  id: string
+  stationId: string
+  companyId: string | null
+  recordedBy: string
+  recordedByName: string
+  readings: TankReadingEntry[]
+  recordedAt: string
+  notes: string | null
+  createdAt: string
+}
+
+export interface TankReadingsResult {
+  count: number
+  readings: TankReadingRow[]
+}
+
+function authHeaders(): Promise<Record<string, string>> {
+  return getCloudToken().then(token => {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers.Authorization = `Bearer ${token}`
+    return headers
+  })
+}
+
+export async function cloudGetTankReadings(stationId?: string | null, days?: number): Promise<TankReadingsResult> {
+  const base = getCloudApiBase()
+  if (!base) return { count: 0, readings: [] }
+
+  const params = new URLSearchParams()
+  if (stationId) params.set('station', stationId)
+  if (days) params.set('days', String(days))
+  const qs = params.toString()
+
+  let resp: Response
+  try {
+    resp = await fetch(`${base}/api/tank-readings${qs ? '?' + qs : ''}`, { headers: await authHeaders() })
+  } catch {
+    throw new Error('Unable to reach the server. Check your connection and try again.')
+  }
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return (await resp.json().catch(() => ({ count: 0, readings: [] }))) as TankReadingsResult
+}
+
+export async function cloudRecordTankReadings(input: {
+  stationId: string
+  readings: TankReadingEntry[]
+  notes?: string
+}): Promise<{ id: string; readingsCount: number }> {
+  const base = getCloudApiBase()
+  if (!base) throw new Error('Unable to reach the server. Check your connection and try again.')
+
+  let resp: Response
+  try {
+    resp = await fetch(`${base}/api/tank-readings`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify(input),
+    })
+  } catch {
+    throw new Error('Unable to reach the server. Check your connection and try again.')
+  }
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  return (await resp.json().catch(() => ({ id: '', readingsCount: 0 }))) as { id: string; readingsCount: number }
 }

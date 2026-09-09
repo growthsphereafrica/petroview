@@ -52,7 +52,14 @@ export default function App() {
       if (auth && (auth.attendant || auth.supervisor)) {
         const info = auth.role === 'supervisor' ? auth.supervisor : auth.attendant
         if (info) {
-          setSession({ role: auth.role, fullName: info.fullName, employeeCode: info.employeeCode })
+          setSession({
+            role: auth.role,
+            fullName: info.fullName,
+            employeeCode: info.employeeCode,
+            stationId: info.stationId ?? null,
+            stationName: undefined,
+            companyShortCode: info.companyShortCode ?? null,
+          })
         }
       }
     } catch (err) {

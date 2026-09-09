@@ -1,13 +1,17 @@
 import type { NextFunction, Request, Response } from 'express'
 import { db } from './db'
 
+export type BackendRole = 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
+
 export interface SessionClaims {
   token: string
-  role: 'attendant' | 'supervisor'
+  role: BackendRole
   userId: string
   employeeCode: string
   fullName: string
   stationId: string | null
+  companyId: string | null
+  companyShortCode: string | null
 }
 
 export interface AuthRequest extends Request {
@@ -22,7 +26,7 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
     return
   }
   const row = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token) as
-    | { token: string; role: string; userId: string; employeeCode: string; fullName: string; stationId: string | null; expiresAt: string }
+    | { token: string; role: string; userId: string; employeeCode: string; fullName: string; stationId: string | null; companyId: string | null; companyShortCode: string | null; expiresAt: string }
     | undefined
   if (!row || new Date(row.expiresAt).getTime() <= Date.now()) {
     if (row) db.prepare('DELETE FROM sessions WHERE token = ?').run(token)
@@ -31,19 +35,21 @@ export function authenticate(req: AuthRequest, res: Response, next: NextFunction
   }
   req.session = {
     token: row.token,
-    role: row.role as 'attendant' | 'supervisor',
+    role: row.role as BackendRole,
     userId: row.userId,
     employeeCode: row.employeeCode,
     fullName: row.fullName,
     stationId: row.stationId,
+    companyId: row.companyId,
+    companyShortCode: row.companyShortCode,
   }
   next()
 }
 
-export function requireRole(role: 'attendant' | 'supervisor') {
+export function requireRole(...roles: BackendRole[]) {
   return (req: AuthRequest, res: Response, next: NextFunction): void => {
-    if (req.session?.role !== role) {
-      res.status(403).json({ error: 'FORBIDDEN', message: `This endpoint requires a ${role} session.` })
+    if (!req.session || !roles.includes(req.session.role)) {
+      res.status(403).json({ error: 'FORBIDDEN', message: `This endpoint requires one of: ${roles.join(', ')}.` })
       return
     }
     next()

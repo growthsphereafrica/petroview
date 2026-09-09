@@ -3,12 +3,13 @@
  * review queue, today's numbers and recent shift activity.
  */
 
-import React from 'react'
-import { Building2, ClipboardCheck, DollarSign, Flame, History, LogOut, RefreshCw, Settings, ShieldAlert, Users, Wifi } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, History, LogOut, RefreshCw, Settings, ShieldAlert, Users, Wifi } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
 import { getStationName, PRODUCTION_STATIONS, getStationById } from '../../../core/domain/config'
 import { Badge, Card, StatusBar, TappableRow } from '../../shared/ui'
 import { formatGHS, formatLitres, formatTimeOnly } from '../../../utils/currencyFormatter'
+import { backendRecordTankReadings, backendGetTankReadings } from '../../../services/backendApiService'
 
 export const SupervisorDashboardScreen: React.FC<{
   onGoToShifts: () => void
@@ -16,12 +17,23 @@ export const SupervisorDashboardScreen: React.FC<{
   onGoToSync: () => void
   onGoToSettings: () => void
   onGoToAudit: () => void
+  onGoToTankReadings: () => void
   onOpenShift: (shiftId: string) => void
-}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onOpenShift }) => {
+}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onOpenShift }) => {
   const { supervisor, signOut } = useSupervisorSession()
   const { shifts, stats, pendingSync, loading, pushSync } = useSupervisorData()
+  const [tankReadingCount, setTankReadingCount] = useState(0)
 
   const pendingReview = stats?.pendingReviews ?? 0
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const result = await backendGetTankReadings(supervisor?.stationId, 1)
+        setTankReadingCount(result.count)
+      } catch { /* */ }
+    })()
+  }, [supervisor?.stationId])
 
   return (
     <div className="h-full flex flex-col bg-[#090d16] overflow-y-auto">
@@ -123,6 +135,21 @@ export const SupervisorDashboardScreen: React.FC<{
           </Card>
         </div>
 
+        {/* Cars served today */}
+        <Card className="p-4 bg-slate-900/90 shadow-md">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Droplets className="w-4 h-4 text-emerald-400" />
+              <p className="text-[9px] uppercase font-bold text-slate-500">Cars Served Today</p>
+            </div>
+            <span className="text-[10px] font-mono text-slate-500">{tankReadingCount} tank reading{tankReadingCount === 1 ? '' : 's'}</span>
+          </div>
+          <p className="text-lg font-black text-emerald-400 mt-1">
+            {stats?.carsServedToday ?? 0}
+          </p>
+          <p className="text-[10px] text-slate-500">transactions from closed shifts today</p>
+        </Card>
+
         {/* Quick actions */}
         <Card className="divide-y divide-slate-800/70 overflow-hidden">
           <TappableRow
@@ -146,6 +173,13 @@ export const SupervisorDashboardScreen: React.FC<{
             subtitle={pendingSync ? `${pendingSync} records queued` : 'All records synced'}
             onClick={onGoToSync}
             accent="#FF6B00"
+          />
+          <TappableRow
+            icon={<Droplets className="w-4 h-4" />}
+            title="Tank Readings"
+            subtitle={`${tankReadingCount} reading${tankReadingCount === 1 ? '' : 's'} this period`}
+            onClick={onGoToTankReadings}
+            accent="#10B981"
           />
           <TappableRow
             icon={<History className="w-4 h-4" />}

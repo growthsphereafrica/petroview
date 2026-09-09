@@ -14,8 +14,9 @@ import { SupervisorAttendantsScreen } from './screens/AttendantsScreen'
 import { SupervisorSyncScreen } from './screens/SyncScreen'
 import { SupervisorSettingsScreen } from './screens/SettingsScreen'
 import { SupervisorAuditLogScreen } from './screens/AuditLogScreen'
+import { SupervisorTankReadingsScreen } from './screens/TankReadingsScreen'
 
-type Screen = 'dashboard' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings'
+type Screen = 'dashboard' | 'tank_readings' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings'
 
 export interface ToastState {
   message: string
@@ -54,9 +55,12 @@ const SupervisorNavigator: React.FC = () => {
           onGoToSync={() => go('sync')}
           onGoToSettings={() => go('settings')}
           onGoToAudit={() => go('audit')}
+          onGoToTankReadings={() => go('tank_readings')}
           onOpenShift={openShift}
         />
       )}
+
+      {screen === 'tank_readings' && <SupervisorTankReadingsScreen onBack={() => go('dashboard')} />}
 
       {screen === 'shifts' && <SupervisorShiftsScreen onBack={() => go('dashboard')} onOpenShift={openShift} />}
 

@@ -20,6 +20,7 @@ export interface SupervisorStats {
   shiftsToday: number
   salesToday: number
   litresToday: number
+  carsServedToday: number
   pendingReviews: number
   activeAttendants: number
   approved: number
@@ -184,11 +185,16 @@ export class SupervisorService {
     const closed = all.filter(s => s.closedAt)
     const todayClosed = closed.filter(s => (s.closedAt || '').slice(0, 10) === today)
     const attendants = await attendantRepo.listActive()
+    const todayClosedIds = todayClosed.map(s => s.id)
+    const carsServedToday = todayClosedIds.length > 0
+      ? await prodDb.transactions.where('shiftId').anyOf(todayClosedIds).count()
+      : 0
 
     return {
       shiftsToday: todayShifts.length,
       salesToday: Math.round(todayClosed.reduce((a, s) => a + s.actualTotal, 0)),
       litresToday: todayClosed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
+      carsServedToday,
       pendingReviews: all.filter(s => s.status === 'CLOSED').length,
       activeAttendants: attendants.length,
       approved: closed.filter(s => s.status === 'APPROVED').length,

@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput } from 'react-native'
-import { ClipboardCheck, DollarSign, Layers, Users, CheckCircle2, History, LayoutDashboard, MapPin, QrCode } from 'lucide-react-native'
+import { ClipboardCheck, DollarSign, Droplets, Layers, Users, CheckCircle2, History, LayoutDashboard, MapPin, QrCode } from 'lucide-react-native'
 import { colors } from '../../theme'
 import { Card, Badge } from '../../components/ui'
 import { QrSyncSheet } from '../../components/QrSyncSheet'
+import { TankReadingsSheet } from './TankReadingsSheet'
 import { supervisorService } from '../../core/services/supervisorService'
 import { rollupService, type HqSummary } from '../../core/services/rollupService'
 import type { Shift, Attendant, AuditEntry } from '../../core/domain/types'
@@ -38,6 +39,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const [refreshKey, setRefreshKey] = useState(0)
   const [loading, setLoading] = useState(true)
   const [qrOpen, setQrOpen] = useState(false)
+  const [tankOpen, setTankOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -88,6 +90,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
                 onGoAttendants={() => setTab('attendants')}
                 onGoAudit={() => setTab('audit')}
                 onOpenQr={() => setQrOpen(true)}
+                onOpenTankReadings={() => setTankOpen(true)}
               />
             )}
             {tab === 'shifts' && (
@@ -124,6 +127,12 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
         ))}
       </View>
       <QrSyncSheet visible={qrOpen} onClose={() => setQrOpen(false)} onSynced={refresh} />
+      <TankReadingsSheet
+        visible={tankOpen}
+        onClose={() => setTankOpen(false)}
+        stationId={session.stationId ?? null}
+        stationName={session.stationName}
+      />
     </View>
   )
 }
@@ -140,7 +149,8 @@ const Dashboard: React.FC<{
   onGoAttendants: () => void
   onGoAudit: () => void
   onOpenQr: () => void
-}> = ({ pendingReview, openCount, approved, rejected, shifts, onGoShifts, onGoAttendants, onGoAudit, onOpenQr }) => {
+  onOpenTankReadings: () => void
+}> = ({ pendingReview, openCount, approved, rejected, shifts, onGoShifts, onGoAttendants, onGoAudit, onOpenQr, onOpenTankReadings }) => {
   const today = new Date().toISOString().slice(0, 10)
   const closedToday = shifts.filter(s => (s.closedAt ?? '').slice(0, 10) === today)
   const salesToday = closedToday.reduce((a, s) => a + s.actualTotal, 0)
@@ -182,6 +192,7 @@ const Dashboard: React.FC<{
         <Text style={styles.cardTitle}>Quick actions</Text>
         <QuickRow icon={<ClipboardCheck size={16} color={colors.emerald} />} title="Review shifts" subtitle={`${pendingReview} awaiting decision`} onPress={onGoShifts} />
         <QuickRow icon={<Users size={16} color={colors.emerald} />} title="Manage attendants" subtitle="PIN resets & registration" onPress={onGoAttendants} />
+        <QuickRow icon={<Droplets size={16} color={colors.blue} />} title="Tank readings" subtitle="Record & review daily dip levels" onPress={onOpenTankReadings} />
         <QuickRow icon={<History size={16} color={colors.emerald} />} title="Audit trail" subtitle="Review log & security events" onPress={onGoAudit} />
         <QuickRow icon={<QrCode size={16} color={colors.violet} />} title="QR code sync" subtitle="Transfer shifts offline between devices" onPress={onOpenQr} />
       </Card>

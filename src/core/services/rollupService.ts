@@ -9,6 +9,12 @@ import { shiftRepo, attendantRepo } from '../infra/repositories'
 import { prodDb } from '../infra/db'
 import type { Shift, CompanyStation, Attendant } from '../domain/types'
 
+async function countTransactionsForShifts(shiftIds: string[]): Promise<number> {
+  if (shiftIds.length === 0) return 0
+  const txns = await prodDb.transactions.where('shiftId').anyOf(shiftIds).count()
+  return txns
+}
+
 export interface StationRollup {
   stationId: string
   name: string
@@ -18,6 +24,8 @@ export interface StationRollup {
   shiftCount: number
   litresToday: number
   salesToday: number
+  carsServedToday: number
+  carsServedTotal: number
   netVariance: number
   pendingReview: number
   pendingSync: number
@@ -34,6 +42,7 @@ export interface AttendantRollup {
   shiftsClosed: number
   litres: number
   sales: number
+  carsServed: number
   variance: number
   approved: number
   rejected: number
@@ -57,6 +66,8 @@ export interface HeadOfficeSummary {
   shiftsToday: number
   litresToday: number
   salesToday: number
+  carsServedToday: number
+  carsServedTotal: number
   netVariance: number
   approved: number
   rejected: number
@@ -187,6 +198,10 @@ export class RollupService {
     const approved = closed.filter(s => s.status === 'APPROVED').length
     const rejected = closed.filter(s => s.status === 'REJECTED').length
 
+    // Cars served = total transactions across closed shifts
+    const carsServedToday = await countTransactionsForShifts(closedToday.map(s => s.id))
+    const carsServedTotal = await countTransactionsForShifts(closed.map(s => s.id))
+
     const pendingShiftSync = inRangeShifts.filter(s => s.syncStatus === 'PENDING').length
     const totalSyncUnits = inRangeShifts.length + 1
     const syncCompliancePct = Math.round(((inRangeShifts.length + 1 - pendingShiftSync) / totalSyncUnits) * 1000) / 10
@@ -209,12 +224,22 @@ export class RollupService {
         shiftCount: shifts.length,
         litresToday: siteClosed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
         salesToday: Math.round(siteClosed.reduce((a, s) => a + s.actualTotal, 0)),
+        carsServedToday: 0,
+        carsServedTotal: 0,
         netVariance: Math.round(siteClosed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
         pendingReview: siteClosed.filter(s => s.status === 'CLOSED').length,
         pendingSync: shifts.filter(s => s.syncStatus === 'PENDING').length,
         lastSync: lastSyncTimes.length ? lastSyncTimes[lastSyncTimes.length - 1] : null,
       }
     })
+
+    // Compute cars served per station
+    for (const st of stationRollups) {
+      const siteClosed = inRangeShifts.filter(s => s.stationId === st.stationId && s.closedAt)
+      const siteClosedToday = siteClosed.filter(s => (s.closedAt || '').slice(0, 10) === today)
+      st.carsServedToday = await countTransactionsForShifts(siteClosedToday.map(s => s.id))
+      st.carsServedTotal = await countTransactionsForShifts(siteClosed.map(s => s.id))
+    }
 
     // 4. Compute Attendant Staff Rollup
     const allAttendants = await prodDb.attendants.toArray()
@@ -224,8 +249,8 @@ export class RollupService {
       ? allAttendants.filter(a => a.companyId === options.companyId || (stationIdSet.size > 0 && stationIdSet.has(a.stationId)))
       : allAttendants
 
-    const attendantRollups: AttendantRollup[] = targetAttendants
-      .map(att => {
+    const attendantRollups: AttendantRollup[] = (await Promise.all(targetAttendants
+      .map(async att => {
         const shifts = inRangeShifts.filter(s => s.attendantId === att.id || s.attendantName === att.fullName)
         const closedShifts = shifts.filter(s => s.closedAt)
         const totalSales = Math.round(closedShifts.reduce((a, s) => a + s.actualTotal, 0))
@@ -245,6 +270,7 @@ export class RollupService {
           shiftsClosed: closedShifts.length,
           litres: totalLitres,
           sales: totalSales,
+          carsServed: await countTransactionsForShifts(closedShifts.map(s => s.id)),
           variance: totalVar,
           approved: closedShifts.filter(s => s.status === 'APPROVED').length,
           rejected: closedShifts.filter(s => s.status === 'REJECTED').length,
@@ -256,8 +282,7 @@ export class RollupService {
           creditTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
           voucherTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
         }
-      })
-      .sort((a, b) => b.sales - a.sales)
+      }))).sort((a, b) => b.sales - a.sales)
 
     return {
       generatedAt: new Date().toISOString(),
@@ -270,6 +295,8 @@ export class RollupService {
       shiftsToday: inRangeShifts.filter(s => (s.openedAt || '').slice(0, 10) === today).length,
       litresToday,
       salesToday,
+      carsServedToday,
+      carsServedTotal,
       netVariance,
       approved,
       rejected,

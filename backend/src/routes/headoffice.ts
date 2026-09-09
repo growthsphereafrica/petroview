@@ -1,7 +1,6 @@
 import { Router } from 'express'
 import { db, deserializeShift, type ShiftRow } from '../db'
-import { authenticate, requireRole } from '../middleware'
-import { STATIONS } from '../config'
+import { authenticate, requireRole, type AuthRequest } from '../middleware'
 
 export const headOfficeRouter = Router()
 
@@ -14,17 +13,34 @@ interface StationRow {
   stationId?: string
 }
 
-const allShifts = (): ShiftRow[] => db.prepare('SELECT * FROM shifts ORDER BY openedAt DESC').all() as ShiftRow[]
+const allShifts = (companyId?: string | null): ShiftRow[] => {
+  if (companyId) {
+    // Filter shifts by station belonging to company
+    const stationIds = (db.prepare('SELECT id FROM companyStations WHERE companyId = ?').all(companyId) as { id: string }[]).map(s => s.id)
+    if (stationIds.length === 0) return []
+    const placeholders = stationIds.map(() => '?').join(',')
+    return db.prepare(`SELECT * FROM shifts WHERE stationId IN (${placeholders}) ORDER BY openedAt DESC`).all(...stationIds) as ShiftRow[]
+  }
+  return db.prepare('SELECT * FROM shifts ORDER BY openedAt DESC').all() as ShiftRow[]
+}
 
 const litresOf = (row: ShiftRow): number =>
   (JSON.parse(row.sales) as Array<{ litres: number }>).reduce((x, y) => x + y.litres, 0)
 
-headOfficeRouter.get('/summary', authenticate, requireRole('supervisor'), (req, res) => {
+const countTransactions = (shiftIds: string[]): number => {
+  if (shiftIds.length === 0) return 0
+  const placeholders = shiftIds.map(() => '?').join(',')
+  const result = db.prepare(`SELECT COUNT(*) AS c FROM transactions WHERE shiftId IN (${placeholders})`).get(...shiftIds) as { c: number }
+  return result.c
+}
+
+headOfficeRouter.get('/summary', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
   const days = req.query.days ? parseInt(String(req.query.days), 10) : null
   const today = startOfTodayIso()
   const cutoff = days != null ? new Date(Date.now() - days * 86_400_000).toISOString() : null
 
-  const all = allShifts()
+  const companyId = req.session?.role === 'superadmin' ? null : req.session?.companyId
+  const all = allShifts(companyId)
   const inRange = cutoff ? all.filter(r => r.openedAt >= cutoff) : all
   const closed = inRange.filter(r => r.closedAt)
   const closedToday = closed.filter(r => (r.closedAt || '').slice(0, 10) === today)
@@ -38,11 +54,25 @@ headOfficeRouter.get('/summary', authenticate, requireRole('supervisor'), (req, 
   const pendingSync = inRange.filter(r => r.syncStatus === 'PENDING').length
   const syncCompliancePct = Math.round(((inRange.length - pendingSync) / (inRange.length || 1)) * 1000) / 10
 
-  const stations = STATIONS.map(st => {
+  // Cars served = total number of transactions (each transaction = 1 car served)
+  const closedShiftIds = closed.map(r => r.id)
+  const carsServedToday = countTransactions(closedToday.map(r => r.id))
+  const carsServedTotal = countTransactions(closedShiftIds)
+
+  // Fetch stations
+  let stationRows: Array<{ id: string; name: string; code: string; region: string; location: string; companyId?: string }>
+  if (companyId) {
+    stationRows = db.prepare('SELECT * FROM companyStations WHERE companyId = ?').all(companyId) as typeof stationRows
+  } else {
+    stationRows = db.prepare('SELECT * FROM companyStations').all() as typeof stationRows
+  }
+
+  const stations = stationRows.map(st => {
     const shifts = inRange.filter(r => r.stationId === st.id)
     const siteClosed = shifts.filter(r => r.closedAt)
     const siteClosedToday = siteClosed.filter(r => (r.closedAt || '').slice(0, 10) === today)
     const times = shifts.map(r => r.updatedAt).filter(Boolean).sort()
+    const siteShiftIds = siteClosed.map(r => r.id)
     return {
       stationId: st.id,
       name: st.name,
@@ -52,6 +82,8 @@ headOfficeRouter.get('/summary', authenticate, requireRole('supervisor'), (req, 
       shiftCount: shifts.length,
       litresToday: siteClosedToday.reduce((a, r) => a + litresOf(r), 0),
       salesToday: Math.round(siteClosedToday.reduce((a, r) => a + r.actualTotal, 0)),
+      carsServedToday: countTransactions(siteClosedToday.map(r => r.id)),
+      carsServedTotal: countTransactions(siteShiftIds),
       netVariance: Math.round(siteClosed.reduce((a, r) => a + r.variance, 0) * 100) / 100,
       pendingReview: siteClosed.filter(r => r.status === 'CLOSED').length,
       pendingSync: shifts.filter(r => r.syncStatus === 'PENDING').length,
@@ -63,11 +95,13 @@ headOfficeRouter.get('/summary', authenticate, requireRole('supervisor'), (req, 
     generatedAt: new Date().toISOString(),
     currency: 'GHS',
     rangeDays: days,
-    stationCount: STATIONS.length,
+    stationCount: stationRows.length,
     totalShifts: inRange.length,
     shiftsToday: inRange.filter(r => (r.openedAt || '').slice(0, 10) === today).length,
     litresToday,
     salesToday,
+    carsServedToday,
+    carsServedTotal,
     netVariance,
     approved,
     rejected,
@@ -86,13 +120,14 @@ function buildAttendantRollups(inRange: ShiftRow[]): Array<Record<string, unknow
     .map(att => {
       const shifts = inRange.filter(s => s.attendantId === att.id)
       const closed = shifts.filter(s => s.closedAt)
+      const closedShiftIds = closed.map(s => s.id)
       return {
         employeeCode: att.employeeCode ?? att.id,
         name: att.fullName ?? att.id,
-        stationName: STATIONS.find(st => st.id === att.stationId)?.name ?? att.stationId ?? '',
         shiftsClosed: closed.length,
         litres: closed.reduce((a, s) => a + litresOf(s), 0),
         sales: Math.round(closed.reduce((a, s) => a + s.actualTotal, 0)),
+        carsServed: countTransactions(closedShiftIds),
         variance: Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
         approved: closed.filter(s => s.status === 'APPROVED').length,
       }

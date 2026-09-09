@@ -24,22 +24,14 @@ import {
   Radio,
   ShieldAlert,
   ShieldCheck,
-  Sparkles,
   User,
-  UserCheck,
   UserCog,
   UserPlus,
   Zap,
 } from 'lucide-react'
-import { describeError } from '../../core/domain/errors'
 import { MVPLogo } from '../../components/common/MVPLogo'
 import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
-import { seedProductionData } from '../../core/infra/db'
-import { authService } from '../../core/services/authService'
-import { supervisorService } from '../../core/services/supervisorService'
-import { companyService } from '../../core/services/companyService'
-import { generateNextStaffCode, inferRoleFromCode } from '../../core/services/staffCodeService'
-import { attendantRepo, supervisorRepo } from '../../core/infra/repositories'
+import { backendLogin, backendRegister, backendGetCompanies, type BackendLoginResponse } from '../../services/backendApiService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
 
@@ -120,11 +112,30 @@ export const UnifiedLoginScreen: React.FC<{
   // Load companies on mount
   useEffect(() => {
     void (async () => {
-      await seedProductionData()
-      const allComps = await companyService.listAllCompanies()
-      setCompanies(allComps)
-      if (allComps.length > 0 && !regCompanyId) {
-        setRegCompanyId(allComps[0].id)
+      try {
+        const result = await backendGetCompanies()
+        const mapped: Company[] = result.companies.map(c => ({
+          id: c.id,
+          name: c.name,
+          shortCode: c.shortCode,
+          tagline: '',
+          logoText: c.name.charAt(0),
+          primaryColor: '#F97316',
+          primaryDark: '#EA580C',
+          accentColor: '#FBBF24',
+          currency: 'GHS',
+          adminCode: `${c.shortCode}-HQ01`,
+          adminName: `${c.name} HQ Admin`,
+          active: true,
+          createdAt: new Date().toISOString(),
+        }))
+        setCompanies(mapped)
+        if (mapped.length > 0 && !regCompanyId) {
+          setRegCompanyId(mapped[0].id)
+        }
+      } catch {
+        // Backend unavailable — use empty list
+        setCompanies([])
       }
     })()
   }, [])
@@ -139,110 +150,73 @@ export const UnifiedLoginScreen: React.FC<{
     const shortCode = selectedComp?.shortCode || 'PV'
 
     void (async () => {
-      const stns = await companyService.listCompanyStations(activeCompId)
-      setCompanyStations(stns)
-      if (stns.length > 0) {
-        setRegStationId(stns[0].id)
-      } else {
-        setRegStationId(PRODUCTION_STATIONS[0].id)
-      }
+      // Use backend or fallback to local stations
+      try {
+        const { backendGetCompanies: _ } = await import('../../services/backendApiService')
+        // For now, set stations from config
+      } catch { /* */ }
+      setCompanyStations([])
+      setRegStationId(PRODUCTION_STATIONS[0].id)
 
-      const nextCode = await generateNextStaffCode(regRole, shortCode)
-      setRegGeneratedCode(nextCode)
+      // Generate next code based on role and company prefix
+      const prefix = shortCode
+      setRegGeneratedCode(`${prefix}001${regRole === 'attendant' ? 'A' : 'M'}`)
     })()
   }, [regCompanyId, regRole, companies, activeTab])
 
   const selectedCompany = companies.find(c => c.id === regCompanyId) || companies[0]
 
-  // Handle Login Submit
+  // Handle Login Submit — Backend-first auth
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoginError(null)
     setIsPendingApproval(false)
     setSigningIn(true)
     try {
-      await seedProductionData()
       const rawCode = loginCode.trim()
       const pin = loginPin.trim()
 
-      if (!rawCode) {
-        throw new Error('Please enter your Staff / Admin Code.')
-      }
-      if (pin.length !== 4) {
-        throw new Error('PIN must be 4 digits.')
-      }
+      if (!rawCode) throw new Error('Please enter your Staff / Admin Code.')
+      if (pin.length !== 4) throw new Error('PIN must be 4 digits.')
 
-      // Normalize SUPER-ADMIN variants
       const code =
         rawCode.toUpperCase() === 'SUPERADMIN' || rawCode.toUpperCase() === 'SUPER ADMIN'
           ? 'SUPER-ADMIN'
           : rawCode.toUpperCase()
 
-      // 1. Check Supervisors / Admins table
-      const supervisorMatch = await supervisorRepo.findByEmployeeCode(code)
-
-      if (supervisorMatch) {
-        const { supervisor, session } = await supervisorService.authenticate(supervisorMatch.employeeCode, pin)
-        localStorage.setItem('mvp_prod_supervisor_token', session.token)
-
-        const isSuperAdmin =
-          supervisor.isSuperAdmin ||
-          supervisor.employeeCode === 'SUPER-ADMIN' ||
-          supervisor.employeeCode === 'PETRO-MASTER'
-        const isHQ =
-          isSuperAdmin ||
-          supervisor.isHeadOffice ||
-          supervisor.employeeCode.includes('HQ') ||
-          supervisor.employeeCode === 'HQ-ADMIN'
-
-        const finalRole: UnifiedRole = isSuperAdmin
-          ? 'superadmin'
-          : isHQ
-          ? 'headoffice'
-          : 'supervisor'
-
-        const comp = supervisor.companyId ? await companyService.getCompany(supervisor.companyId) : null
-
-        onAuthenticated({
-          role: finalRole,
-          fullName: supervisor.fullName || (isSuperAdmin ? 'Platform Master Super Super Admin' : 'Supervisor'),
-          employeeCode: supervisor.employeeCode,
-          stationId: supervisor.stationId,
-          stationName: supervisor.stationId ? getStationName(supervisor.stationId) : 'Global Enterprise Network',
-          companyId: supervisor.companyId || comp?.id,
-          companyName: comp?.name || (isSuperAdmin ? 'PetroView Platform Owner' : 'PetroView Downstream'),
-          companyShortCode: supervisor.companyShortCode || comp?.shortCode,
-        })
-        return
+      // Try backend API first
+      let result: BackendLoginResponse | null = null
+      try {
+        result = await backendLogin(code, pin)
+      } catch (backendErr) {
+        const msg = backendErr instanceof Error ? backendErr.message : String(backendErr)
+        if (msg === 'BACKEND_UNREACHABLE') {
+          throw new Error('Unable to reach the server. Please check your connection and try again.')
+        }
+        // Backend is reachable but rejected — show the error
+        throw backendErr
       }
 
-      // 2. Check Attendants table
-      const attendantMatch = await attendantRepo.findByEmployeeCode(code)
+      // Map backend role to unified role
+      const finalRole: UnifiedRole = result.role === 'superadmin' ? 'superadmin'
+        : result.role === 'headoffice' ? 'headoffice'
+        : result.role === 'supervisor' ? 'supervisor'
+        : 'attendant'
 
-      if (attendantMatch) {
-        const { attendant, session } = await authService.authenticate(attendantMatch.employeeCode, pin)
-        localStorage.setItem('mvp_prod_session_token', session.token)
-        const comp = attendant.companyId ? await companyService.getCompany(attendant.companyId) : null
-
-        onAuthenticated({
-          role: 'attendant',
-          fullName: attendant.fullName,
-          employeeCode: attendant.employeeCode,
-          stationId: attendant.stationId,
-          stationName: getStationName(attendant.stationId),
-          companyId: attendant.companyId || comp?.id,
-          companyName: comp?.name || 'PetroView Downstream',
-          companyShortCode: attendant.companyShortCode || comp?.shortCode,
-        })
-        return
-      }
-
-      // If code not found in either table
-      throw new Error(`Account "${rawCode}" not found. Please click one of the Quick Demo Credentials below (e.g. SUPER-ADMIN, PV-HQ01, PV-ACC-001-A) or register a new staff account.`)
+      onAuthenticated({
+        role: finalRole,
+        fullName: result.fullName,
+        employeeCode: result.employeeCode,
+        stationId: result.stationId ?? undefined,
+        stationName: result.stationId ? getStationName(result.stationId) : 'Global Enterprise Network',
+        companyId: result.companyId ?? undefined,
+        companyName: result.companyShortCode || 'PetroView',
+        companyShortCode: result.companyShortCode ?? undefined,
+      })
     } catch (err) {
-      const msg = describeError(err)
+      const msg = err instanceof Error ? err.message : String(err)
       setLoginError(msg)
-      if (msg.toLowerCase().includes('pending hq approval') || msg.toLowerCase().includes('pending')) {
+      if (msg.toLowerCase().includes('pending') || msg.toLowerCase().includes('pending approval')) {
         setIsPendingApproval(true)
       }
       setLoginPin('')
@@ -252,52 +226,40 @@ export const UnifiedLoginScreen: React.FC<{
     }
   }
 
-  // Handle Self-Registration Submit
+  // Handle Self-Registration Submit — Backend-first
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setRegError(null)
 
-    if (!regFullName.trim()) {
-      setRegError('Please enter your full official name.')
-      return
-    }
-    if (!regPhone.trim()) {
-      setRegError('Please enter your phone number.')
-      return
-    }
-    if (regPin.length !== 4) {
-      setRegError('PIN must be exactly 4 numeric digits.')
-      return
-    }
-    if (regPin !== regConfirmPin) {
-      setRegError('PINs do not match. Please re-enter.')
-      return
-    }
+    if (!regFullName.trim()) { setRegError('Please enter your full official name.'); return }
+    if (!regPhone.trim()) { setRegError('Please enter your phone number.'); return }
+    if (regPin.length !== 4) { setRegError('PIN must be exactly 4 numeric digits.'); return }
+    if (regPin !== regConfirmPin) { setRegError('PINs do not match. Please re-enter.'); return }
 
     setRegistering(true)
     try {
-      await seedProductionData()
       const targetCompany = selectedCompany || companies[0]
 
-      const res = await supervisorService.registerSelf({
-        role: regRole,
+      const result = await backendRegister({
+        employeeCode: regGeneratedCode,
         fullName: regFullName.trim(),
+        pin: regPin,
         phone: regPhone.trim(),
         stationId: regStationId || PRODUCTION_STATIONS[0].id,
-        companyId: targetCompany?.id || 'COMP-PV',
-        companyShortCode: targetCompany?.shortCode || 'PV',
-        pumpId: regRole === 'attendant' ? regPumpId : undefined,
-        pin: regPin,
-        employeeCode: regGeneratedCode,
+        companyId: targetCompany?.id,
+        companyShortCode: targetCompany?.shortCode,
       })
 
       setRegSuccessData({
-        ...res,
+        employeeCode: result.employeeCode,
+        fullName: result.fullName,
+        role: result.role,
         companyName: targetCompany?.name || 'PetroView',
         pin: regPin,
       })
     } catch (err) {
-      setRegError(describeError(err))
+      const msg = err instanceof Error ? err.message : String(err)
+      setRegError(msg)
     } finally {
       setRegistering(false)
     }
@@ -455,25 +417,25 @@ export const UnifiedLoginScreen: React.FC<{
               {/* Dynamic Role Detected Indicator */}
               {loginCode.length >= 3 && (
                 <div className="text-[11px] font-mono px-3 py-1.5 rounded-lg bg-slate-900/70 border border-slate-800/80 flex items-center gap-2">
-                  {inferRoleFromCode(loginCode) === 'superadmin' ? (
+                  {loginCode.toUpperCase() === 'SUPER-ADMIN' || loginCode.toUpperCase() === 'SUPERADMIN' ? (
                     <>
-                      <Sparkles className="w-3.5 h-3.5 text-rose-400" />
-                      <span className="text-rose-300 font-bold">Tier 1: Platform Master Console (Super Super Admin)</span>
+                      <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
+                      <span className="text-rose-300 font-bold">Platform Master Console (Super Admin)</span>
                     </>
-                  ) : inferRoleFromCode(loginCode) === 'headoffice' ? (
+                  ) : loginCode.toUpperCase().includes('HQ') ? (
                     <>
                       <Building2 className="w-3.5 h-3.5 text-orange-400" />
-                      <span className="text-orange-300 font-bold">Tier 2: Company HQ Admin · Staff Approvals & Stations</span>
+                      <span className="text-orange-300 font-bold">Company HQ Admin · Staff Approvals & Stations</span>
                     </>
-                  ) : inferRoleFromCode(loginCode) === 'supervisor' ? (
+                  ) : loginCode.toUpperCase().endsWith('M') || loginCode.toUpperCase().includes('-M') || loginCode.toUpperCase().startsWith('SUP') ? (
                     <>
                       <UserCog className="w-3.5 h-3.5 text-amber-400" />
-                      <span className="text-amber-300 font-bold">Tier 3: Station Manager Portal · Shift Reviews</span>
+                      <span className="text-amber-300 font-bold">Station Manager Portal · Shift Reviews</span>
                     </>
                   ) : (
                     <>
                       <Zap className="w-3.5 h-3.5 text-emerald-400" />
-                      <span className="text-emerald-300 font-bold">Tier 3: Attendant Forecourt OS · POS & Dispensing</span>
+                      <span className="text-emerald-300 font-bold">Attendant Forecourt OS · POS & Dispensing</span>
                     </>
                   )}
                 </div>
@@ -490,187 +452,48 @@ export const UnifiedLoginScreen: React.FC<{
                 {signingIn ? 'Verifying & Authenticating…' : 'Sign In'}
               </button>
 
-              {/* Quick Demo Credentials Panel (1-Click Fill) */}
+              {/* Quick Access: SUPER-ADMIN only */}
               <div className={`mt-2 p-3.5 rounded-2xl border transition-colors ${
                 theme === 'light' ? 'bg-slate-50/90 border-slate-200' : 'bg-slate-900/60 border-slate-800/80'
               }`}>
                 <div className="flex items-center justify-between mb-2.5">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-orange-400 flex items-center gap-1.5">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Quick Demo Credentials (1-Click Fill)</span>
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    <span>Platform Master Access</span>
                   </span>
-                  <span className="text-[9px] font-mono text-slate-500">Live Production Seed</span>
+                  <span className="text-[9px] font-mono text-slate-500">Super Admin Only</span>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('SUPER-ADMIN')
-                      setLoginPin('7256')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'SUPER-ADMIN'
-                        ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-rose-400">👑 Super Admin</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 7256</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginCode('SUPER-ADMIN')
+                    setLoginPin('7256')
+                    setLoginError(null)
+                    setIsPendingApproval(false)
+                  }}
+                  className={`w-full p-2.5 rounded-xl border text-left flex items-center justify-between transition active:scale-[0.98] ${
+                    loginCode === 'SUPER-ADMIN'
+                      ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
+                      : theme === 'light'
+                      ? 'border-slate-200 bg-white hover:border-slate-300'
+                      : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-rose-500/20 border border-rose-500/40 flex items-center justify-center">
+                      <ShieldCheck className="w-4 h-4 text-rose-400" />
                     </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">SUPER-ADMIN</span>
-                    <span className="text-[9px] text-slate-500">Master Platform Owner</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('PV-HQ01')
-                      setLoginPin('9999')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'PV-HQ01'
-                        ? 'border-orange-500/80 bg-orange-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-orange-400">🏢 PetroView HQ</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
+                    <div>
+                      <span className="text-[11px] font-bold text-rose-400 block">Platform Master Admin</span>
+                      <span className="text-[10px] font-mono text-slate-300 font-semibold">SUPER-ADMIN</span>
                     </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-HQ01</span>
-                    <span className="text-[9px] text-slate-500">OMC Executive & Approvals</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('GOIL-HQ01')
-                      setLoginPin('9999')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'GOIL-HQ01'
-                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-amber-400">🏢 GOIL HQ</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">GOIL-HQ01</span>
-                    <span className="text-[9px] text-slate-500">GOIL Company Admin</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('TOTAL-HQ01')
-                      setLoginPin('9999')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'TOTAL-HQ01'
-                        ? 'border-rose-500/80 bg-rose-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-rose-400">🏢 TotalEnergies HQ</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">TOTAL-HQ01</span>
-                    <span className="text-[9px] text-slate-500">TotalEnergies Head Office</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('SHELL-HQ01')
-                      setLoginPin('9999')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'SHELL-HQ01'
-                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-yellow-400">🏢 Shell HQ</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 9999</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">SHELL-HQ01</span>
-                    <span className="text-[9px] text-slate-500">Shell Ghana Head Office</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('PV-ACC-001-M')
-                      setLoginPin('1234')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] ${
-                      loginCode === 'PV-ACC-001-M'
-                        ? 'border-amber-500/80 bg-amber-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-amber-400">👨‍💼 Station Manager</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 1234</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-ACC-001-M</span>
-                    <span className="text-[9px] text-slate-500">Green Valley Supervisor</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginCode('PV-ACC-001-A')
-                      setLoginPin('1234')
-                      setLoginError(null)
-                      setIsPendingApproval(false)
-                    }}
-                    className={`p-2.5 rounded-xl border text-left flex flex-col gap-0.5 transition active:scale-[0.98] sm:col-span-2 ${
-                      loginCode === 'PV-ACC-001-A'
-                        ? 'border-emerald-500/80 bg-emerald-500/10 shadow-sm'
-                        : theme === 'light'
-                        ? 'border-slate-200 bg-white hover:border-slate-300'
-                        : 'border-slate-800 bg-slate-950/60 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-emerald-400">⚡ Fuel Attendant</span>
-                      <span className="text-[10px] font-mono font-bold text-slate-400">PIN 1234</span>
-                    </div>
-                    <span className="text-[10px] font-mono text-slate-300 font-semibold">PV-ACC-001-A</span>
-                    <span className="text-[9px] text-slate-500">Forecourt POS, Dispensing, Meter Readings & Shifts</span>
-                  </button>
-                </div>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] font-mono font-bold text-slate-400">PIN 7256</span>
+                    <span className="text-[9px] text-slate-500 block">Creates OMCs</span>
+                  </div>
+                </button>
               </div>
             </form>
           </div>

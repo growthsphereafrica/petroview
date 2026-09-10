@@ -50,10 +50,11 @@ export default function App() {
       await seedProductionData()
       const auth = await mobileAuth.restore()
       if (auth && (auth.attendant || auth.supervisor)) {
-        const info =
-          auth.role === 'supervisor' || auth.role === 'headoffice' || auth.role === 'superadmin'
-            ? auth.supervisor
-            : auth.attendant
+        if (auth.role === 'superadmin' || auth.role === 'headoffice') {
+          await mobileAuth.logout()
+          return
+        }
+        const info = auth.role === 'supervisor' ? auth.supervisor : auth.attendant
         if (info) {
           setSession({
             role: auth.role,

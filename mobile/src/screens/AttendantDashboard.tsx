@@ -52,10 +52,28 @@ export const AttendantDashboard: React.FC<{
     let active = true
     async function init() {
       try {
-        const { findAttendantByCode, getActiveShiftForAttendant, pendingSyncCount } = await import(
+        const { findAttendantByCode, upsertAttendant, getActiveShiftForAttendant, pendingSyncCount } = await import(
           '../core/infra/repositories'
         )
-        const att = await findAttendantByCode(session.employeeCode)
+        let att = await findAttendantByCode(session.employeeCode)
+        if (!att && active) {
+          att = {
+            id: `att-${session.employeeCode.toLowerCase()}`,
+            employeeCode: session.employeeCode,
+            fullName: session.fullName,
+            pinSalt: '',
+            pinHash: '',
+            pumpId: null,
+            stationId: session.stationId ?? '',
+            companyShortCode: session.companyShortCode ?? undefined,
+            approvalStatus: 'APPROVED',
+            active: true,
+            failedAttempts: 0,
+            lockoutUntil: null,
+            createdAt: new Date().toISOString(),
+          }
+          await upsertAttendant(att)
+        }
         if (att && active) {
           setAttendantId(att.id)
           const [curShift, pending] = await Promise.all([
@@ -73,7 +91,7 @@ export const AttendantDashboard: React.FC<{
     }
     void init()
     return () => { active = false }
-  }, [session.employeeCode])
+  }, [session.employeeCode, session.fullName, session.stationId, session.companyShortCode])
 
   const refresh = useCallback(async () => {
     if (!attendantId) return
@@ -230,9 +248,26 @@ export const AttendantDashboard: React.FC<{
           try {
             setOpenModal(false)
             setError(null)
-            const { findAttendantByCode } = await import('../core/infra/repositories')
-            const att = await findAttendantByCode(session.employeeCode)
-            if (!att) return
+            const { findAttendantByCode, upsertAttendant } = await import('../core/infra/repositories')
+            let att = await findAttendantByCode(session.employeeCode)
+            if (!att) {
+              att = {
+                id: `att-${session.employeeCode.toLowerCase()}`,
+                employeeCode: session.employeeCode,
+                fullName: session.fullName,
+                pinSalt: '',
+                pinHash: '',
+                pumpId: null,
+                stationId: session.stationId ?? '',
+                companyShortCode: session.companyShortCode ?? undefined,
+                approvalStatus: 'APPROVED',
+                active: true,
+                failedAttempts: 0,
+                lockoutUntil: null,
+                createdAt: new Date().toISOString(),
+              }
+              await upsertAttendant(att)
+            }
             setAttendantId(att.id)
             await shiftService.openShift({
               attendant: att,

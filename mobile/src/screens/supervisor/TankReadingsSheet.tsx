@@ -70,7 +70,7 @@ export const TankReadingsSheet: React.FC<{
 
   const submit = async () => {
     if (!stationId) {
-      setError('No station is linked to this account. Contact your OMC head office.')
+      setError('No station is linked to this account. Contact your OMC HQ Admin.')
       return
     }
     const validEntries = entries.filter(e => e.tankId.trim().length > 0)

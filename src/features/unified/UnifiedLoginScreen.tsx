@@ -1,8 +1,8 @@
 /**
  * Unified Authentication & Multi-Tenant Self-Registration Gateway.
  * - 3-Tier Multi-Tenant architecture:
- *   1. Tier 1: Platform Master Super Super Admin (SUPER-ADMIN · PIN 7256)
- *   2. Tier 2: Company HQ Admin (e.g. GOIL-HQ01, PV-HQ01, TOT-HQ01 · PIN 9999)
+ *   1. Tier 1: Super Admin (SUPER-ADMIN · PIN 7256)
+ *   2. Tier 2: OMC HQ Admin (e.g. GOIL-HQ01, PV-HQ01, TOT-HQ01 · PIN 9999)
  *   3. Tier 3: Station Managers & Fuel Attendants with company-scoped sequential IDs
  * - Dynamic OMC selection and company-scoped station branches
  * - Automatic company-prefixed sequential staff codes (e.g. GOIL001A, GOIL002M, PV001A)
@@ -440,11 +440,11 @@ export const UnifiedLoginScreen: React.FC<{
                 <div className="rounded-2xl bg-amber-500/10 border border-amber-500/40 p-4 text-amber-200 flex flex-col gap-2 animate-in fade-in duration-200">
                   <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
                     <Clock className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
-                    <span>Account Pending Company HQ Approval</span>
+                    <span>Account Pending OMC HQ Admin Approval</span>
                   </div>
                   <p className="text-[11px] leading-relaxed text-amber-200/90">
-                    Your registration has been submitted and is currently waiting in your <strong>Company HQ Approval Queue</strong>.
-                    Once approved by your company administrator, you will be able to sign in immediately.
+                    Your registration has been submitted and is currently waiting in your <strong>OMC HQ Admin Approval Queue</strong>.
+                    Once approved by your OMC HQ Admin, you will be able to sign in immediately.
                   </p>
                 </div>
               )}
@@ -463,12 +463,12 @@ export const UnifiedLoginScreen: React.FC<{
                   {loginCode.toUpperCase() === 'SUPER-ADMIN' || loginCode.toUpperCase() === 'SUPERADMIN' ? (
                     <>
                       <ShieldCheck className="w-3.5 h-3.5 text-rose-400" />
-                      <span className="text-rose-300 font-bold">Platform Master Console (Super Admin)</span>
+                      <span className="text-rose-300 font-bold">Super Admin Console · Platform Owner</span>
                     </>
                   ) : loginCode.toUpperCase().includes('HQ') ? (
                     <>
                       <Building2 className="w-3.5 h-3.5 text-orange-400" />
-                      <span className="text-orange-300 font-bold">Company HQ Admin · Staff Approvals & Stations</span>
+                      <span className="text-orange-300 font-bold">OMC HQ Admin · Staff Approvals & Stations</span>
                     </>
                   ) : loginCode.toUpperCase().endsWith('M') || loginCode.toUpperCase().includes('-M') || loginCode.toUpperCase().startsWith('SUP') ? (
                     <>
@@ -504,7 +504,7 @@ export const UnifiedLoginScreen: React.FC<{
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <UserPlus className="w-4 h-4 text-orange-400" />
-                <span className="text-xs font-bold text-slate-200">Staff Onboarding (Requires Company HQ Approval)</span>
+                <span className="text-xs font-bold text-slate-200">Staff Onboarding (Requires OMC HQ Admin Approval)</span>
               </div>
             </div>
 
@@ -728,7 +728,7 @@ export const UnifiedLoginScreen: React.FC<{
                 <ShieldCheck className="w-3.5 h-3.5 text-orange-400 shrink-0" />
                 <span>
                   All new staff accounts are created in <strong>Pending</strong> state and must be authorized in the{' '}
-                  <strong className="text-white">{selectedCompany?.name || 'Company HQ'}</strong> Dashboard before operating.
+                  <strong className="text-white">{selectedCompany?.name ? `${selectedCompany.name} (OMC HQ Admin)` : 'OMC HQ Admin'}</strong> Dashboard before operating.
                 </span>
               </p>
 
@@ -746,7 +746,7 @@ export const UnifiedLoginScreen: React.FC<{
               >
                 {registering && <span className="w-4 h-4 border-2 border-white/40 border-t-white rounded-full animate-spin" />}
                 <UserPlus className="w-4 h-4" />
-                {registering ? 'Submitting to Company HQ…' : `Register Staff Account for ${selectedCompany?.shortCode || 'HQ'} Approval`}
+                {registering ? 'Submitting to OMC HQ Admin…' : `Register Staff Account for ${selectedCompany?.shortCode ? `${selectedCompany.shortCode} OMC HQ Admin` : 'OMC HQ Admin'} Approval`}
               </button>
             </form>
           </div>
@@ -764,7 +764,7 @@ export const UnifiedLoginScreen: React.FC<{
             <div>
               <h3 className="text-lg font-extrabold text-white">Registration Submitted!</h3>
               <p className="text-xs text-slate-400 mt-1">
-                Your profile has been created under <strong>{regSuccessData.companyName}</strong> and queued for HQ administrator authorization.
+                Your profile has been created under <strong>{regSuccessData.companyName}</strong> and queued for OMC HQ Admin authorization.
               </p>
             </div>
 
@@ -782,8 +782,8 @@ export const UnifiedLoginScreen: React.FC<{
             <div className="w-full rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 text-left flex items-start gap-2">
               <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <p className="text-[11px] text-amber-200/90 leading-tight">
-                <strong>Next Step:</strong> Contact your {regSuccessData.companyName} Head Office Administrator to approve ID{' '}
-                <span className="font-mono font-bold text-white">{regSuccessData.employeeCode}</span> in the HQ Dashboard.
+                <strong>Next Step:</strong> Contact your {regSuccessData.companyName} OMC HQ Admin to approve ID{' '}
+                <span className="font-mono font-bold text-white">{regSuccessData.employeeCode}</span> in the OMC HQ Admin Dashboard.
               </p>
             </div>
 

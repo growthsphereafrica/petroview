@@ -474,7 +474,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
         resetPinTarget.id,
         resetPinTarget.role,
         newPinValue,
-        'Super Super Admin',
+        'Super Admin',
       )
       setActionNotice({
         text: `Successfully reset PIN for ${resetPinTarget.name} (${resetPinTarget.code}) to ${newPinValue}`,
@@ -506,7 +506,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
           stationId: editStaffTarget.stationId,
           active: editStaffTarget.active,
         },
-        'Super Super Admin',
+        'Super Admin',
       )
       setActionNotice({ text: `Updated staff profile for ${editStaffTarget.name}`, type: 'success' })
       setEditStaffTarget(null)
@@ -521,7 +521,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
   const handleDeleteStaff = async (id: string, role: 'attendant' | 'supervisor', name: string, code: string) => {
     if (!window.confirm(`Are you sure you want to permanently delete staff member ${name} (${code})?`)) return
     try {
-      await supervisorService.deleteStaff(id, role, 'Super Super Admin')
+      await supervisorService.deleteStaff(id, role, 'Super Admin')
       setActionNotice({ text: `Deleted ${role} ${name} (${code})`, type: 'success' })
       void loadData()
       setTimeout(() => setActionNotice(null), 4000)
@@ -608,9 +608,9 @@ export const SuperSuperAdminDashboard: React.FC = () => {
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h2 className="text-base font-black text-white">PetroView Platform Master Console</h2>
+              <h2 className="text-base font-black text-white">Super Admin Console (Platform Master)</h2>
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold uppercase">
-                Tier 1 Super Super Admin
+                Tier 1 Super Admin
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -735,7 +735,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                   <span>Onboarded Oil Marketing Companies (OMCs)</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Super Super Admin can onboard, edit details, provision credentials, and manage branches for any OMC.
+                  Super Admin can onboard, edit details, provision credentials, and manage branches for any OMC.
                 </p>
               </div>
 
@@ -912,7 +912,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                   <span>Platform-Wide Staff Management</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Super Super Admin can edit staff profiles, reset 4-digit PINs, and delete staff across all OMCs.
+                  Super Admin can edit staff profiles, reset 4-digit PINs, and delete staff across all OMCs.
                 </p>
               </div>
 

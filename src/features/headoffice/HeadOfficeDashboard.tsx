@@ -490,10 +490,10 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
           </div>
           <div>
             <p className="text-sm font-extrabold text-white flex items-center gap-1.5">
-              <span>{companyName} HQ Console</span> <Flame className="w-3.5 h-3.5 text-orange-400" />
+              <span>{companyName} OMC HQ Admin Console</span> <Flame className="w-3.5 h-3.5 text-orange-400" />
             </p>
             <p className="text-[10px] font-mono text-slate-400">
-              Tier 2 Company Head Office · {summary.stationCount} Station Branches · {activeSession?.employeeCode || 'HQ Admin'}
+              Tier 2 OMC HQ Admin · {summary.stationCount} Station Branches · {activeSession?.employeeCode || 'OMC HQ Admin'}
             </p>
           </div>
         </div>

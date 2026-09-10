@@ -98,7 +98,7 @@ export const SupervisorTankReadingsScreen: React.FC<{
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!stationId) {
-      setError('A station is not associated with this account. Contact your OMC head office.')
+      setError('A station is not associated with this account. Contact your OMC HQ Admin.')
       return
     }
     const validEntries = entries.filter(en => TANK_ID_PREFIX.test(en.tankId))

@@ -273,7 +273,7 @@ const MainAppLayout: React.FC = () => {
             </div>
           )}
 
-          {/* 3. Company Head Office Portal */}
+          {/* 3. OMC HQ Admin Portal */}
           {session.role === 'headoffice' && (
             <div className={`flex-1 overflow-y-auto ${
               theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'
@@ -282,7 +282,7 @@ const MainAppLayout: React.FC = () => {
             </div>
           )}
 
-          {/* 4. Platform Master Super Super Admin Console */}
+          {/* 4. Super Admin Console */}
           {session.role === 'superadmin' && (
             <div className={`flex-1 overflow-y-auto ${
               theme === 'light' ? 'bg-slate-100' : 'bg-[#080c14]'

@@ -26,7 +26,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     try {
       const { role, attendant, supervisor, cloudSession } = await mobileAuth.authenticate(employeeCode, pin)
       if (role === 'superadmin' || role === 'headoffice') {
-        throw new Error('This mobile app is exclusively for Forecourt Attendants and Station Supervisors. OMC Head Office and Platform Master portals must be accessed via desktop browser.')
+        throw new Error('This mobile app is exclusively for Forecourt Attendants and Station Supervisors. OMC HQ Admin and Super Admin portals must be accessed via desktop browser.')
       }
       const fullName =
         cloudSession?.fullName ||
@@ -102,7 +102,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
                 {roleHint === 'desktop_only' ? (
                   <>
                     <ShieldCheck size={13} color={colors.rose} />
-                    <Text style={[styles.roleText, { color: colors.rose }]}>OMC Head Office & Super Admin portals are desktop web only.</Text>
+                    <Text style={[styles.roleText, { color: colors.rose }]}>OMC HQ Admin & Super Admin portals are desktop web only.</Text>
                   </>
                 ) : roleHint === 'supervisor' ? (
                   <>
@@ -129,7 +129,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
             />
 
             <Text style={styles.offlineNote}>
-              Manager & Attendant accounts are created by the OMC administrator.
+              Manager & Attendant accounts are created by the OMC HQ Admin.
             </Text>
           </View>
         </ScrollView>

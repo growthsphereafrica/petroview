@@ -72,7 +72,7 @@ export const LoginScreen: React.FC = () => {
 
         saveUnifiedSession({
           role: finalRole,
-          fullName: supervisor.fullName || (isSuperAdmin ? 'Platform Master Super Super Admin' : 'Supervisor'),
+          fullName: supervisor.fullName || (isSuperAdmin ? 'Super Admin' : 'Supervisor'),
           employeeCode: supervisor.employeeCode,
           stationId: supervisor.stationId,
           stationName: supervisor.stationId ? getStationName(supervisor.stationId) : 'Global Enterprise Network',

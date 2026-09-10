@@ -465,7 +465,19 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   const combinedStaff = [
     ...allStaff.supervisors
       .filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
-      .map(s => ({ ...s, staffType: 'supervisor' as const })),
+      .map(s => {
+        const isHQ = !!s.isHeadOffice || (s.employeeCode && s.employeeCode.includes('HQ'))
+        const rawName = s.fullName?.trim() || ''
+        const cleanName =
+          isHQ && (rawName === 'SUPER-ADMIN' || rawName.toUpperCase().includes('SUPER') || !rawName)
+            ? `${companyShortCode || s.companyShortCode || ''} HQ Admin`.trim()
+            : rawName
+        return {
+          ...s,
+          fullName: cleanName,
+          staffType: (isHQ ? 'hq_admin' : 'supervisor') as 'hq_admin' | 'supervisor',
+        }
+      }),
     ...allStaff.attendants
       .filter(a => a.employeeCode !== 'SUPER-ADMIN' && a.employeeCode !== 'PETRO-MASTER')
       .map(a => ({ ...a, staffType: 'attendant' as const })),
@@ -1127,12 +1139,20 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                   <div className="flex items-center gap-3 min-w-0">
                     <div
                       className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs shrink-0 ${
-                        staff.staffType === 'supervisor'
+                        staff.staffType === 'hq_admin'
+                          ? 'bg-orange-500/15 text-orange-400 border border-orange-500/30'
+                          : staff.staffType === 'supervisor'
                           ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
                           : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
                       }`}
                     >
-                      {staff.staffType === 'supervisor' ? <UserCog className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
+                      {staff.staffType === 'hq_admin' ? (
+                        <Building2 className="w-4 h-4" />
+                      ) : staff.staffType === 'supervisor' ? (
+                        <UserCog className="w-4 h-4" />
+                      ) : (
+                        <Zap className="w-4 h-4" />
+                      )}
                     </div>
 
                     <div className="min-w-0">
@@ -1140,19 +1160,21 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                         <p className="text-xs font-bold text-white truncate">{staff.fullName}</p>
                         <span
                           className={`text-[9px] font-mono px-1.5 py-0.5 rounded font-bold uppercase ${
-                            staff.staffType === 'supervisor'
+                            staff.staffType === 'hq_admin'
+                              ? 'bg-orange-500/20 text-orange-300 border border-orange-500/30'
+                              : staff.staffType === 'supervisor'
                               ? 'bg-amber-500/20 text-amber-300'
                               : 'bg-emerald-500/20 text-emerald-300'
                           }`}
                         >
-                          {staff.staffType}
+                          {staff.staffType === 'hq_admin' ? 'HQ Admin' : staff.staffType}
                         </span>
                       </div>
                       <p className="text-[10px] font-mono text-slate-500 flex items-center gap-2 mt-0.5">
                         <span className="font-bold text-slate-300">{staff.employeeCode}</span>
                         <span>·</span>
                         <span>{getStationName(staff.stationId)}</span>
-                        {staff.phone && (
+                        {staff.phone && staff.phone !== 'SUPER-ADMIN' && !staff.phone.toUpperCase().includes('SUPER') && (
                           <>
                             <span>·</span>
                             <span>{staff.phone}</span>
@@ -1173,7 +1195,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                           id: staff.id,
                           name: staff.fullName,
                           code: staff.employeeCode,
-                          role: staff.staffType,
+                          role: staff.staffType === 'hq_admin' ? 'supervisor' : staff.staffType,
                         })
                         setNewPinValue('')
                       }}
@@ -1191,7 +1213,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                           name: staff.fullName,
                           phone: staff.phone || '',
                           stationId: staff.stationId,
-                          role: staff.staffType,
+                          role: staff.staffType === 'hq_admin' ? 'supervisor' : staff.staffType,
                           active: staff.active,
                         })
                       }
@@ -1202,7 +1224,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                     </button>
 
                     <button
-                      onClick={() => handleDeleteStaff(staff.id, staff.staffType, staff.fullName, staff.employeeCode)}
+                      onClick={() => handleDeleteStaff(staff.id, staff.staffType === 'hq_admin' ? 'supervisor' : staff.staffType, staff.fullName, staff.employeeCode)}
                       className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-500/50 text-rose-400 hover:text-rose-300 transition"
                       title="Delete Staff"
                     >

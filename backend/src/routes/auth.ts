@@ -78,14 +78,22 @@ authRouter.post('/login', (req, res) => {
   const role = resolveRole(row as { isSuperAdmin?: number; isHeadOffice?: number; employeeCode: string })
   const token = newToken()
   const createdAt = new Date().toISOString()
+
+  let resolvedFullName = String(row.fullName || '')
+  if (row.isHeadOffice || (typeof row.employeeCode === 'string' && row.employeeCode.includes('HQ'))) {
+    if (!resolvedFullName || resolvedFullName.toUpperCase() === 'SUPER-ADMIN' || resolvedFullName.toUpperCase().includes('SUPER')) {
+      resolvedFullName = `${row.companyShortCode || ''} HQ Admin`.trim()
+    }
+  }
+
   db.prepare(
     'INSERT INTO sessions (token, role, userId, employeeCode, fullName, stationId, companyId, companyShortCode, createdAt, expiresAt) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(token, role, row.id, row.employeeCode, row.fullName, row.stationId ?? null, row.companyId ?? null, row.companyShortCode ?? null, createdAt, sessionExpiry())
+  ).run(token, role, row.id, row.employeeCode, resolvedFullName, row.stationId ?? null, row.companyId ?? null, row.companyShortCode ?? null, createdAt, sessionExpiry())
 
   res.json({
     token,
     role,
-    fullName: row.fullName,
+    fullName: resolvedFullName,
     employeeCode: row.employeeCode,
     stationId: row.stationId ?? null,
     companyId: row.companyId ?? null,
@@ -140,11 +148,15 @@ authRouter.post('/wipe-database', (req, res) => {
 
 authRouter.get('/me', authenticate, (req: AuthRequest, res) => {
   const s = req.session as SessionClaims
+  let fullName = s.fullName
+  if (s.role === 'headoffice' && (fullName.toUpperCase() === 'SUPER-ADMIN' || fullName.toUpperCase().includes('SUPER'))) {
+    fullName = `${s.companyShortCode || ''} HQ Admin`.trim()
+  }
   res.json({
     role: s.role,
     userId: s.userId,
     employeeCode: s.employeeCode,
-    fullName: s.fullName,
+    fullName,
     stationId: s.stationId,
     companyId: s.companyId,
     companyShortCode: s.companyShortCode,
@@ -417,7 +429,14 @@ authRouter.get('/staff', authenticate, requireRole('headoffice', 'superadmin'), 
   }
 
   res.json({
-    supervisors: sups.map(r => ({ ...r, role: 'supervisor' })),
+    supervisors: sups.map(r => {
+      let fullName = r.fullName as string
+      const isHQ = !!r.isHeadOffice || (typeof r.employeeCode === 'string' && r.employeeCode.includes('HQ'))
+      if (isHQ && (!fullName || fullName.toUpperCase() === 'SUPER-ADMIN' || fullName.toUpperCase().includes('SUPER'))) {
+        fullName = `${(r.companyShortCode as string) || ''} HQ Admin`.trim()
+      }
+      return { ...r, fullName, role: isHQ ? 'headoffice' : 'supervisor' }
+    }),
     attendants: atts.map(r => ({ ...r, role: 'attendant' })),
     total: sups.length + atts.length,
   })

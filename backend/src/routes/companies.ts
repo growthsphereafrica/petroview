@@ -64,11 +64,15 @@ companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthReq
   const pin = adminPin || '9999'
   const { salt, hash } = hashPin(pin)
   const adminId = `sup-${adminCode.toLowerCase()}`
+  let resolvedAdminName = adminFullName?.trim()
+  if (!resolvedAdminName || resolvedAdminName.toUpperCase() === 'SUPER-ADMIN' || resolvedAdminName.toUpperCase().includes('SUPER')) {
+    resolvedAdminName = `${name.trim()} HQ Admin`
+  }
   db.prepare(
     `INSERT INTO supervisors (id, employeeCode, fullName, pinSalt, pinHash, stationId, companyId, companyShortCode,
      phone, isHeadOffice, isSuperAdmin, approvalStatus, approvedAt, approvedBy, active, failedAttempts, lockoutUntil, createdAt)
      VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, 1, 0, 'APPROVED', ?, 'SYSTEM', 1, 0, NULL, ?)`,
-  ).run(adminId, adminCode, adminFullName || `${name.trim()} HQ Admin`, salt, hash, id, code, phone ?? null, now, now)
+  ).run(adminId, adminCode, resolvedAdminName, salt, hash, id, code, phone ?? null, now, now)
 
   db.prepare(
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
@@ -76,7 +80,7 @@ companiesRouter.post('/', authenticate, requireRole('superadmin'), (req: AuthReq
 
   res.status(201).json({
     company: { id, name: name.trim(), shortCode: code, active: true },
-    admin: { id: adminId, employeeCode: adminCode, pin, fullName: adminFullName || `${name.trim()} HQ Admin` },
+    admin: { id: adminId, employeeCode: adminCode, pin, fullName: resolvedAdminName },
     stations: createdStations,
   })
 })
@@ -136,7 +140,14 @@ companiesRouter.get('/:id/staff', authenticate, (req: AuthRequest, res) => {
   `).all(company.id, company.shortCode, `${company.shortCode}%`)
 
   res.json({
-    supervisors: sups.map((r: any) => ({ ...r, role: 'supervisor' })),
+    supervisors: sups.map((r: any) => {
+      let fullName = r.fullName as string
+      const isHQ = !!r.isHeadOffice || (typeof r.employeeCode === 'string' && r.employeeCode.includes('HQ'))
+      if (isHQ && (!fullName || fullName.toUpperCase() === 'SUPER-ADMIN' || fullName.toUpperCase().includes('SUPER'))) {
+        fullName = `${company.shortCode} HQ Admin`
+      }
+      return { ...r, fullName, role: isHQ ? 'headoffice' : 'supervisor' }
+    }),
     attendants: atts.map((r: any) => ({ ...r, role: 'attendant' })),
     total: sups.length + atts.length,
   })

@@ -77,9 +77,9 @@ const MainAppLayout: React.FC = () => {
 
   const roleLabel =
     session.role === 'superadmin'
-      ? 'Platform Master'
+      ? 'Super Admin'
       : session.role === 'headoffice'
-      ? 'Company HQ Admin'
+      ? 'HQ Admin'
       : session.role === 'supervisor'
       ? 'Station Manager'
       : 'Fuel Attendant'
@@ -184,7 +184,12 @@ const MainAppLayout: React.FC = () => {
             <div className="leading-tight hidden sm:block">
               <p className={`text-xs font-bold truncate max-w-[130px] ${
                 theme === 'light' ? 'text-slate-900' : 'text-white'
-              }`}>{session.fullName}</p>
+              }`}>
+                {(session.role === 'headoffice' || (session.employeeCode && session.employeeCode.includes('HQ'))) &&
+                (session.fullName.toUpperCase().includes('SUPER') || session.fullName === 'SUPER-ADMIN')
+                  ? `${session.companyShortCode || session.companyName || ''} HQ Admin`.trim()
+                  : session.fullName}
+              </p>
               <p className={`text-[10px] font-mono ${
                 theme === 'light' ? 'text-slate-500' : 'text-slate-400'
               }`}>

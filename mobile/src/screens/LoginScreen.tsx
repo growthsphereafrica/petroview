@@ -25,11 +25,14 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     setSigningIn(true)
     try {
       const { role, attendant, supervisor, cloudSession } = await mobileAuth.authenticate(employeeCode, pin)
+      if (role === 'superadmin' || role === 'headoffice') {
+        throw new Error('This mobile app is exclusively for Forecourt Attendants and Station Supervisors. OMC Head Office and Platform Master portals must be accessed via desktop browser.')
+      }
       const fullName =
         cloudSession?.fullName ||
         supervisor?.fullName ||
         attendant?.fullName ||
-        (role === 'superadmin' ? 'Platform Master Admin' : employeeCode.toUpperCase())
+        (role === 'supervisor' ? 'Station Supervisor' : 'Pump Attendant')
       onAuthenticated({
         role,
         fullName,
@@ -48,14 +51,14 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
   }
 
   const codeUpper = employeeCode.trim().toUpperCase()
-  const roleHint =
-    codeUpper === 'SUPER-ADMIN' || codeUpper === 'ADMIN' || codeUpper.startsWith('SUPER')
-      ? 'superadmin'
-      : codeUpper.includes('HQ') || codeUpper.startsWith('SUP') || codeUpper.endsWith('M') || codeUpper.includes('-M')
-      ? 'supervisor'
-      : codeUpper.length >= 3
-      ? 'attendant'
-      : null
+  const isExcludedRole = codeUpper === 'SUPER-ADMIN' || codeUpper === 'ADMIN' || codeUpper.startsWith('SUPER') || codeUpper.includes('HQ')
+  const roleHint = isExcludedRole
+    ? 'desktop_only'
+    : codeUpper.startsWith('SUP') || codeUpper.endsWith('M') || codeUpper.includes('-M')
+    ? 'supervisor'
+    : codeUpper.length >= 3
+    ? 'attendant'
+    : null
 
   return (
     <SafeAreaView style={styles.safe}>
@@ -96,20 +99,20 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
 
             {roleHint && (
               <View style={styles.roleBanner}>
-                {roleHint === 'superadmin' ? (
+                {roleHint === 'desktop_only' ? (
                   <>
                     <ShieldCheck size={13} color={colors.rose} />
-                    <Text style={[styles.roleText, { color: colors.rose }]}>Platform Master — full administrative authority.</Text>
+                    <Text style={[styles.roleText, { color: colors.rose }]}>OMC Head Office & Super Admin portals are desktop web only.</Text>
                   </>
                 ) : roleHint === 'supervisor' ? (
                   <>
                     <UserCog size={13} color={colors.flame} />
-                    <Text style={[styles.roleText, { color: colors.flame }]}>Management portal — shift review & forecourt controls.</Text>
+                    <Text style={[styles.roleText, { color: colors.flame }]}>Station Supervisor — shift verification, tank dipping & staff oversight.</Text>
                   </>
                 ) : (
                   <>
                     <Zap size={13} color={colors.amber} />
-                    <Text style={[styles.roleText, { color: colors.amber }]}>Attendant terminal — forecourt POS & dispensing.</Text>
+                    <Text style={[styles.roleText, { color: colors.amber }]}>Pump Attendant — forecourt fuel dispensing POS & shift sales.</Text>
                   </>
                 )}
               </View>

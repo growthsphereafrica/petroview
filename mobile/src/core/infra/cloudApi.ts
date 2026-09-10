@@ -281,3 +281,19 @@ export async function cloudRecordTankReadings(input: {
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
   return (await resp.json().catch(() => ({ id: '', readingsCount: 0 }))) as { id: string; readingsCount: number }
 }
+
+export async function cloudResetPin(employeeCode: string, newPin: string): Promise<boolean> {
+  const base = getCloudApiBase()
+  if (!base) return false
+
+  try {
+    const resp = await fetch(`${base}/api/auth/reset-pin`, {
+      method: 'POST',
+      headers: await authHeaders(),
+      body: JSON.stringify({ employeeCode, newPin }),
+    })
+    return resp.ok
+  } catch {
+    return false
+  }
+}

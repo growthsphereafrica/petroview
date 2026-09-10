@@ -1,21 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput, Modal } from 'react-native'
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal } from 'react-native'
 import {
   ClipboardCheck,
   DollarSign,
   Droplets,
-  Layers,
   Users,
   CheckCircle2,
-  History,
   LayoutDashboard,
   MapPin,
   QrCode,
   ShieldCheck,
-  Building2,
   Plus,
   ArrowRight,
-  TrendingUp,
   Fuel,
   RefreshCw,
 } from 'lucide-react-native'
@@ -24,9 +20,8 @@ import { Card, Badge, PrimaryButton, StyledTextInput } from '../../components/ui
 import { QrSyncSheet } from '../../components/QrSyncSheet'
 import { TankReadingsSheet } from './TankReadingsSheet'
 import { supervisorService } from '../../core/services/supervisorService'
-import { rollupService, type HqSummary } from '../../core/services/rollupService'
-import { cloudGetTankReadings, getCloudApiBase, getCloudToken } from '../../core/infra/cloudApi'
-import type { Shift, Attendant, AuditEntry } from '../../core/domain/types'
+import { cloudGetTankReadings } from '../../core/infra/cloudApi'
+import type { Shift, Attendant } from '../../core/domain/types'
 import { formatGHS, formatLitres, formatDateTime } from '../../shared/currencyFormatter'
 import type { MobileSession } from '../LoginScreen'
 
@@ -49,7 +44,7 @@ function labelFor(status: Shift['status']): string {
   }
 }
 
-export type SupervisorTab = 'dashboard' | 'shifts' | 'tanks' | 'attendants' | 'operations' | 'hq' | 'audit'
+export type SupervisorTab = 'dashboard' | 'shifts' | 'tanks' | 'attendants'
 
 export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: () => void }> = ({ session, onSignOut }) => {
   const [tab, setTab] = useState<SupervisorTab>('dashboard')
@@ -59,15 +54,6 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const [loading, setLoading] = useState(true)
   const [qrOpen, setQrOpen] = useState(false)
   const [tankSheetOpen, setTankSheetOpen] = useState(false)
-
-  const isSuperAdmin =
-    session.role === 'superadmin' ||
-    session.employeeCode.toUpperCase() === 'SUPER-ADMIN' ||
-    session.employeeCode.toUpperCase() === 'ADMIN'
-
-  const isHQ =
-    session.role === 'headoffice' ||
-    session.employeeCode.toUpperCase().includes('HQ')
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -94,16 +80,8 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            {isSuperAdmin ? (
-              <ShieldCheck size={18} color={colors.rose} />
-            ) : isHQ ? (
-              <Building2 size={18} color={colors.flame} />
-            ) : (
-              <Users size={18} color={colors.emerald} />
-            )}
-            <Text style={styles.heading}>
-              {isSuperAdmin ? 'Master Console' : isHQ ? 'HQ Enterprise' : 'Forecourt Console'}
-            </Text>
+            <Users size={18} color={colors.emerald} />
+            <Text style={styles.heading}>Forecourt Supervisor Console</Text>
           </View>
           <Text style={styles.sub}>{session.fullName} · {session.employeeCode}</Text>
         </View>
@@ -133,13 +111,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
                 onGoShifts={() => setTab('shifts')}
                 onGoTanks={() => setTab('tanks')}
                 onGoAttendants={() => setTab('attendants')}
-                onGoOperations={() => setTab('operations')}
-                onGoAudit={() => setTab('audit')}
-                onGoHq={() => setTab('hq')}
                 onOpenQr={() => setQrOpen(true)}
-                onOpenTankSheet={() => setTankSheetOpen(true)}
-                isSuperAdmin={isSuperAdmin}
-                isHQ={isHQ}
               />
             )}
             {tab === 'shifts' && (
@@ -155,13 +127,6 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
             {tab === 'attendants' && (
               <AttendantsTab attendants={attendants} session={session} onChanged={() => setRefreshKey(k => k + 1)} />
             )}
-            {tab === 'operations' && (
-              <OperationsTab session={session} />
-            )}
-            {tab === 'hq' && (
-              <HqAndOmcTab session={session} isSuperAdmin={isSuperAdmin} isHQ={isHQ} />
-            )}
-            {tab === 'audit' && <AuditTab />}
 
             <Pressable onPress={() => setRefreshKey(k => k + 1)} style={styles.reloadBtn}>
               <Text style={{ color: colors.textDim, fontSize: 11, fontWeight: '700' }}>↻ Refresh data</Text>
@@ -177,12 +142,9 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
           ['shifts', ClipboardCheck, 'Shifts'],
           ['tanks', Droplets, 'Tanks'],
           ['attendants', Users, 'Staff'],
-          ['operations', DollarSign, 'Finance'],
-          ['hq', Layers, isSuperAdmin ? 'OMCs' : 'Network'],
-          ['audit', History, 'Audit'],
         ] as const).map(([key, Icon, label]) => (
           <Pressable key={key} onPress={() => setTab(key)} style={[styles.tabItem, tab === key && styles.tabItemActive]}>
-            <Icon size={16} color={tab === key ? colors.emerald : colors.textFaint} />
+            <Icon size={18} color={tab === key ? colors.emerald : colors.textFaint} />
             <Text style={[styles.tabLabel, { color: tab === key ? colors.emerald : colors.textFaint }]}>{label}</Text>
           </Pressable>
         ))}
@@ -210,13 +172,7 @@ const Dashboard: React.FC<{
   onGoShifts: () => void
   onGoTanks: () => void
   onGoAttendants: () => void
-  onGoOperations: () => void
-  onGoAudit: () => void
-  onGoHq: () => void
   onOpenQr: () => void
-  onOpenTankSheet: () => void
-  isSuperAdmin: boolean
-  isHQ: boolean
 }> = ({
   pendingReview,
   openCount,
@@ -226,13 +182,7 @@ const Dashboard: React.FC<{
   onGoShifts,
   onGoTanks,
   onGoAttendants,
-  onGoOperations,
-  onGoAudit,
-  onGoHq,
   onOpenQr,
-  onOpenTankSheet,
-  isSuperAdmin,
-  isHQ,
 }) => {
   const today = new Date().toISOString().slice(0, 10)
   const closedToday = shifts.filter(s => (s.closedAt ?? '').slice(0, 10) === today)
@@ -283,44 +233,24 @@ const Dashboard: React.FC<{
 
       {/* Quick Navigation Rows */}
       <Card style={styles.card}>
-        <Text style={styles.cardTitle}>Management Operations</Text>
+        <Text style={styles.cardTitle}>Station Operations</Text>
         <QuickRow
           icon={<ClipboardCheck size={16} color={colors.emerald} />}
           title="Review Shifts"
-          subtitle={`${pendingReview} awaiting decision`}
+          subtitle={`${pendingReview} shifts awaiting supervisor decision`}
           onPress={onGoShifts}
         />
         <QuickRow
           icon={<Droplets size={16} color={colors.blue} />}
           title="Tank Inventory & Dips"
-          subtitle="Record & monitor daily tank fuel levels"
+          subtitle="Record wet-stock levels & dip measurements"
           onPress={onGoTanks}
         />
         <QuickRow
           icon={<Users size={16} color={colors.amber} />}
-          title="Manage Attendants"
-          subtitle="PIN resets, registrations & assignments"
+          title="Forecourt Attendants"
+          subtitle="PIN resets & attendant approvals"
           onPress={onGoAttendants}
-        />
-        <QuickRow
-          icon={<DollarSign size={16} color={colors.emerald} />}
-          title="Expenses & Customer Credit"
-          subtitle="Daily cash outflows & debtor management"
-          onPress={onGoOperations}
-        />
-        {(isSuperAdmin || isHQ) && (
-          <QuickRow
-            icon={<Layers size={16} color={colors.flame} />}
-            title={isSuperAdmin ? 'OMC Companies & Platform' : 'Network Stations Rollup'}
-            subtitle={isSuperAdmin ? 'Create & manage downstream tenants' : 'Multi-station performance & pricing'}
-            onPress={onGoHq}
-          />
-        )}
-        <QuickRow
-          icon={<History size={16} color={colors.textDim} />}
-          title="Audit Trail"
-          subtitle="Review operational logs & security events"
-          onPress={onGoAudit}
         />
         <QuickRow
           icon={<QrCode size={16} color={colors.violet} />}
@@ -748,454 +678,6 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
           </View>
         </View>
       </Modal>
-    </View>
-  )
-}
-
-// ---- Tab 5: Operations, Expenses & Debtors ----------------------------------
-
-const OperationsTab: React.FC<{ session: MobileSession }> = ({ session }) => {
-  const [expenseModal, setExpenseModal] = useState(false)
-  const [expenseAmount, setExpenseAmount] = useState('')
-  const [expenseCategory, setExpenseCategory] = useState('Generator Fuel')
-  const [expenseRecipient, setExpenseRecipient] = useState('')
-  const [expenses, setExpenses] = useState<any[]>([
-    { id: '1', category: 'Generator Fuel', amount: 350, recipient: 'Station Genset', time: '10:30 AM' },
-    { id: '2', category: 'Station Supplies', amount: 80, recipient: 'Cleaning Supplies', time: '08:15 AM' },
-  ])
-
-  const addExpense = () => {
-    if (!expenseAmount) return
-    const newEx = {
-      id: Date.now().toString(),
-      category: expenseCategory,
-      amount: Number(expenseAmount),
-      recipient: expenseRecipient || 'Station Petty Cash',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    }
-    setExpenses(prev => [newEx, ...prev])
-    setExpenseAmount('')
-    setExpenseRecipient('')
-    setExpenseModal(false)
-  }
-
-  const totalExpenses = expenses.reduce((a, e) => a + e.amount, 0)
-
-  return (
-    <View style={{ gap: 12 }}>
-      <View style={styles.cardHeader}>
-        <Text style={styles.sectionTitle}>DAILY EXPENSES & OUTFLOWS</Text>
-        <Pressable onPress={() => setExpenseModal(true)} style={styles.linkBtn}>
-          <Text style={styles.linkBtnText}>+ Add Expense</Text>
-        </Pressable>
-      </View>
-
-      <Card style={styles.kpi}>
-        <DollarSign size={16} color={colors.amber} />
-        <Text style={styles.kpiValue}>{formatGHS(totalExpenses)}</Text>
-        <Text style={styles.kpiLabel}>Total Outflows Today</Text>
-      </Card>
-
-      <Card style={styles.listCard}>
-        {expenses.map(e => (
-          <View key={e.id} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{e.category}</Text>
-              <Text style={styles.rowSub}>{e.recipient} · {e.time}</Text>
-            </View>
-            <Text style={[styles.rowTitle, { color: colors.rose }]}>-{formatGHS(e.amount)}</Text>
-          </View>
-        ))}
-      </Card>
-
-      {/* Credit Customers */}
-      <Text style={[styles.sectionTitle, { marginTop: 12 }]}>CREDIT CUSTOMERS & DEBTORS</Text>
-      <Card style={styles.listCard}>
-        {[
-          { name: 'Metro Mass Transport', code: 'MMT-ACC', balance: 14500, limit: 30000 },
-          { name: 'VIP Jeoun Transport', code: 'VIP-01', balance: 8200, limit: 20000 },
-          { name: 'Ghana Police Service (Motor)', code: 'GPS-ACC', balance: 3400, limit: 10000 },
-        ].map(c => (
-          <View key={c.code} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{c.name}</Text>
-              <Text style={styles.rowSub}>{c.code} · Limit: {formatGHS(c.limit)}</Text>
-            </View>
-            <Text style={[styles.rowTitle, { color: colors.amber }]}>{formatGHS(c.balance)}</Text>
-          </View>
-        ))}
-      </Card>
-
-      {/* Add Expense Modal */}
-      <Modal visible={expenseModal} transparent animationType="slide" onRequestClose={() => setExpenseModal(false)}>
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Record Expense</Text>
-            <Text style={styles.modalSub}>Record cash paid out from forecourt</Text>
-
-            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>CATEGORY</Text>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-              {['Generator Fuel', 'Station Supplies', 'Utilities', 'Maintenance', 'Cash Drop'].map(cat => (
-                <Pressable
-                  key={cat}
-                  onPress={() => setExpenseCategory(cat)}
-                  style={[styles.chip, expenseCategory === cat && styles.chipActive]}
-                >
-                  <Text style={[styles.chipText, expenseCategory === cat && { color: '#04130d' }]}>{cat}</Text>
-                </Pressable>
-              ))}
-            </View>
-
-            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>AMOUNT (GHS)</Text>
-            <StyledTextInput
-              value={expenseAmount}
-              onChangeText={t => setExpenseAmount(t.replace(/[^0-9.]/g, ''))}
-              placeholder="e.g. 150"
-              keyboardType="number-pad"
-            />
-
-            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>RECIPIENT / PURPOSE</Text>
-            <StyledTextInput
-              value={expenseRecipient}
-              onChangeText={setExpenseRecipient}
-              placeholder="e.g. Genset diesel refill"
-            />
-
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
-              <PrimaryButton
-                title="Save Expense"
-                onPress={addExpense}
-                disabled={!expenseAmount || Number(expenseAmount) <= 0}
-                style={{ flex: 1 }}
-              />
-              <PrimaryButton
-                title="Cancel"
-                onPress={() => setExpenseModal(false)}
-                tone="rose"
-                style={{ flex: 1 }}
-              />
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
-  )
-}
-
-// ---- Tab 6: HQ & Super-Admin OMCs ------------------------------------------
-
-interface PendingUser {
-  id: string
-  employeeCode: string
-  fullName: string
-  phone?: string
-  stationId?: string
-  companyId?: string
-  role: 'attendant' | 'supervisor'
-  createdAt: string
-}
-
-const HqAndOmcTab: React.FC<{ session: MobileSession; isSuperAdmin: boolean; isHQ: boolean }> = ({
-  session,
-  isSuperAdmin,
-  isHQ,
-}) => {
-  const [data, setData] = useState<HqSummary | null>(null)
-  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([])
-  const [approvingId, setApprovingId] = useState<string | null>(null)
-  const [createOmcModal, setCreateOmcModal] = useState(false)
-  const [pricingModal, setPricingModal] = useState(false)
-  const [prices, setPrices] = useState({ PMS: '14.80', AGO: '15.20', DPK: '13.90', KERO: '13.50' })
-  const [omcName, setOmcName] = useState('')
-  const [omcCode, setOmcCode] = useState('')
-  const [omcPin, setOmcPin] = useState('9999')
-  const [creating, setCreating] = useState(false)
-
-  const loadAll = useCallback(async () => {
-    const summaryData = await rollupService.summary()
-    setData(summaryData)
-
-    // Load pending approvals from cloud if token is present
-    const base = getCloudApiBase()
-    const token = await getCloudToken()
-    if (base && token) {
-      try {
-        const resp = await fetch(`${base}/api/auth/pending-approvals`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-        if (resp.ok) {
-          const json = (await resp.json()) as { supervisors?: PendingUser[]; attendants?: PendingUser[] }
-          const combined: PendingUser[] = [
-            ...(json.supervisors || []).map(s => ({ ...s, role: 'supervisor' as const })),
-            ...(json.attendants || []).map(a => ({ ...a, role: 'attendant' as const })),
-          ]
-          setPendingUsers(combined)
-        }
-      } catch {
-        // offline
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    let active = true
-    void loadAll()
-    return () => { active = false }
-  }, [loadAll])
-
-  const handleDecision = async (userId: string, verdict: 'APPROVED' | 'REJECTED') => {
-    setApprovingId(userId)
-    try {
-      const base = getCloudApiBase()
-      const token = await getCloudToken()
-      if (base && token) {
-        await fetch(`${base}/api/auth/approve/${userId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ verdict }),
-        })
-      }
-      setPendingUsers(prev => prev.filter(u => u.id !== userId))
-    } finally {
-      setApprovingId(null)
-    }
-  }
-
-  const submitCreateOmc = async () => {
-    if (!omcName || !omcCode) return
-    setCreating(true)
-    try {
-      const base = getCloudApiBase()
-      const token = await getCloudToken()
-      if (base && token) {
-        await fetch(`${base}/api/companies`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ name: omcName, shortCode: omcCode, adminPin: omcPin }),
-        })
-      }
-      setCreateOmcModal(false)
-      setOmcName('')
-      setOmcCode('')
-      void loadAll()
-    } finally {
-      setCreating(false)
-    }
-  }
-
-  if (!data) return <View style={styles.center}><ActivityIndicator color={colors.emerald} size="large" /></View>
-
-  return (
-    <View style={{ gap: 12 }}>
-      <View style={styles.cardHeader}>
-        <View>
-          <Text style={styles.sectionTitle}>{isSuperAdmin ? 'PLATFORM MASTER · OMCS' : 'HEAD OFFICE NETWORK'}</Text>
-          <Text style={styles.sub}>
-            {isSuperAdmin ? 'Manage All Downstream OMC Tenants' : 'Enterprise Station Rollup & Fleet Control'}
-          </Text>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 6 }}>
-          <Pressable onPress={() => setPricingModal(true)} style={styles.miniBtn}>
-            <Text style={styles.miniBtnText}>Fuel Prices</Text>
-          </Pressable>
-          {isSuperAdmin && (
-            <Pressable onPress={() => setCreateOmcModal(true)} style={styles.linkBtn}>
-              <Text style={styles.linkBtnText}>+ New OMC</Text>
-            </Pressable>
-          )}
-        </View>
-      </View>
-
-      <View style={styles.kpiRow}>
-        <Card style={styles.kpi}>
-          <DollarSign size={16} color={colors.emerald} />
-          <Text style={styles.kpiValue}>{formatGHS(data.salesToday, { noPrefix: true })}</Text>
-          <Text style={styles.kpiLabel}>Network Revenue</Text>
-        </Card>
-        <Card style={styles.kpi}>
-          <ClipboardCheck size={16} color={colors.amber} />
-          <Text style={styles.kpiValue}>{data.pendingReview}</Text>
-          <Text style={styles.kpiLabel}>Awaiting review</Text>
-        </Card>
-      </View>
-
-      {/* Pending Staff Approvals Queue */}
-      {pendingUsers.length > 0 && (
-        <Card style={[styles.card, { borderColor: colors.amber }]}>
-          <View style={styles.cardHeader}>
-            <Text style={[styles.cardTitle, { color: colors.amber }]}>Pending Staff Approvals ({pendingUsers.length})</Text>
-            <Badge tone="warning">Action Required</Badge>
-          </View>
-          <Text style={styles.sub}>New attendants & managers awaiting your head office authorization</Text>
-          <View style={{ gap: 8, marginTop: 10 }}>
-            {pendingUsers.map(u => (
-              <View key={u.id} style={[styles.row, { backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.rowTitle}>{u.fullName}</Text>
-                  <Text style={styles.rowSub}>{u.employeeCode} · {u.role === 'supervisor' ? 'Station Manager' : 'Attendant'}</Text>
-                </View>
-                <View style={{ flexDirection: 'row', gap: 6 }}>
-                  <Pressable
-                    onPress={() => void handleDecision(u.id, 'APPROVED')}
-                    disabled={approvingId === u.id}
-                    style={[styles.miniBtn, { backgroundColor: colors.emerald }]}
-                  >
-                    <Text style={[styles.miniBtnText, { color: '#04130d' }]}>Approve</Text>
-                  </Pressable>
-                  <Pressable
-                    onPress={() => void handleDecision(u.id, 'REJECTED')}
-                    disabled={approvingId === u.id}
-                    style={[styles.miniBtn, { backgroundColor: colors.panel }]}
-                  >
-                    <Text style={[styles.miniBtnText, { color: colors.rose }]}>Reject</Text>
-                  </Pressable>
-                </View>
-              </View>
-            ))}
-          </View>
-        </Card>
-      )}
-
-      {/* Live Benchmark Fuel Prices Card */}
-      <Card style={styles.card}>
-        <View style={styles.cardHeader}>
-          <Text style={styles.cardTitle}>Live Station Fuel Prices (GHS / L)</Text>
-          <Pressable onPress={() => setPricingModal(true)} style={styles.miniBtn}>
-            <Text style={styles.miniBtnText}>Update</Text>
-          </Pressable>
-        </View>
-        <View style={{ flexDirection: 'row', gap: 6, marginTop: 6 }}>
-          {[
-            { code: 'PMS', label: 'Super', color: '#22c55e', val: prices.PMS },
-            { code: 'AGO', label: 'Diesel', color: '#3b82f6', val: prices.AGO },
-            { code: 'DPK', label: 'DPK', color: '#f97316', val: prices.DPK },
-            { code: 'KERO', label: 'Kero', color: '#a855f7', val: prices.KERO },
-          ].map(f => (
-            <View key={f.code} style={{ flex: 1, backgroundColor: colors.panel2, padding: 8, borderRadius: 8, alignItems: 'center' }}>
-              <Text style={{ color: f.color, fontSize: 10, fontWeight: '900' }}>{f.code}</Text>
-              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '900', marginTop: 2 }}>{f.val}</Text>
-            </View>
-          ))}
-        </View>
-      </Card>
-
-      <Text style={styles.sectionTitle}>STATIONS & BRANCHES</Text>
-      <Card style={styles.listCard}>
-        {data.stations.map(st => (
-          <View key={st.stationId} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{st.name}</Text>
-              <Text style={styles.rowSub}><MapPin size={10} color={colors.textFaint} /> {st.region}</Text>
-            </View>
-            <View style={{ alignItems: 'flex-end' }}>
-              <Text style={styles.rowTitle}>{formatGHS(st.sales, { noPrefix: true })}</Text>
-              <Text style={styles.rowSub}>{st.shiftCount} shifts · {formatLitres(st.litres)} L</Text>
-            </View>
-          </View>
-        ))}
-      </Card>
-
-      <Text style={styles.sectionTitle}>TOP DISPENSING ATTENDANTS</Text>
-      <Card style={styles.listCard}>
-        {data.attendants.slice(0, 5).map((a, i) => (
-          <View key={a.employeeCode} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{i + 1}. {a.name}</Text>
-              <Text style={styles.rowSub}>{a.employeeCode} · {a.stationName}</Text>
-            </View>
-            <Text style={styles.rowTitle}>{formatGHS(a.sales, { noPrefix: true })}</Text>
-          </View>
-        ))}
-      </Card>
-
-      {/* Fuel Pricing Modal */}
-      <Modal visible={pricingModal} transparent animationType="slide" onRequestClose={() => setPricingModal(false)}>
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Update Fuel Retail Prices</Text>
-            <Text style={styles.modalSub}>Broadcast official prices across network station forecourts</Text>
-
-            <View style={{ gap: 8, marginTop: 12 }}>
-              <View>
-                <Text style={styles.fieldLabel}>PMS / SUPER PETROL (GHS/L)</Text>
-                <StyledTextInput value={prices.PMS} onChangeText={t => setPrices(p => ({ ...p, PMS: t }))} keyboardType="numeric" />
-              </View>
-              <View>
-                <Text style={styles.fieldLabel}>AGO / DIESEL (GHS/L)</Text>
-                <StyledTextInput value={prices.AGO} onChangeText={t => setPrices(p => ({ ...p, AGO: t }))} keyboardType="numeric" />
-              </View>
-              <View>
-                <Text style={styles.fieldLabel}>DPK (GHS/L)</Text>
-                <StyledTextInput value={prices.DPK} onChangeText={t => setPrices(p => ({ ...p, DPK: t }))} keyboardType="numeric" />
-              </View>
-              <View>
-                <Text style={styles.fieldLabel}>KEROSENE (GHS/L)</Text>
-                <StyledTextInput value={prices.KERO} onChangeText={t => setPrices(p => ({ ...p, KERO: t }))} keyboardType="numeric" />
-              </View>
-            </View>
-
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
-              <PrimaryButton title="Apply Prices" onPress={() => setPricingModal(false)} style={{ flex: 1 }} />
-              <PrimaryButton title="Close" onPress={() => setPricingModal(false)} tone="rose" style={{ flex: 1 }} />
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Create OMC Modal for Super Admin */}
-      <Modal visible={createOmcModal} transparent animationType="slide" onRequestClose={() => setCreateOmcModal(false)}>
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Create OMC Company</Text>
-            <Text style={styles.modalSub}>Add an Oil Marketing Company to PetroView</Text>
-
-            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>COMPANY NAME</Text>
-            <StyledTextInput value={omcName} onChangeText={setOmcName} placeholder="e.g. Star Oil Ghana" />
-
-            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>SHORT CODE (MAX 8 CHARS)</Text>
-            <StyledTextInput value={omcCode} onChangeText={t => setOmcCode(t.toUpperCase())} placeholder="e.g. STAR" autoCapitalize="characters" />
-
-            <Text style={[styles.fieldLabel, { marginTop: 10 }]}>HQ ADMIN PIN</Text>
-            <StyledTextInput value={omcPin} onChangeText={setOmcPin} placeholder="9999" keyboardType="number-pad" />
-
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 16 }}>
-              <PrimaryButton title={creating ? 'Creating…' : 'Create OMC'} onPress={submitCreateOmc} disabled={creating || !omcName || !omcCode} style={{ flex: 1 }} />
-              <PrimaryButton title="Cancel" onPress={() => setCreateOmcModal(false)} tone="rose" style={{ flex: 1 }} />
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </View>
-  )
-}
-
-// ---- Tab 7: Audit Log ------------------------------------------------------
-
-const AuditTab: React.FC = () => {
-  const [entries, setEntries] = useState<AuditEntry[]>([])
-  useEffect(() => {
-    let active = true
-    void supervisorService.auditLog().then(log => { if (active) setEntries(log) })
-    return () => { active = false }
-  }, [])
-
-  return (
-    <View>
-      <Text style={styles.sectionTitle}>AUDIT TRAIL & LOGS</Text>
-      <Card style={styles.listCard}>
-        {entries.length === 0 && <Text style={styles.empty}>No audit events yet.</Text>}
-        {entries.map(e => (
-          <View key={e.id} style={styles.row}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{e.action.replace(/_/g, ' ')}</Text>
-              <Text style={styles.rowSub}>{e.notes ?? ''}</Text>
-              <Text style={[styles.rowSub, { fontFamily: 'monospace', fontSize: 10 }]}>
-                {e.actorRole} · {formatDateTime(e.timestamp)}
-              </Text>
-            </View>
-          </View>
-        ))}
-      </Card>
     </View>
   )
 }

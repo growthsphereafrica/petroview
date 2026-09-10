@@ -14,6 +14,7 @@ import { attendantRepo, auditLogRepo, shiftRepo, supervisorRepo, supervisorSessi
 import { liveSyncBus } from './liveSyncBus'
 import { generateNextStaffCode } from './staffCodeService'
 import { getStationName } from '../domain/config'
+import { backendResetPin } from '../../services/backendApiService'
 import type { AuditEntry, Attendant, Shift, ShiftStatus, Supervisor, SupervisorSession } from '../domain/types'
 
 export interface SupervisorStats {
@@ -654,7 +655,16 @@ export class SupervisorService {
 
     if (role === 'attendant') {
       const attendant = await attendantRepo.getById(id)
-      if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
+      let staffCode = attendant?.employeeCode
+      if (!attendant) {
+        // Try resetting in backend directly if not in local DB
+        try {
+          await backendResetPin({ userId: id, role, newPin })
+          return
+        } catch {
+          throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
+        }
+      }
       const updated: Attendant = {
         ...attendant,
         pinSalt: salt,
@@ -664,9 +674,25 @@ export class SupervisorService {
       }
       await prodDb.attendants.put(updated)
       liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: id })
+
+      // Synchronize with backend API
+      try {
+        await backendResetPin({ userId: id, employeeCode: staffCode, role, newPin })
+      } catch (backendErr) {
+        console.warn('[supervisorService] Cloud PIN reset warning:', backendErr)
+      }
     } else {
       const supervisor = await supervisorRepo.getById(id)
-      if (!supervisor) throw new DomainError('STAFF_NOT_FOUND', 'Supervisor not found.')
+      let staffCode = supervisor?.employeeCode
+      if (!supervisor) {
+        // Try resetting in backend directly if not in local DB
+        try {
+          await backendResetPin({ userId: id, role, newPin })
+          return
+        } catch {
+          throw new DomainError('STAFF_NOT_FOUND', 'Supervisor not found.')
+        }
+      }
       const updated: Supervisor = {
         ...supervisor,
         pinSalt: salt,
@@ -676,6 +702,13 @@ export class SupervisorService {
       }
       await prodDb.supervisors.put(updated)
       liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'UPDATE', key: id })
+
+      // Synchronize with backend API
+      try {
+        await backendResetPin({ userId: id, employeeCode: staffCode, role, newPin })
+      } catch (backendErr) {
+        console.warn('[supervisorService] Cloud PIN reset warning:', backendErr)
+      }
     }
 
     await auditLogRepo.add({

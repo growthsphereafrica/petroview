@@ -31,7 +31,8 @@ import {
 } from 'lucide-react'
 import { MVPLogo } from '../../components/common/MVPLogo'
 import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
-import { backendLogin, backendRegister, backendGetCompanies, backendGetCompanyStations, type BackendLoginResponse } from '../../services/backendApiService'
+import { backendLogin, backendRegister, backendGetCompanies, backendGetCompanyStations, backendGetNextStaffCode, type BackendLoginResponse } from '../../services/backendApiService'
+import { generateNextStaffCode } from '../../core/services/staffCodeService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
 
@@ -179,9 +180,20 @@ export const UnifiedLoginScreen: React.FC<{
         setRegStationId('')
       }
 
-      // Generate next code based on role and company prefix
+      // Generate next code based on role and company prefix (backend-first with local fallback)
       const prefix = shortCode
-      setRegGeneratedCode(`${prefix}001${regRole === 'attendant' ? 'A' : 'M'}`)
+      try {
+        const next = await backendGetNextStaffCode(activeCompId, regRole, prefix)
+        if (next?.nextCode) {
+          setRegGeneratedCode(next.nextCode)
+        } else {
+          const fallback = await generateNextStaffCode(regRole, prefix)
+          setRegGeneratedCode(fallback)
+        }
+      } catch {
+        const fallback = await generateNextStaffCode(regRole, prefix)
+        setRegGeneratedCode(fallback)
+      }
     })()
   }, [regCompanyId, regRole, companies])
 
@@ -278,6 +290,16 @@ export const UnifiedLoginScreen: React.FC<{
         companyName: targetCompany?.name || 'PetroView',
         pin: regPin,
       })
+
+      // Advance to the next sequential code for any subsequent registration
+      const activeCompId = targetCompany?.id
+      const prefix = targetCompany?.shortCode || 'PV'
+      try {
+        const next = await backendGetNextStaffCode(activeCompId, regRole, prefix)
+        if (next?.nextCode) {
+          setRegGeneratedCode(next.nextCode)
+        }
+      } catch { /* best effort */ }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       setRegError(msg)

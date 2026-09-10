@@ -5,8 +5,6 @@ import { colors } from './src/theme'
 import { LoginScreen, type MobileSession } from './src/screens/LoginScreen'
 import { AttendantDashboard } from './src/screens/AttendantDashboard'
 import { SupervisorConsole } from './src/screens/supervisor/SupervisorConsole'
-import { HeadOfficeDashboard } from './src/screens/HeadOfficeDashboard'
-import { SuperAdminDashboard } from './src/screens/SuperAdminDashboard'
 import { mobileAuth } from './src/core/services/authService'
 import { seedProductionData } from './src/core/infra/repositories'
 
@@ -133,17 +131,10 @@ export default function App() {
   }
 
   const renderDashboard = () => {
-    switch (session.role) {
-      case 'superadmin':
-        return <SuperAdminDashboard session={session} onSignOut={handleSignOut} />
-      case 'headoffice':
-        return <HeadOfficeDashboard session={session} onSignOut={handleSignOut} />
-      case 'supervisor':
-        return <SupervisorConsole session={session} onSignOut={handleSignOut} />
-      case 'attendant':
-      default:
-        return <AttendantDashboard session={session} onSignOut={handleSignOut} />
+    if (session.role === 'supervisor') {
+      return <SupervisorConsole session={session} onSignOut={handleSignOut} />
     }
+    return <AttendantDashboard session={session} onSignOut={handleSignOut} />
   }
 
   return (

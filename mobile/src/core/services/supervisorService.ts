@@ -6,6 +6,7 @@
 import { DomainError } from '../domain/errors'
 import { uid } from '../domain/config'
 import { hashPin } from '../infra/password'
+import { cloudResetPin } from '../infra/cloudApi'
 import type { AuditEntry, Shift } from '../domain/types'
 import {
   listShifts,
@@ -86,6 +87,12 @@ export class SupervisorService {
       notes: `PIN reset for ${attendant.employeeCode} (${attendant.fullName})`,
       timestamp: new Date().toISOString(),
     })
+    // Push PIN reset to backend API
+    try {
+      await cloudResetPin(employeeCode, newPin)
+    } catch {
+      // Offline fallback
+    }
   }
 
   async registerAttendant(input: { employeeCode: string; fullName: string; pin: string; pumpId?: string; stationId?: string }, actor: Reviewer): Promise<void> {

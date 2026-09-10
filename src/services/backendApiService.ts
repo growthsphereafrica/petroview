@@ -110,6 +110,31 @@ export async function backendLogout(): Promise<void> {
   clearCloudToken()
 }
 
+export async function backendGetNextStaffCode(
+  companyId?: string,
+  role: 'attendant' | 'supervisor' = 'attendant',
+  shortCode?: string,
+): Promise<{ nextCode: string; companyShortCode: string; sequence: number }> {
+  const params = new URLSearchParams()
+  if (companyId) params.set('companyId', companyId)
+  if (role) params.set('role', role)
+  if (shortCode) params.set('shortCode', shortCode)
+  const qs = params.toString()
+  return apiCall(`/api/auth/next-code${qs ? '?' + qs : ''}`)
+}
+
+export async function backendResetPin(input: {
+  userId?: string
+  employeeCode?: string
+  role?: 'attendant' | 'supervisor'
+  newPin: string
+}): Promise<{ success: boolean; message: string; employeeCode: string }> {
+  return apiCall('/api/auth/reset-pin', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
 export async function backendGetPendingApprovals(companyId?: string): Promise<{ supervisors: BackendPendingApproval[]; attendants: BackendPendingApproval[]; total: number }> {
   const params = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
   const data = await apiCall<any>(`/api/auth/pending-approvals${params}`)

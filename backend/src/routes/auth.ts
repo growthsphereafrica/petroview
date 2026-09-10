@@ -206,6 +206,127 @@ authRouter.post('/register', (req, res) => {
   }
 })
 
+// --- Next sequential staff code generation ---
+authRouter.get('/next-code', (req, res) => {
+  const companyId = req.query.companyId ? String(req.query.companyId).trim() : ''
+  const role = req.query.role === 'supervisor' ? 'supervisor' : 'attendant'
+  let prefix = req.query.shortCode ? String(req.query.shortCode).trim().toUpperCase() : ''
+
+  if (!prefix && companyId) {
+    const comp = db.prepare('SELECT shortCode FROM companies WHERE id = ?').get(companyId) as { shortCode: string } | undefined
+    if (comp?.shortCode) {
+      prefix = comp.shortCode.trim().toUpperCase()
+    }
+  }
+
+  if (!prefix) {
+    prefix = 'PV'
+  }
+
+  // Fetch all existing employee codes for this company / prefix
+  const attendantCodes = (db.prepare(`
+    SELECT employeeCode FROM attendants 
+    WHERE (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+  `).all(companyId, prefix, `${prefix}%`) as Array<{ employeeCode: string }>).map(r => r.employeeCode)
+
+  const supervisorCodes = (db.prepare(`
+    SELECT employeeCode FROM supervisors 
+    WHERE (companyId = ? OR companyShortCode = ? OR employeeCode LIKE ?)
+      AND UPPER(employeeCode) != 'SUPER-ADMIN'
+  `).all(companyId, prefix, `${prefix}%`) as Array<{ employeeCode: string }>).map(r => r.employeeCode)
+
+  const allCodes = [...attendantCodes, ...supervisorCodes]
+
+  let maxIndex = 0
+  const pattern = new RegExp(`^${prefix}(\\d+)[AM]?$`, 'i')
+
+  for (const code of allCodes) {
+    const match = String(code).trim().match(pattern)
+    if (match) {
+      const val = parseInt(match[1], 10)
+      if (!isNaN(val) && val > maxIndex) {
+        maxIndex = val
+      }
+    }
+  }
+
+  const nextIndex = maxIndex + 1
+  const suffix = role === 'attendant' ? 'A' : 'M'
+  const nextCode = `${prefix}${String(nextIndex).padStart(3, '0')}${suffix}`
+
+  res.json({
+    nextCode,
+    companyShortCode: prefix,
+    sequence: nextIndex,
+    role,
+  })
+})
+
+// --- Reset Staff PIN (Attendant or Supervisor) ---
+authRouter.post('/reset-pin', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
+  const { userId, employeeCode, newPin } = (req.body ?? {}) as {
+    userId?: string
+    employeeCode?: string
+    newPin?: string
+  }
+
+  if (!newPin || !/^\d{4}$/.test(String(newPin).trim())) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'A 4-digit PIN is required.' })
+    return
+  }
+
+  const cleanPin = String(newPin).trim()
+  const cleanCode = employeeCode ? String(employeeCode).trim().toUpperCase() : ''
+  const cleanId = userId ? String(userId).trim() : ''
+
+  if (!cleanId && !cleanCode) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'userId or employeeCode is required.' })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const actorId = req.session?.userId ?? 'admin'
+  const actorName = req.session?.fullName ?? 'Administrator'
+  const actorRole = req.session?.role?.toUpperCase() ?? 'SUPERVISOR'
+  const { salt, hash } = hashPin(cleanPin)
+
+  // Look in supervisors first
+  let sup = (cleanId
+    ? db.prepare('SELECT id, employeeCode, fullName FROM supervisors WHERE id = ?').get(cleanId)
+    : db.prepare('SELECT id, employeeCode, fullName FROM supervisors WHERE employeeCode = ? COLLATE NOCASE').get(cleanCode)) as
+    | { id: string; employeeCode: string; fullName: string }
+    | undefined
+
+  if (sup) {
+    db.prepare('UPDATE supervisors SET pinSalt = ?, pinHash = ?, failedAttempts = 0, lockoutUntil = NULL WHERE id = ?').run(salt, hash, sup.id)
+    db.prepare(
+      'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    ).run(newToken(), 'PIN_RESET', actorId, actorName, actorRole, sup.id, `PIN reset for supervisor ${sup.employeeCode} (${sup.fullName})`, `Reset by ${actorName}`, now, null)
+
+    res.json({ success: true, message: `PIN reset successfully for supervisor ${sup.employeeCode}.`, employeeCode: sup.employeeCode, id: sup.id })
+    return
+  }
+
+  // Look in attendants
+  let att = (cleanId
+    ? db.prepare('SELECT id, employeeCode, fullName FROM attendants WHERE id = ?').get(cleanId)
+    : db.prepare('SELECT id, employeeCode, fullName FROM attendants WHERE employeeCode = ? COLLATE NOCASE').get(cleanCode)) as
+    | { id: string; employeeCode: string; fullName: string }
+    | undefined
+
+  if (att) {
+    db.prepare('UPDATE attendants SET pinSalt = ?, pinHash = ?, failedAttempts = 0, lockoutUntil = NULL WHERE id = ?').run(salt, hash, att.id)
+    db.prepare(
+      'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    ).run(newToken(), 'PIN_RESET', actorId, actorName, actorRole, att.id, `PIN reset for attendant ${att.employeeCode} (${att.fullName})`, `Reset by ${actorName}`, now, null)
+
+    res.json({ success: true, message: `PIN reset successfully for attendant ${att.employeeCode}.`, employeeCode: att.employeeCode, id: att.id })
+    return
+  }
+
+  res.status(404).json({ error: 'NOT_FOUND', message: 'Staff user not found in supervisors or attendants.' })
+})
+
 // --- OMC HQ: list pending approvals ---
 authRouter.get('/pending-approvals', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
   const companyId = req.session?.role === 'superadmin' ? (req.query.companyId as string | undefined) : req.session?.companyId

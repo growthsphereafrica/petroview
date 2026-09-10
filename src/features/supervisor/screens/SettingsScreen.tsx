@@ -16,7 +16,7 @@ export const SupervisorSettingsScreen: React.FC<{ onBack: () => void }> = ({ onB
       <StatusBar online />
       <ScreenHeader title="Settings" subtitle="PetroView · Supervisor Console" onBack={onBack} />
 
-      <div className="flex-1 px-4 py-4 max-w-md w-full mx-auto flex flex-col gap-4">
+      <div className="flex-1 px-4 py-4 max-w-4xl w-full mx-auto flex flex-col gap-4">
         <Card className="divide-y divide-slate-800/70 overflow-hidden">
           <div className="px-4 py-3">
             <p className="text-[10px] uppercase font-bold text-slate-500">Signed in as</p>

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { StatusBar } from 'expo-status-bar'
 import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native'
+import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { colors } from './src/theme'
 import { LoginScreen, type MobileSession } from './src/screens/LoginScreen'
 import { AttendantDashboard } from './src/screens/AttendantDashboard'
@@ -82,47 +83,51 @@ export default function App() {
   }, [restore])
 
   if (!ready) {
-    // Never return null here — a blank root view is exactly the "black screen"
-    // users hit. Always render a visible branded splash while startup runs.
     return (
-      <View style={styles.splash}>
-        <StatusBar style="light" />
-        <View style={styles.splashLogo}>
-          <Text style={styles.splashLogoText}>MVP</Text>
+      <SafeAreaProvider>
+        <View style={styles.splash}>
+          <StatusBar style="light" />
+          <View style={styles.splashLogo}>
+            <Text style={styles.splashLogoText}>MVP</Text>
+          </View>
+          <Text style={styles.splashTitle}>Master View Petroleum</Text>
+          <Text style={styles.splashSub}>Starting local forecourt…</Text>
         </View>
-        <Text style={styles.splashTitle}>Master View Petroleum</Text>
-        <Text style={styles.splashSub}>Starting local forecourt…</Text>
-      </View>
+      </SafeAreaProvider>
     )
   }
 
   if (startupError) {
     return (
-      <View style={styles.errorRoot}>
-        <Text style={styles.errorTitle}>Startup error</Text>
-        <ScrollView style={{ maxHeight: 220 }} contentContainerStyle={{ paddingVertical: 8 }}>
-          <Text style={styles.errorBody}>{startupError}</Text>
-        </ScrollView>
-        <TouchableOpacity
-          style={styles.retry}
-          onPress={() => {
-            setStartupError(null)
-            setReady(false)
-            void restore()
-          }}
-        >
-          <Text style={styles.retryText}>Retry</Text>
-        </TouchableOpacity>
-      </View>
+      <SafeAreaProvider>
+        <View style={styles.errorRoot}>
+          <Text style={styles.errorTitle}>Startup error</Text>
+          <ScrollView style={{ maxHeight: 220 }} contentContainerStyle={{ paddingVertical: 8 }}>
+            <Text style={styles.errorBody}>{startupError}</Text>
+          </ScrollView>
+          <TouchableOpacity
+            style={styles.retry}
+            onPress={() => {
+              setStartupError(null)
+              setReady(false)
+              void restore()
+            }}
+          >
+            <Text style={styles.retryText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaProvider>
     )
   }
 
   if (!session) {
     return (
-      <ErrorBoundary>
-        <StatusBar style="light" />
-        <LoginScreen onAuthenticated={s => setSession(s)} />
-      </ErrorBoundary>
+      <SafeAreaProvider>
+        <ErrorBoundary>
+          <StatusBar style="light" />
+          <LoginScreen onAuthenticated={s => setSession(s)} />
+        </ErrorBoundary>
+      </SafeAreaProvider>
     )
   }
 
@@ -139,10 +144,12 @@ export default function App() {
   }
 
   return (
-    <ErrorBoundary>
-      <StatusBar style="light" />
-      {renderDashboard()}
-    </ErrorBoundary>
+    <SafeAreaProvider>
+      <ErrorBoundary>
+        <StatusBar style="light" />
+        {renderDashboard()}
+      </ErrorBoundary>
+    </SafeAreaProvider>
   )
 }
 

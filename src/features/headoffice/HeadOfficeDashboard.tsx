@@ -511,12 +511,12 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
         </div>
 
         {/* Action Buttons & Tabs */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap max-w-full">
           {/* Main HQ Tabs */}
-          <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800">
+          <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800 overflow-x-auto max-w-full">
             <button
               onClick={() => setActiveTab('overview')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'overview'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -528,7 +528,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
             <button
               onClick={() => setActiveTab('summaries')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'summaries'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -540,7 +540,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
             <button
               onClick={() => setActiveTab('approvals')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition relative ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition relative shrink-0 ${
                 activeTab === 'approvals'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -557,19 +557,19 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
 
             <button
               onClick={() => setActiveTab('staff')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'staff'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <UserCog className="w-3.5 h-3.5" />
+              <Building2 className="w-3.5 h-3.5" />
               <span>Staff Management</span>
             </button>
 
             <button
               onClick={() => setActiveTab('products')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'products'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'

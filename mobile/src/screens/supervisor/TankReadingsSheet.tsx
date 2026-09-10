@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, ActivityIndicator, Modal } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Droplets, Gauge, Plus, Save, History } from 'lucide-react-native'
 import { colors } from '../../theme'
 import { Card } from '../../components/ui'
@@ -23,6 +24,7 @@ export const TankReadingsSheet: React.FC<{
   stationId: string | null
   stationName?: string
 }> = ({ visible, onClose, stationId, stationName }) => {
+  const insets = useSafeAreaInsets()
   const [mode, setMode] = useState<'history' | 'record'>('history')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -100,7 +102,7 @@ export const TankReadingsSheet: React.FC<{
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom + 16, 32) }]}>
           <View style={styles.header}>
             <View>
               <Text style={styles.title}>Tank Readings</Text>

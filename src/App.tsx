@@ -89,17 +89,17 @@ const MainAppLayout: React.FC = () => {
       theme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-[#080c14] text-slate-100'
     }`}>
       {/* Clean Production Enterprise Header */}
-      <header className={`px-4 sm:px-6 py-2.5 shrink-0 flex items-center justify-between gap-3 sticky top-0 z-40 backdrop-blur-md border-b transition-colors ${
+      <header className={`px-2.5 sm:px-6 py-2 shrink-0 flex items-center justify-between gap-2 sm:gap-3 sticky top-0 z-40 backdrop-blur-md border-b transition-colors ${
         theme === 'light' ? 'bg-white/95 border-slate-200 shadow-sm' : 'bg-slate-950/90 border-slate-800/80'
       }`}>
         {/* Brand & Station Identity */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <MVPLogo size="md" showText={!isMobileScreen} tagline={!isMobileScreen} />
 
           {/* Active Station / Enterprise Tag */}
           <button
             onClick={() => session.role === 'superadmin' && setIsCompanyModalOpen(true)}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border text-left transition ${
+            className={`flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-xl border text-left transition shrink min-w-0 ${
               theme === 'light' ? 'bg-slate-100 border-slate-200 text-slate-800' : 'bg-slate-900/90 border-slate-800 text-white'
             } ${
               session.role === 'superadmin'
@@ -109,18 +109,18 @@ const MainAppLayout: React.FC = () => {
             title={session.role === 'superadmin' ? 'Global Platform Owner · Switch/inspect tenant' : 'Assigned Enterprise OMC'}
           >
             <span
-              className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30"
+              className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30 shrink-0"
               style={{ backgroundColor: session.role === 'superadmin' ? '#F43F5E' : activeCompany.primaryColor }}
             />
-            <div className="leading-tight">
-              <span className="text-[9px] font-mono font-bold text-orange-500 block uppercase">
+            <div className="leading-tight min-w-0">
+              <span className="text-[9px] font-mono font-bold text-orange-500 block uppercase truncate">
                 {session.role === 'superadmin'
                   ? 'Master Console'
                   : session.role === 'headoffice'
                   ? session.companyShortCode || 'Enterprise Network'
                   : activeCompany.shortCode}
               </span>
-              <span className={`text-xs font-bold truncate max-w-[140px] sm:max-w-none block ${
+              <span className={`text-xs font-bold truncate max-w-[100px] sm:max-w-none block ${
                 theme === 'light' ? 'text-slate-900' : 'text-white'
               }`}>
                 {session.role === 'superadmin'
@@ -129,13 +129,13 @@ const MainAppLayout: React.FC = () => {
               </span>
             </div>
             {session.role === 'superadmin' && (
-              <ChevronDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-orange-400 transition ml-0.5" />
+              <ChevronDown className="w-3.5 h-3.5 text-slate-500 group-hover:text-orange-400 transition ml-0.5 shrink-0" />
             )}
           </button>
         </div>
 
         {/* Right Section: Theme Toggle + Role View Mode toggle + Operator Profile + Connectivity + Sign Out */}
-        <div className="flex items-center gap-2 sm:gap-3">
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {/* Global Theme Toggle */}
           <ThemeToggleButton size="sm" />
 
@@ -156,7 +156,7 @@ const MainAppLayout: React.FC = () => {
           )}
 
           {/* User Profile Pill */}
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-xl border shadow-inner ${
+          <div className={`flex items-center gap-1.5 sm:gap-2 px-2 sm:px-3 py-1.5 rounded-xl border shadow-inner ${
             theme === 'light' ? 'bg-slate-100/90 border-slate-200' : 'bg-slate-900/90 border-slate-800'
           }`}>
             <div

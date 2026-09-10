@@ -59,7 +59,7 @@ export const SupervisorShiftDetailScreen: React.FC<{
       <StatusBar online />
       <ScreenHeader title={`Shift ${shift.number}`} subtitle={`${station.name} · ${shift.pumpName}`} onBack={onBack} />
 
-      <div className="flex-1 px-4 py-4 max-w-md w-full mx-auto flex flex-col gap-4">
+      <div className="flex-1 px-4 py-4 max-w-4xl w-full mx-auto flex flex-col gap-4">
         {/* Status + meta */}
         <Card className="p-4">
           <div className="flex items-center justify-between mb-3">

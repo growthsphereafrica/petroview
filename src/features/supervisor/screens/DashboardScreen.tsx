@@ -81,7 +81,7 @@ export const SupervisorDashboardScreen: React.FC<{
         </div>
       </div>
 
-      <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-md w-full mx-auto">
+      <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-4xl w-full mx-auto">
         {/* Alert: pending reviews */}
         {pendingReview > 0 && (
           <button

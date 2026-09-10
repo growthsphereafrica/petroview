@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
-import { View, Text, StyleSheet, SafeAreaView, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native'
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, TouchableOpacity } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Flame, ShieldCheck, UserCog, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
 import { PrimaryButton, StyledTextInput } from '../components/ui'
@@ -19,6 +20,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
   const [pin, setPin] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [signingIn, setSigningIn] = useState(false)
+  const insets = useSafeAreaInsets()
 
   const submit = async () => {
     setError(null)
@@ -61,7 +63,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     : null
 
   return (
-    <SafeAreaView style={styles.safe}>
+    <View style={[styles.safe, { paddingTop: Math.max(insets.top, 24), paddingBottom: Math.max(insets.bottom, 20) }]}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
           <View style={styles.brand}>
@@ -134,7 +136,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
-    </SafeAreaView>
+    </View>
   )
 }
 

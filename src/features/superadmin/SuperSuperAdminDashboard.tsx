@@ -631,11 +631,11 @@ export const SuperSuperAdminDashboard: React.FC = () => {
         </div>
 
         {/* Top Actions & Navigation Tabs */}
-        <div className="flex items-center gap-2.5">
-          <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800">
+        <div className="flex items-center gap-2.5 flex-wrap sm:flex-nowrap max-w-full">
+          <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800 overflow-x-auto max-w-full">
             <button
               onClick={() => setActiveTab('companies')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'companies'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -647,7 +647,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('staff')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'staff'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'
@@ -659,7 +659,7 @@ export const SuperSuperAdminDashboard: React.FC = () => {
 
             <button
               onClick={() => setActiveTab('products')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
                 activeTab === 'products'
                   ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
                   : 'text-slate-400 hover:text-white'

@@ -47,7 +47,7 @@ export const SupervisorSyncScreen: React.FC<{ onBack: () => void }> = ({ onBack 
       <StatusBar online />
       <ScreenHeader title="Sync Center" subtitle="Offline-first · durable queue" onBack={onBack} />
 
-      <div className="flex-1 px-4 py-4 max-w-md w-full mx-auto flex flex-col gap-4">
+      <div className="flex-1 px-4 py-4 max-w-4xl w-full mx-auto flex flex-col gap-4">
         <Card className="p-4">
           <div className="flex items-center justify-between mb-1">
             <p className="text-[10px] uppercase font-bold text-slate-500">Queued for upload</p>

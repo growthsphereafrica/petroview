@@ -150,7 +150,7 @@ export const SupervisorTankReadingsScreen: React.FC<{
         }
       />
 
-      <div className="flex-1 px-4 py-4 max-w-md w-full mx-auto flex flex-col gap-4">
+      <div className="flex-1 px-4 py-4 max-w-4xl w-full mx-auto flex flex-col gap-4">
         <div className="flex rounded-xl bg-slate-900 border border-slate-800 p-1 overflow-hidden">
           {(['history', 'record'] as const).map(m => (
             <button

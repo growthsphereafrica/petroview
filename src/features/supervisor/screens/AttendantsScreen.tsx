@@ -315,7 +315,7 @@ export const SupervisorAttendantsScreen: React.FC<{
         }
       />
 
-      <div className="flex-1 px-4 py-3 max-w-2xl w-full mx-auto flex flex-col gap-3">
+      <div className="flex-1 px-4 py-3 max-w-5xl w-full mx-auto flex flex-col gap-3">
         {/* Navigation Tabs (Summaries vs Roster) */}
         <div className="flex items-center justify-between gap-2 print:hidden">
           <div className="flex items-center p-1 bg-slate-900 rounded-xl border border-slate-800">

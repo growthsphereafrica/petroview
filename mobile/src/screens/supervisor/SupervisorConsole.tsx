@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
   ClipboardCheck,
   DollarSign,
@@ -71,32 +72,34 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
     void refresh()
   }, [refreshKey, refresh])
 
+  const insets = useSafeAreaInsets()
+
   const pendingReview = shifts.filter(s => s.status === 'CLOSED').length
   const openCount = shifts.filter(s => s.status === 'OPEN').length
 
   return (
     <View style={styles.safe}>
       {/* Header Bar */}
-      <View style={styles.header}>
-        <View style={{ flex: 1 }}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
+        <View style={{ flex: 1, paddingRight: 8 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             <Users size={18} color={colors.emerald} />
-            <Text style={styles.heading}>Forecourt Supervisor Console</Text>
+            <Text style={styles.heading} numberOfLines={1}>Supervisor Console</Text>
           </View>
-          <Text style={styles.sub}>{session.fullName} · {session.employeeCode}</Text>
+          <Text style={styles.sub} numberOfLines={1}>{session.fullName} · {session.employeeCode}</Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Pressable onPress={() => setQrOpen(true)} style={styles.iconTopBtn}>
+          <Pressable onPress={() => setQrOpen(true)} style={styles.iconTopBtn} hitSlop={8}>
             <QrCode size={16} color={colors.violet} />
           </Pressable>
-          <Pressable onPress={onSignOut} style={styles.signOutBtn}>
+          <Pressable onPress={onSignOut} style={styles.signOutBtn} hitSlop={8}>
             <Text style={styles.signOutText}>Sign out</Text>
           </Pressable>
         </View>
       </View>
 
       {/* Main Content */}
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom + 84, 110) }]}>
         {loading ? (
           <View style={styles.center}><ActivityIndicator color={colors.emerald} size="large" /></View>
         ) : (
@@ -136,15 +139,20 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
       </ScrollView>
 
       {/* Bottom Tab Bar */}
-      <View style={styles.tabBar}>
+      <View style={[styles.tabBar, { paddingBottom: Math.max(insets.bottom + 6, 20) }]}>
         {([
           ['dashboard', LayoutDashboard, 'Home'],
           ['shifts', ClipboardCheck, 'Shifts'],
           ['tanks', Droplets, 'Tanks'],
           ['attendants', Users, 'Staff'],
         ] as const).map(([key, Icon, label]) => (
-          <Pressable key={key} onPress={() => setTab(key)} style={[styles.tabItem, tab === key && styles.tabItemActive]}>
-            <Icon size={18} color={tab === key ? colors.emerald : colors.textFaint} />
+          <Pressable
+            key={key}
+            onPress={() => setTab(key)}
+            style={[styles.tabItem, tab === key && styles.tabItemActive]}
+            hitSlop={{ top: 8, bottom: 8, left: 10, right: 10 }}
+          >
+            <Icon size={19} color={tab === key ? colors.emerald : colors.textFaint} />
             <Text style={[styles.tabLabel, { color: tab === key ? colors.emerald : colors.textFaint }]}>{label}</Text>
           </Pressable>
         ))}
@@ -769,11 +777,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.panel,
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    paddingVertical: 8,
+    paddingTop: 8,
     paddingBottom: 22,
   },
-  tabItem: { flex: 1, alignItems: 'center', gap: 3 },
+  tabItem: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 46, paddingVertical: 4, gap: 3 },
   tabItemActive: {},
-  tabLabel: { fontSize: 9, fontWeight: '800', marginTop: 1 },
+  tabLabel: { fontSize: 10, fontWeight: '800', marginTop: 1 },
   reloadBtn: { alignItems: 'center', padding: 14, marginTop: 4 },
 })

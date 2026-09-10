@@ -97,7 +97,7 @@ export const SupervisorShiftsScreen: React.FC<{
         ))}
       </div>
 
-      <div className="flex-1 px-4 py-3 max-w-md w-full mx-auto">
+      <div className="flex-1 px-4 py-3 max-w-4xl w-full mx-auto">
         {loading ? (
           <Card className="p-5 flex items-center gap-3">
             <span className="w-5 h-5 border-2 border-slate-700 border-t-orange-500 rounded-full animate-spin" />

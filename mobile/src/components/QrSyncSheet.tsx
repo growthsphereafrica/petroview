@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import { View, Text, StyleSheet, Pressable, ActivityIndicator, Platform, Modal } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import QRCode from 'react-native-qrcode-svg'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { QrCode, Camera, ArrowLeft, CheckCircle2 } from 'lucide-react-native'
@@ -18,6 +19,7 @@ const decodeLabel = (o: ScanOutcome): string | null => {
 }
 
 export const QrSyncSheet: React.FC<{ visible: boolean; onClose: () => void; onSynced?: () => void }> = ({ visible, onClose, onSynced }) => {
+  const insets = useSafeAreaInsets()
   const [mode, setMode] = useState<Mode>('choose')
   const [frames, setFrames] = useState<QrFrame[]>([])
   const [frameIdx, setFrameIdx] = useState(0)
@@ -68,7 +70,7 @@ export const QrSyncSheet: React.FC<{ visible: boolean; onClose: () => void; onSy
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.backdrop}>
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom + 20, 36) }]}>
           <View style={styles.header}>
             <Text style={styles.title}>
               {mode === 'choose' ? 'QR Code Sync' : mode === 'send' ? 'Send — show this code' : 'Receive — scan a code'}

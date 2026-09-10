@@ -63,7 +63,7 @@ export const SupervisorAuditLogScreen: React.FC<{
       <StatusBar online />
       <ScreenHeader title="Audit Trail" subtitle={`${auditLog.length} recorded actions`} onBack={onBack} />
 
-      <div className="flex-1 px-4 py-4 max-w-md w-full mx-auto">
+      <div className="flex-1 px-4 py-4 max-w-4xl w-full mx-auto">
         {auditLog.length === 0 ? (
           <Card className="p-6 text-center">
             <History className="w-6 h-6 text-slate-600 mx-auto mb-2" />

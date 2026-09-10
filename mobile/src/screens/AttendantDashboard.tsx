@@ -3,12 +3,12 @@ import {
   View,
   Text,
   StyleSheet,
-  SafeAreaView,
   ScrollView,
   Pressable,
   Modal,
   ActivityIndicator,
 } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
@@ -105,36 +105,36 @@ export const AttendantDashboard: React.FC<{
     setLoading(false)
   }, [attendantId])
 
+  const insets = useSafeAreaInsets()
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.safe}>
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.emerald} size="large" />
-          <Text style={styles.loadText}>Connecting to Forecourt…</Text>
-        </View>
-      </SafeAreaView>
+      <View style={[styles.safe, styles.center, { paddingTop: Math.max(insets.top, 20) }]}>
+        <ActivityIndicator color={colors.emerald} size="large" />
+        <Text style={styles.loadText}>Connecting to Forecourt…</Text>
+      </View>
     )
   }
 
   return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content}>
+    <View style={[styles.safe, { paddingTop: Math.max(insets.top, 16) }]}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: Math.max(insets.bottom + 48, 64) }]}>
         {/* Header */}
         <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.greeting}>Hello, {session.fullName.split(' ')[0]} 👋</Text>
-            <Text style={styles.subGreeting}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
+          <View style={{ flex: 1, paddingRight: 8 }}>
+            <Text style={styles.greeting} numberOfLines={1}>Hello, {session.fullName.split(' ')[0]} 👋</Text>
+            <Text style={styles.subGreeting} numberOfLines={1}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
             {onSignOut && (
-              <Pressable onPress={onSignOut} style={styles.iconBtn}>
+              <Pressable onPress={onSignOut} style={styles.iconBtn} hitSlop={8}>
                 <LogOut size={16} color={colors.rose} />
               </Pressable>
             )}
-            <Pressable onPress={() => setTankOpen(true)} style={styles.iconBtn}>
+            <Pressable onPress={() => setTankOpen(true)} style={styles.iconBtn} hitSlop={8}>
               <Droplets size={16} color={colors.blue} />
             </Pressable>
-            <Pressable onPress={() => setQrOpen(true)} style={styles.iconBtn}>
+            <Pressable onPress={() => setQrOpen(true)} style={styles.iconBtn} hitSlop={8}>
               <QrCode size={16} color={colors.violet} />
             </Pressable>
             <Pressable
@@ -147,6 +147,7 @@ export const AttendantDashboard: React.FC<{
               }}
               style={styles.iconBtn}
               disabled={syncing}
+              hitSlop={8}
             >
               {syncing ? (
                 <ActivityIndicator size="small" color={colors.emerald} />
@@ -232,7 +233,7 @@ export const AttendantDashboard: React.FC<{
         )}
 
         {/* Sign out */}
-        <Pressable onPress={() => void mobileSignOut()} style={styles.signOut} disabled={!!shift}>
+        <Pressable onPress={() => void mobileSignOut()} style={[styles.signOut, { marginBottom: Math.max(insets.bottom, 16) }]} disabled={!!shift}>
           <LogOut size={14} color={shift ? colors.textFaint : colors.rose} />
           <Text style={[styles.signOutText, shift && { color: colors.textFaint }]}>
             Sign out{shift ? ' (Close shift first)' : ''}
@@ -397,7 +398,7 @@ export const AttendantDashboard: React.FC<{
           <Pressable onPress={() => setError(null)}><Text style={{ color: colors.rose }}>✕</Text></Pressable>
         </View>
       )}
-    </SafeAreaView>
+    </View>
   )
 
   async function mobileSignOut() {

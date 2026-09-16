@@ -82,6 +82,9 @@ export type AuditAction =
   | 'PRODUCT_CREATED'
   | 'PRODUCT_UPDATED'
   | 'PRODUCT_DELETED'
+  | 'EXPENSE_RECORDED'
+  | 'EXPENSE_UPDATED'
+  | 'EXPENSE_DELETED'
 
 export interface MeterReading {
   fuelCode: FuelCode
@@ -241,4 +244,29 @@ export interface AuditEntry {
   notes: string | null
   timestamp: string
   meta?: Record<string, string | number | boolean | null>
+}
+
+export type ExpensePaymentSource = 'CASH' | 'MOMO' | 'STATION_ACCOUNT' | 'OTHER'
+
+export interface StationExpense {
+  id: string
+  companyId: string
+  companyShortCode?: string
+  stationId: string
+  stationName: string
+  category: string
+  amount: number
+  paymentSource: ExpensePaymentSource
+  payee?: string
+  referenceNumber?: string
+  notes?: string
+  date: string // YYYY-MM-DD
+  recordedBy: {
+    id: string
+    name: string
+    employeeCode: string
+  }
+  status: 'APPROVED' | 'PENDING' | 'REJECTED'
+  createdAt: string
+  updatedAt: string
 }

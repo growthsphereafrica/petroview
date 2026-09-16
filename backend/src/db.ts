@@ -287,6 +287,26 @@ CREATE TABLE IF NOT EXISTS audit_log (
   meta TEXT
 );
 `,
+  station_expenses: `
+CREATE TABLE IF NOT EXISTS station_expenses (
+  id TEXT PRIMARY KEY,
+  companyId TEXT NOT NULL,
+  companyShortCode TEXT,
+  stationId TEXT NOT NULL,
+  stationName TEXT NOT NULL,
+  category TEXT NOT NULL,
+  amount REAL NOT NULL,
+  paymentSource TEXT NOT NULL,
+  payee TEXT,
+  referenceNumber TEXT,
+  notes TEXT,
+  date TEXT NOT NULL,
+  recordedBy TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'APPROVED',
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+`,
 }
 
 function tableColumns(table: string): string[] {

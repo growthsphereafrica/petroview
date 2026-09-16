@@ -41,20 +41,23 @@ import {
   Tag,
   PackagePlus,
   Plus,
+  Receipt,
+  TrendingDown,
 } from 'lucide-react'
 import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../core/services/rollupService'
 import { supervisorService } from '../../core/services/supervisorService'
 import { productService } from '../../core/services/productService'
+import { expenseService, type ExpenseSummary } from '../../core/services/expenseService'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { shiftStatusLabel, shiftStatusTone } from '../supervisor/util'
 import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS, formatLitres } from '../../utils/currencyFormatter'
 import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
 import { loadUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
-import type { Attendant, Supervisor, Product, ProductCategory } from '../../core/domain/types'
+import type { Attendant, Supervisor, Product, ProductCategory, StationExpense } from '../../core/domain/types'
 
 type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
-type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff' | 'products'
+type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff' | 'products' | 'expenses'
 
 const Splash: React.FC = () => (
   <div className="h-full flex flex-col items-center justify-center bg-[#090d16] gap-3">
@@ -138,6 +141,13 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   } | null>(null)
   const [editStaffBusy, setEditStaffBusy] = useState(false)
 
+  // Station Expenses State (scoped to company)
+  const [companyExpenses, setCompanyExpenses] = useState<StationExpense[]>([])
+  const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary | null>(null)
+  const [expenseStationFilter, setExpenseStationFilter] = useState('ALL')
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('ALL')
+  const [expenseSearch, setExpenseSearch] = useState('')
+
   const loadData = useMemo(
     () => async () => {
       setRefreshing(true)
@@ -155,7 +165,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
           endArg = customEndDate
         }
 
-        const [sum, pending, all, prods] = await Promise.all([
+        const [sum, pending, all, prods, exps, expSum] = await Promise.all([
           rollupService.summary({
             days: daysArg,
             companyId,
@@ -165,11 +175,23 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
           supervisorService.listPendingStaff(companyId),
           supervisorService.listAllStaff(companyId),
           productService.getAllProducts(companyId),
+          expenseService.listExpenses({
+            companyId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
+          expenseService.getExpenseSummary({
+            companyId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
         ])
         setSummary(sum)
         setPendingStaff(pending)
         setAllStaff(all)
         setProducts(prods)
+        setCompanyExpenses(exps)
+        setExpenseSummary(expSum)
       } finally {
         setRefreshing(false)
       }
@@ -419,6 +441,9 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
       a.active ? 'ACTIVE' : a.approvalStatus,
     ])
 
+    const totalFleetExpenses = companyExpenses.reduce((a, b) => a + b.amount, 0)
+    const netFleetRevenue = Math.max(0, summary.salesToday - totalFleetExpenses)
+
     const stationHeader = ['', 'Station Name', 'Station Code', 'Location', 'Region', 'Total Litres (L)', 'Total Sales (GHS)', 'Variance (GHS)', 'Shifts']
     const stationRows = summary.stations.map(s => [
       '',
@@ -432,9 +457,41 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
       s.shiftCount,
     ])
 
+    const expenseHeader = [
+      'Date',
+      'Station Name',
+      'Expense Category',
+      'Amount (GHS)',
+      'Payment Source',
+      'Payee',
+      'Reference No.',
+      'Recorded By',
+      'Notes',
+    ]
+
+    const expenseRows = companyExpenses.map(e => [
+      e.date,
+      e.stationName,
+      e.category,
+      e.amount.toFixed(2),
+      e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
+      e.payee || 'N/A',
+      e.referenceNumber || 'N/A',
+      e.recordedBy.name,
+      e.notes || '',
+    ])
+
     const allCsv = [
-      [`${companyName} Enterprise Sales & Staff Summary Report - Period: ${periodLabel}`],
+      [`${companyName} Enterprise Sales, Expenses & Performance Master Report - Period: ${periodLabel}`],
       [`Generated at: ${formatDateTime(summary.generatedAt)}`],
+      [''],
+      ['FINANCIAL RECONCILIATION SUMMARY'],
+      [`Total Fleet Gross Fuel Sales: GHS ${summary.salesToday.toFixed(2)}`],
+      [`Less Total Station Expenses: -GHS ${totalFleetExpenses.toFixed(2)}`],
+      [`Net Fleet Revenue: GHS ${netFleetRevenue.toFixed(2)}`],
+      [`Total Stations Active: ${summary.stationCount}`],
+      [`Total Shifts Recorded: ${summary.totalShifts}`],
+      [`Net Pump Variance: GHS ${summary.netVariance.toFixed(2)}`],
       [''],
       ['STAFF PERFORMANCE SUMMARY'],
       header,
@@ -443,6 +500,10 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
       ['STATION BRANCH SUMMARY'],
       stationHeader,
       ...stationRows,
+      [''],
+      ['ENTERPRISE STATION EXPENSES AUDIT LOG'],
+      expenseHeader,
+      ...expenseRows,
     ]
       .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
       .join('\n')
@@ -451,7 +512,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${companyShortCode.toLowerCase()}-staff-report-${periodLabel}.csv`
+    a.download = `${companyShortCode.toLowerCase()}-enterprise-report-${periodLabel}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -577,6 +638,23 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
             >
               <Flame className="w-3.5 h-3.5" />
               <span>Products & Pricing</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('expenses')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
+                activeTab === 'expenses'
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Station Expenses</span>
+              {companyExpenses.length > 0 && (
+                <span className="w-5 h-5 rounded-full bg-slate-800 text-orange-400 text-[10px] font-black flex items-center justify-center">
+                  {companyExpenses.length}
+                </span>
+              )}
             </button>
           </div>
 
@@ -777,6 +855,68 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
               <p className="text-[10px] text-slate-500 mt-1">{summary.stationCount} Station Branches</p>
             </Card>
           </div>
+
+          {/* Fleet Expenses & Net Cash Inflow Reconciliation */}
+          <Card className="p-4 bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-950 border-orange-500/30 shadow-xl">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3 pb-3 border-b border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-orange-400" />
+                <div>
+                  <h4 className="text-xs font-extrabold text-white uppercase tracking-wider">
+                    Enterprise Net Financial Reconciliation
+                  </h4>
+                  <p className="text-[10px] text-slate-400">
+                    Gross Fleet Fuel Sales less Station Operational Expenses in selected period
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveTab('expenses')}
+                className="text-xs text-orange-400 hover:text-orange-300 font-bold flex items-center gap-1 self-start sm:self-auto"
+              >
+                <span>View Full Expenses Audit Ledger ({companyExpenses.length})</span>
+                <span>→</span>
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                <span className="text-[10px] uppercase font-bold text-slate-500 block">Gross Fleet Sales</span>
+                <span className="text-lg font-black text-emerald-400 block mt-0.5">
+                  {formatGHS(summary.salesToday)}
+                </span>
+                <span className="text-[10px] text-slate-500">
+                  {formatLitres(summary.litresToday)} litres across {summary.stationCount} stations
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase font-bold text-rose-400 block">Station Expenses</span>
+                  <TrendingDown className="w-4 h-4 text-rose-400" />
+                </div>
+                <span className="text-lg font-black text-rose-400 block mt-0.5">
+                  -{formatGHS(companyExpenses.reduce((a, b) => a + b.amount, 0))}
+                </span>
+                <span className="text-[10px] text-rose-300/80">
+                  {companyExpenses.length} operational expense entries
+                </span>
+              </div>
+
+              <div className="p-3 rounded-xl bg-orange-500/10 border border-orange-500/40">
+                <span className="text-[10px] uppercase font-bold text-orange-400 block">Net Fleet Inflow</span>
+                <span className="text-lg font-black text-orange-400 block mt-0.5">
+                  {formatGHS(
+                    Math.max(
+                      0,
+                      summary.salesToday - companyExpenses.reduce((a, b) => a + b.amount, 0),
+                    ),
+                  )}
+                </span>
+                <span className="text-[10px] text-orange-300/80">true station revenue after local deductions</span>
+              </div>
+            </div>
+          </Card>
 
           {/* Real Company Stations & Leaderboards */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -1343,6 +1483,274 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 </Card>
               ))}
           </div>
+        </div>
+      )}
+
+      {/* ----------------- TAB 6: STATION EXPENSES (ENTERPRISE) ----------------- */}
+      {activeTab === 'expenses' && (
+        <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-5xl w-full mx-auto">
+          {/* Header Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900 border border-slate-800">
+            <div>
+              <div className="flex items-center gap-2">
+                <Receipt className="w-5 h-5 text-orange-400" />
+                <h3 className="text-sm font-black text-white">Enterprise Station Expenses & Outflows</h3>
+              </div>
+              <p className="text-xs text-slate-400 mt-1">
+                Live forecourt operating expenses, generator maintenance, utilities and supplies logged across all {companyName} retail stations.
+              </p>
+            </div>
+            <button
+              onClick={downloadExcelCsv}
+              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition self-start sm:self-auto border border-slate-700"
+            >
+              <Download className="w-4 h-4" />
+              <span>Export Expenses (Excel)</span>
+            </button>
+          </div>
+
+          {/* KPI Cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <Card className="p-3.5 bg-slate-900/90 border-rose-500/20">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">Total Fleet Expenses</span>
+              <span className="text-lg font-black text-rose-400 block mt-0.5">
+                -{formatGHS(companyExpenses.reduce((a, b) => a + b.amount, 0))}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                {companyExpenses.length} records in period
+              </span>
+            </Card>
+
+            <Card className="p-3.5 bg-slate-900/90 border-orange-500/20">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">Today's Total Outflow</span>
+              <span className="text-lg font-black text-orange-400 block mt-0.5">
+                -{formatGHS(expenseSummary?.todayAmount || 0)}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                {expenseSummary?.todayCount || 0} entries today
+              </span>
+            </Card>
+
+            <Card className="p-3.5 bg-slate-900/90">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">Top Spend Category</span>
+              <span className="text-xs font-black text-amber-400 block mt-1 truncate">
+                {expenseSummary?.topCategory ? expenseSummary.topCategory.category : 'None yet'}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                {expenseSummary?.topCategory ? formatGHS(expenseSummary.topCategory.amount) : 'GHS 0.00'}
+              </span>
+            </Card>
+
+            <Card className="p-3.5 bg-slate-900/90">
+              <span className="text-[10px] font-bold uppercase text-slate-500 block">Net Fleet Inflow</span>
+              <span className="text-lg font-black text-emerald-400 block mt-0.5">
+                {formatGHS(
+                  Math.max(
+                    0,
+                    summary.salesToday - companyExpenses.reduce((a, b) => a + b.amount, 0),
+                  ),
+                )}
+              </span>
+              <span className="text-[10px] text-slate-500">
+                after all local station deductions
+              </span>
+            </Card>
+          </div>
+
+          {/* Station Breakdown Summary Table */}
+          <Card className="p-4 bg-slate-900/90 border border-slate-800">
+            <h4 className="text-xs font-bold text-white uppercase tracking-wider mb-3 flex items-center gap-2">
+              <Building2 className="w-4 h-4 text-orange-400" />
+              <span>Station Branch Expenses Breakdown</span>
+            </h4>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-800 text-[9px] uppercase font-bold text-slate-500">
+                    <th className="pb-2">Station Name</th>
+                    <th className="pb-2 text-right">Gross Sales (GHS)</th>
+                    <th className="pb-2 text-right">Expenses (GHS)</th>
+                    <th className="pb-2 text-right">Net Revenue (GHS)</th>
+                    <th className="pb-2 text-center">Expense Count</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800/60 font-mono">
+                  {summary.stations.map(stn => {
+                    const stnExps = companyExpenses.filter(e => e.stationId === stn.stationId)
+                    const stnExpTotal = stnExps.reduce((acc, e) => acc + e.amount, 0)
+                    const stnNet = Math.max(0, stn.salesToday - stnExpTotal)
+                    return (
+                      <tr key={stn.stationId} className="hover:bg-slate-800/30 transition">
+                        <td className="py-2.5 font-sans font-bold text-white">
+                          <div>{stn.name}</div>
+                          <div className="text-[10px] font-mono text-slate-500">{stn.code}</div>
+                        </td>
+                        <td className="py-2.5 text-right text-emerald-400 font-bold">
+                          {formatGHS(stn.salesToday, { noPrefix: true })}
+                        </td>
+                        <td className="py-2.5 text-right text-rose-400 font-bold">
+                          -{formatGHS(stnExpTotal, { noPrefix: true })}
+                        </td>
+                        <td className="py-2.5 text-right text-orange-400 font-black">
+                          {formatGHS(stnNet, { noPrefix: true })}
+                        </td>
+                        <td className="py-2.5 text-center font-sans">
+                          <Badge tone={stnExps.length > 0 ? 'warning' : 'default'}>
+                            {stnExps.length} entries
+                          </Badge>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          {/* Filters Toolbar */}
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              {/* Station Filter */}
+              <select
+                value={expenseStationFilter}
+                onChange={e => setExpenseStationFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-bold outline-none focus:border-orange-500"
+              >
+                <option value="ALL">All Stations ({summary.stations.length})</option>
+                {summary.stations.map(s => (
+                  <option key={s.stationId} value={s.stationId}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+
+              {/* Category Filter */}
+              <select
+                value={expenseCategoryFilter}
+                onChange={e => setExpenseCategoryFilter(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white font-bold outline-none focus:border-orange-500 max-w-[200px]"
+              >
+                <option value="ALL">All Categories</option>
+                {Array.from(new Set(companyExpenses.map(e => e.category))).map(cat => (
+                  <option key={cat} value={cat}>
+                    {cat}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Search Box */}
+            <div className="relative flex-1 sm:max-w-xs">
+              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={expenseSearch}
+                onChange={e => setExpenseSearch(e.target.value)}
+                placeholder="Search category, payee, notes…"
+                className="w-full pl-9 pr-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-orange-500"
+              />
+            </div>
+          </div>
+
+          {/* Full Audit Log Table */}
+          <Card className="divide-y divide-slate-800/80 overflow-hidden shadow-lg">
+            <div className="px-4 py-3 bg-slate-950/80 flex items-center justify-between">
+              <h4 className="text-xs font-bold text-white uppercase tracking-wider flex items-center gap-2">
+                <Receipt className="w-4 h-4 text-orange-400" />
+                <span>Station Expense Audit Log</span>
+              </h4>
+              <span className="text-[11px] font-mono text-slate-400">
+                Showing{' '}
+                {
+                  companyExpenses.filter(e => {
+                    if (expenseStationFilter !== 'ALL' && e.stationId !== expenseStationFilter) return false
+                    if (expenseCategoryFilter !== 'ALL' && e.category !== expenseCategoryFilter) return false
+                    if (expenseSearch) {
+                      const q = expenseSearch.toLowerCase()
+                      return (
+                        e.category.toLowerCase().includes(q) ||
+                        (e.payee && e.payee.toLowerCase().includes(q)) ||
+                        (e.notes && e.notes.toLowerCase().includes(q)) ||
+                        e.stationName.toLowerCase().includes(q)
+                      )
+                    }
+                    return true
+                  }).length
+                }{' '}
+                of {companyExpenses.length} records
+              </span>
+            </div>
+
+            {companyExpenses.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                No station expenses recorded for {companyName} in this period.
+              </div>
+            ) : (
+              companyExpenses
+                .filter(e => {
+                  if (expenseStationFilter !== 'ALL' && e.stationId !== expenseStationFilter) return false
+                  if (expenseCategoryFilter !== 'ALL' && e.category !== expenseCategoryFilter) return false
+                  if (expenseSearch) {
+                    const q = expenseSearch.toLowerCase()
+                    return (
+                      e.category.toLowerCase().includes(q) ||
+                      (e.payee && e.payee.toLowerCase().includes(q)) ||
+                      (e.notes && e.notes.toLowerCase().includes(q)) ||
+                      e.stationName.toLowerCase().includes(q)
+                    )
+                  }
+                  return true
+                })
+                .map(exp => (
+                  <div
+                    key={exp.id}
+                    className="px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-900/50 transition"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-extrabold text-white">{exp.category}</span>
+                        <Badge tone="default">{exp.stationName}</Badge>
+                        <Badge
+                          tone={
+                            exp.paymentSource === 'CASH'
+                              ? 'warning'
+                              : exp.paymentSource === 'MOMO'
+                              ? 'info'
+                              : 'default'
+                          }
+                        >
+                          {exp.paymentSource === 'CASH'
+                            ? 'Cash Drawer'
+                            : exp.paymentSource === 'MOMO'
+                            ? 'MoMo'
+                            : 'Station Account'}
+                        </Badge>
+                        <span className="text-[10px] font-mono text-slate-500">{exp.date}</span>
+                      </div>
+
+                      <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-400 flex-wrap">
+                        {exp.payee && <span>Payee: <strong className="text-slate-300">{exp.payee}</strong></span>}
+                        {exp.referenceNumber && <span>Ref: <strong className="text-slate-300">{exp.referenceNumber}</strong></span>}
+                        <span>Logged By: <strong className="text-slate-300">{exp.recordedBy.name} ({exp.recordedBy.employeeCode})</strong></span>
+                      </div>
+
+                      {exp.notes && (
+                        <p className="text-[11px] text-slate-400 mt-1 italic border-l-2 border-slate-700 pl-2">
+                          "{exp.notes}"
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="text-base font-black text-rose-400 block">
+                        -{formatGHS(exp.amount)}
+                      </span>
+                      <span className="text-[9px] font-mono text-emerald-400 uppercase font-bold">Approved</span>
+                    </div>
+                  </div>
+                ))
+            )}
+          </Card>
         </div>
       )}
 

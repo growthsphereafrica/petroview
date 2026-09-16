@@ -4,12 +4,13 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, History, LogOut, RefreshCw, Settings, ShieldAlert, Users, Wifi } from 'lucide-react'
+import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, History, LogOut, Receipt, RefreshCw, Settings, ShieldAlert, TrendingDown, Users, Wifi } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
 import { getStationName, PRODUCTION_STATIONS, getStationById } from '../../../core/domain/config'
 import { Badge, Card, StatusBar, TappableRow } from '../../shared/ui'
 import { formatGHS, formatLitres, formatTimeOnly } from '../../../utils/currencyFormatter'
 import { backendRecordTankReadings, backendGetTankReadings } from '../../../services/backendApiService'
+import { expenseService } from '../../../core/services/expenseService'
 
 export const SupervisorDashboardScreen: React.FC<{
   onGoToShifts: () => void
@@ -18,11 +19,14 @@ export const SupervisorDashboardScreen: React.FC<{
   onGoToSettings: () => void
   onGoToAudit: () => void
   onGoToTankReadings: () => void
+  onGoToExpenses: () => void
   onOpenShift: (shiftId: string) => void
-}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onOpenShift }) => {
+}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onOpenShift }) => {
   const { supervisor, signOut } = useSupervisorSession()
   const { shifts, stats, pendingSync, loading, pushSync } = useSupervisorData()
   const [tankReadingCount, setTankReadingCount] = useState(0)
+  const [expensesToday, setExpensesToday] = useState(0)
+  const [expenseCountToday, setExpenseCountToday] = useState(0)
 
   const pendingReview = stats?.pendingReviews ?? 0
 
@@ -31,6 +35,17 @@ export const SupervisorDashboardScreen: React.FC<{
       try {
         const result = await backendGetTankReadings(supervisor?.stationId, 1)
         setTankReadingCount(result.count)
+      } catch { /* */ }
+
+      try {
+        const todayStr = new Date().toISOString().slice(0, 10)
+        const expSum = await expenseService.getExpenseSummary({
+          stationId: supervisor?.stationId,
+          startDate: todayStr,
+          endDate: todayStr,
+        })
+        setExpensesToday(expSum.todayAmount)
+        setExpenseCountToday(expSum.todayCount)
       } catch { /* */ }
     })()
   }, [supervisor?.stationId])
@@ -152,6 +167,14 @@ export const SupervisorDashboardScreen: React.FC<{
 
         {/* Quick actions */}
         <Card className="divide-y divide-slate-800/70 overflow-hidden">
+          <TappableRow
+            icon={<Receipt className="w-4 h-4" />}
+            title="Station Expenses"
+            subtitle={`${expenseCountToday} logged today · Maintenance, utilities, fuel & supplies`}
+            value={expensesToday > 0 ? `-${formatGHS(expensesToday)}` : 'GHS 0.00'}
+            onClick={onGoToExpenses}
+            accent="#F43F5E"
+          />
           <TappableRow
             icon={<ClipboardCheck className="w-4 h-4" />}
             title="Review Shifts"

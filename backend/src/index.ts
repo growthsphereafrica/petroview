@@ -10,6 +10,7 @@ import { auditRouter } from './routes/audit'
 import { headOfficeRouter } from './routes/headoffice'
 import { companiesRouter } from './routes/companies'
 import { tankReadingsRouter } from './routes/tankReadings'
+import { expensesRouter } from './routes/expenses'
 
 bootDb()
 
@@ -22,6 +23,7 @@ app.get('/api/health', (_req, res) => {
   const supervisors = (db.prepare('SELECT COUNT(*) AS c FROM supervisors').get() as { c: number }).c
   const companies = (db.prepare('SELECT COUNT(*) AS c FROM companies').get() as { c: number }).c
   const shifts = (db.prepare('SELECT COUNT(*) AS c FROM shifts').get() as { c: number }).c
+  const expenses = (db.prepare('SELECT COUNT(*) AS c FROM station_expenses').get() as { c: number }).c
   res.json({
     status: 'ok',
     service: 'master-view-backend',
@@ -30,6 +32,7 @@ app.get('/api/health', (_req, res) => {
     supervisors,
     companies,
     shifts,
+    expenses,
     db: ENV.DB_PATH,
   })
 })
@@ -42,6 +45,7 @@ app.use('/api/audit', auditRouter)
 app.use('/api/headoffice', headOfficeRouter)
 app.use('/api/companies', companiesRouter)
 app.use('/api/tank-readings', tankReadingsRouter)
+app.use('/api/expenses', expensesRouter)
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', message: `No route for ${req.method} ${req.path}` })

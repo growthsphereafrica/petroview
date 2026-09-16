@@ -19,9 +19,11 @@ import {
   MapPin,
   Phone,
   Printer,
+  Receipt,
   RefreshCw,
   Search,
   ShieldCheck,
+  TrendingDown,
   UserCheck,
   UserCog,
   UserPlus,
@@ -35,9 +37,10 @@ import { Badge, Card, ScreenHeader, StatusBar } from '../../shared/ui'
 import { PRODUCTION_PUMPS, getStationName } from '../../../core/domain/config'
 import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../../core/services/rollupService'
 import { supervisorService } from '../../../core/services/supervisorService'
+import { expenseService, type ExpenseSummary } from '../../../core/services/expenseService'
 import { describeError } from '../../../core/domain/errors'
 import { formatDateTime, formatGHS, formatLitres } from '../../../utils/currencyFormatter'
-import type { Attendant } from '../../../core/domain/types'
+import type { Attendant, StationExpense } from '../../../core/domain/types'
 
 type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
 type SupervisorTab = 'summaries' | 'roster'
@@ -54,6 +57,8 @@ export const SupervisorAttendantsScreen: React.FC<{
   const [customStartDate, setCustomStartDate] = useState(new Date().toISOString().slice(0, 10))
   const [customEndDate, setCustomEndDate] = useState(new Date().toISOString().slice(0, 10))
   const [summaryData, setSummaryData] = useState<HeadOfficeSummary | null>(null)
+  const [stationExpenses, setStationExpenses] = useState<StationExpense[]>([])
+  const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary | null>(null)
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
 
@@ -85,7 +90,7 @@ export const SupervisorAttendantsScreen: React.FC<{
   const stationId = supervisor?.stationId || 'STN-GV-042'
   const stationName = supervisor ? getStationName(supervisor.stationId) : 'Station Forecourt'
 
-  // Fetch summary data for this station
+  // Fetch summary data & expenses for this station
   const loadStationSummary = useMemo(
     () => async () => {
       setLoadingSummary(true)
@@ -103,16 +108,30 @@ export const SupervisorAttendantsScreen: React.FC<{
           endArg = customEndDate
         }
 
-        const sum = await rollupService.summary({
-          days: daysArg,
-          stationId,
-          companyId: supervisor?.companyId,
-          startDate: startArg,
-          endDate: endArg,
-        })
+        const [sum, exps, expSum] = await Promise.all([
+          rollupService.summary({
+            days: daysArg,
+            stationId,
+            companyId: supervisor?.companyId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
+          expenseService.listExpenses({
+            stationId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
+          expenseService.getExpenseSummary({
+            stationId,
+            startDate: startArg,
+            endDate: endArg,
+          }),
+        ])
         setSummaryData(sum)
+        setStationExpenses(exps)
+        setExpenseSummary(expSum)
       } catch (err) {
-        console.error('Failed to load station summaries', err)
+        console.error('Failed to load station summaries and expenses', err)
       } finally {
         setLoadingSummary(false)
       }
@@ -204,6 +223,9 @@ export const SupervisorAttendantsScreen: React.FC<{
     const periodLabel =
       rangePreset === 'custom' ? `${customStartDate}_to_${customEndDate}` : rangePreset
 
+    const totalExpenses = stationExpenses.reduce((a, b) => a + b.amount, 0)
+    const netStationCash = Math.max(0, summaryData.salesToday - totalExpenses)
+
     const header = [
       'Attendant Code',
       'Attendant Name',
@@ -236,20 +258,48 @@ export const SupervisorAttendantsScreen: React.FC<{
       a.active ? 'ACTIVE' : a.approvalStatus,
     ])
 
+    const expenseHeader = [
+      'Date',
+      'Expense Category',
+      'Amount (GHS)',
+      'Payment Source',
+      'Payee',
+      'Reference No.',
+      'Recorded By',
+      'Notes',
+    ]
+
+    const expenseRows = stationExpenses.map(e => [
+      e.date,
+      e.category,
+      e.amount.toFixed(2),
+      e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
+      e.payee || 'N/A',
+      e.referenceNumber || 'N/A',
+      e.recordedBy.name,
+      e.notes || '',
+    ])
+
     const csvContent = [
-      [`${stationName} - Attendant Sales & Performance Summary Report`],
+      [`${stationName} - Attendant Sales, Expenses & Performance Summary Report`],
       [`Period: ${periodLabel} | Generated: ${formatDateTime(summaryData.generatedAt)}`],
       [`Supervisor / Manager: ${supervisor?.fullName || 'Manager'} (${supervisor?.employeeCode || 'SUP'})`],
       [''],
-      [
-        `Total Station Sales: GHS ${summaryData.salesToday.toFixed(2)}`,
-        `Total Volume: ${summaryData.litresToday.toFixed(2)} L`,
-        `Total Shifts: ${summaryData.totalShifts}`,
-        `Net Variance: GHS ${summaryData.netVariance.toFixed(2)}`,
-      ],
+      ['FINANCIAL RECONCILIATION SUMMARY'],
+      [`Gross Forecourt Sales: GHS ${summaryData.salesToday.toFixed(2)}`],
+      [`Less Station Expenses: -GHS ${totalExpenses.toFixed(2)}`],
+      [`Net Station Cash (Handover/Bank): GHS ${netStationCash.toFixed(2)}`],
+      [`Total Fuel Volume: ${summaryData.litresToday.toFixed(2)} L`],
+      [`Total Shifts Closed: ${summaryData.totalShifts}`],
+      [`Pump Variance: GHS ${summaryData.netVariance.toFixed(2)}`],
       [''],
+      ['ATTENDANT PERFORMANCE BREAKDOWN'],
       header,
       ...rows,
+      [''],
+      ['STATION EXPENSES & PETTY CASH AUDIT LOG'],
+      expenseHeader,
+      ...expenseRows,
     ]
       .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
       .join('\n')
@@ -258,7 +308,7 @@ export const SupervisorAttendantsScreen: React.FC<{
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
-    link.download = `station-attendants-${periodLabel}.csv`
+    link.download = `station-report-${periodLabel}.csv`
     link.click()
     URL.revokeObjectURL(url)
   }
@@ -519,6 +569,91 @@ export const SupervisorAttendantsScreen: React.FC<{
                     </span>
                   </div>
                 ))
+              )}
+            </Card>
+
+            {/* Station Expenses & Net Cash Reconciliation (Prints in PDF) */}
+            <Card className="divide-y divide-slate-800/70 overflow-hidden shadow-lg bg-slate-900/90 border border-slate-800">
+              <div className="px-4 py-3 bg-slate-950/80 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Receipt className="w-4 h-4 text-orange-400" />
+                  <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                    Station Operational Expenses & Net Cash ({stationExpenses.length})
+                  </h4>
+                </div>
+                <span className="text-xs font-mono font-bold text-rose-400">
+                  Total: -{formatGHS(stationExpenses.reduce((a, b) => a + b.amount, 0))}
+                </span>
+              </div>
+
+              {/* Net Cash Flow Summary Banner */}
+              <div className="p-3.5 bg-slate-950/40 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <div className="p-2.5 rounded-xl bg-slate-900/90 border border-slate-800">
+                  <span className="text-[9px] uppercase font-bold text-slate-500 block">Gross Sales</span>
+                  <span className="text-sm font-black text-emerald-400 block mt-0.5">
+                    {formatGHS(summaryData?.salesToday || 0)}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] uppercase font-bold text-rose-400 block">Station Expenses</span>
+                    <TrendingDown className="w-3 h-3 text-rose-400" />
+                  </div>
+                  <span className="text-sm font-black text-rose-400 block mt-0.5">
+                    -{formatGHS(stationExpenses.reduce((a, b) => a + b.amount, 0))}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-xl bg-orange-500/10 border border-orange-500/40">
+                  <span className="text-[9px] uppercase font-bold text-orange-400 block">Net Station Cash</span>
+                  <span className="text-sm font-black text-orange-400 block mt-0.5">
+                    {formatGHS(
+                      Math.max(
+                        0,
+                        (summaryData?.salesToday || 0) -
+                          stationExpenses.reduce((a, b) => a + b.amount, 0),
+                      ),
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              {/* Itemized Expenses Table */}
+              {stationExpenses.length === 0 ? (
+                <div className="px-4 py-6 text-center text-xs text-slate-500">
+                  No station expenses recorded for this period.
+                </div>
+              ) : (
+                <div className="divide-y divide-slate-800/60">
+                  <div className="px-4 py-2 bg-slate-950/60 grid grid-cols-[1fr_1.5fr_1fr_1fr_1fr] gap-2 text-[9px] uppercase font-bold text-slate-500">
+                    <span>Date</span>
+                    <span>Category</span>
+                    <span>Payment Source</span>
+                    <span>Payee / Ref</span>
+                    <span className="text-right">Amount (GHS)</span>
+                  </div>
+                  {stationExpenses.map(exp => (
+                    <div
+                      key={exp.id}
+                      className="px-4 py-2.5 grid grid-cols-[1fr_1.5fr_1fr_1fr_1fr] gap-2 items-center text-xs hover:bg-slate-800/30 transition"
+                    >
+                      <span className="font-mono text-[10px] text-slate-400">{exp.date}</span>
+                      <span className="font-bold text-white truncate">{exp.category}</span>
+                      <span>
+                        <Badge tone={exp.paymentSource === 'CASH' ? 'warning' : 'default'}>
+                          {exp.paymentSource === 'CASH' ? 'Cash Drawer' : exp.paymentSource}
+                        </Badge>
+                      </span>
+                      <span className="text-[10px] text-slate-400 truncate">
+                        {exp.payee || exp.referenceNumber || '—'}
+                      </span>
+                      <span className="font-mono font-black text-right text-rose-400">
+                        -{formatGHS(exp.amount, { noPrefix: true })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               )}
             </Card>
           </div>

@@ -29,6 +29,9 @@ const ACTION_LABELS: Record<AuditAction, string> = {
   PRODUCT_CREATED: 'Product Created',
   PRODUCT_UPDATED: 'Product Pricing Updated',
   PRODUCT_DELETED: 'Product Deleted',
+  EXPENSE_RECORDED: 'Expense Logged',
+  EXPENSE_UPDATED: 'Expense Updated',
+  EXPENSE_DELETED: 'Expense Deleted',
 }
 
 const ACTION_TONE: Record<AuditAction, string> = {
@@ -51,6 +54,9 @@ const ACTION_TONE: Record<AuditAction, string> = {
   PRODUCT_CREATED: 'text-emerald-400',
   PRODUCT_UPDATED: 'text-amber-400',
   PRODUCT_DELETED: 'text-rose-400',
+  EXPENSE_RECORDED: 'text-rose-400',
+  EXPENSE_UPDATED: 'text-amber-400',
+  EXPENSE_DELETED: 'text-rose-400',
 }
 
 export const SupervisorAuditLogScreen: React.FC<{

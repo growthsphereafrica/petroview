@@ -342,3 +342,47 @@ export async function backendGetAuditLog(limit?: number): Promise<{ count: numbe
   const qs = limit ? `?limit=${limit}` : ''
   return apiCall(`/api/audit${qs}`)
 }
+
+export async function backendGetExpenses(filter?: {
+  companyId?: string
+  stationId?: string
+  startDate?: string
+  endDate?: string
+  category?: string
+}): Promise<{ count: number; totalAmount: number; expenses: Array<Record<string, unknown>> }> {
+  const params = new URLSearchParams()
+  if (filter?.companyId) params.set('companyId', filter.companyId)
+  if (filter?.stationId) params.set('stationId', filter.stationId)
+  if (filter?.startDate) params.set('startDate', filter.startDate)
+  if (filter?.endDate) params.set('endDate', filter.endDate)
+  if (filter?.category) params.set('category', filter.category)
+  const qs = params.toString()
+  return apiCall(`/api/expenses${qs ? '?' + qs : ''}`)
+}
+
+export async function backendRecordExpense(input: {
+  companyId: string
+  companyShortCode?: string
+  stationId: string
+  stationName: string
+  category: string
+  amount: number
+  paymentSource: string
+  payee?: string
+  referenceNumber?: string
+  notes?: string
+  date?: string
+  recordedBy: { id: string; name: string; employeeCode: string }
+}): Promise<{ success: boolean; id: string; message: string }> {
+  return apiCall('/api/expenses', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function backendDeleteExpense(id: string): Promise<{ success: boolean; message: string }> {
+  return apiCall(`/api/expenses/${id}`, {
+    method: 'DELETE',
+  })
+}
+

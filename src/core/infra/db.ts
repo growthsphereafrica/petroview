@@ -19,6 +19,7 @@ import type {
   Supervisor,
   SupervisorSession,
   SyncQueueItem,
+  StationExpense,
 } from '../domain/types'
 
 export class ProductionDatabase extends Dexie {
@@ -31,6 +32,7 @@ export class ProductionDatabase extends Dexie {
   companies!: Table<Company, string>
   companyStations!: Table<CompanyStation, string>
   products!: Table<Product, string>
+  expenses!: Table<StationExpense, string>
   receipts!: Table<ReceiptRecord, string>
   syncQueue!: Table<SyncQueueItem, string>
   auditLog!: Table<AuditEntry, string>
@@ -123,6 +125,21 @@ export class ProductionDatabase extends Dexie {
       companies: 'id, shortCode, name, adminCode, active',
       companyStations: 'id, companyId, code, name',
       products: 'id, companyId, code, category, active',
+      attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
+    })
+    this.version(8).stores({
+      companies: 'id, shortCode, name, adminCode, active',
+      companyStations: 'id, companyId, code, name',
+      products: 'id, companyId, code, category, active',
+      expenses: 'id, stationId, companyId, date, category, status, createdAt',
       attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
       sessions: 'id, token, attendantId, expiresAt',
       supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',

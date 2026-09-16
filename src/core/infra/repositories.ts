@@ -14,6 +14,7 @@ import type {
   Supervisor,
   SupervisorSession,
   SyncQueueItem,
+  StationExpense,
 } from '../domain/types'
 
 function cleanCode(code: string): string {
@@ -269,6 +270,10 @@ export const shiftRepo = {
     const rows = await prodDb.shifts.where('attendantId').equals(attendantId).toArray()
     return rows.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
   },
+  async listForStation(stationId: string): Promise<Shift[]> {
+    const rows = await prodDb.shifts.where('stationId').equals(stationId).toArray()
+    return rows.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
+  },
   async listAll(): Promise<Shift[]> {
     const rows = await prodDb.shifts.toArray()
     return rows.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
@@ -354,5 +359,32 @@ export const auditLogRepo = {
   async listForTarget(targetId: string): Promise<AuditEntry[]> {
     const rows = await prodDb.auditLog.where('targetId').equals(targetId).toArray()
     return rows.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+  },
+}
+
+export const expenseRepo = {
+  async add(expense: StationExpense): Promise<void> {
+    await prodDb.expenses.put(expense)
+  },
+  async get(id: string): Promise<StationExpense | undefined> {
+    return prodDb.expenses.get(id)
+  },
+  async update(expense: StationExpense): Promise<void> {
+    await prodDb.expenses.put(expense)
+  },
+  async delete(id: string): Promise<void> {
+    await prodDb.expenses.delete(id)
+  },
+  async listAll(): Promise<StationExpense[]> {
+    const rows = await prodDb.expenses.toArray()
+    return rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  },
+  async listForStation(stationId: string): Promise<StationExpense[]> {
+    const rows = await prodDb.expenses.where('stationId').equals(stationId).toArray()
+    return rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+  },
+  async listForCompany(companyId: string): Promise<StationExpense[]> {
+    const rows = await prodDb.expenses.where('companyId').equals(companyId).toArray()
+    return rows.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   },
 }

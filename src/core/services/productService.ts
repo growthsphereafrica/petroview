@@ -97,27 +97,35 @@ export class ProductService {
   }
 
   /**
-   * Lists active products for an OMC. If the OMC has custom products defined, returns them;
-   * otherwise returns active global default products.
+   * Lists active products for an OMC forecourt.
+   * Merges global active products with company-specific products.
+   * If the OMC has customized a product with the same code (e.g. custom PMS price),
+   * the OMC's version takes precedence. Products from other OMCs are strictly excluded.
    */
   async listActiveProducts(companyId?: string): Promise<Product[]> {
     await this.seedDefaultProducts()
     const all = await prodDb.products.toArray()
 
-    if (companyId) {
-      const companyProducts = all.filter(p => p.companyId === companyId && p.active)
-      if (companyProducts.length > 0) {
-        return companyProducts.sort((a, b) => a.name.localeCompare(b.name))
-      }
+    const activeGlobals = all.filter(p => (!p.companyId || p.companyId === 'GLOBAL') && p.active)
+    
+    if (!companyId || companyId === 'GLOBAL' || companyId === 'ALL') {
+      return activeGlobals.sort((a, b) => a.name.localeCompare(b.name))
     }
 
-    // Fallback to active global / default products
-    const globals = all.filter(p => (!p.companyId || p.companyId === 'GLOBAL') && p.active)
-    return globals.sort((a, b) => a.name.localeCompare(b.name))
+    const companyProducts = all.filter(p => p.companyId === companyId && p.active)
+    const companyCodes = new Set(companyProducts.map(p => p.code))
+
+    // Include global products that haven't been overridden by company-specific products
+    const nonOverriddenGlobals = activeGlobals.filter(g => !companyCodes.has(g.code))
+
+    const merged = [...companyProducts, ...nonOverriddenGlobals]
+    return merged.sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /**
-   * Retrieves all products (active + inactive) for administration / editing.
+   * Retrieves all products for administration.
+   * When scoped to a company, returns only that company's products + global products.
+   * Products belonging to other OMCs are strictly isolated and never shown.
    */
   async getAllProducts(companyId?: string): Promise<Product[]> {
     await this.seedDefaultProducts()
@@ -125,8 +133,14 @@ export class ProductService {
 
     if (companyId && companyId !== 'ALL') {
       return all
-        .filter(p => p.companyId === companyId || !p.companyId)
-        .sort((a, b) => a.name.localeCompare(b.name))
+        .filter(p => !p.companyId || p.companyId === 'GLOBAL' || p.companyId === companyId)
+        .sort((a, b) => {
+          // Put company's own custom products first, then global
+          const aIsCompany = a.companyId === companyId ? 0 : 1
+          const bIsCompany = b.companyId === companyId ? 0 : 1
+          if (aIsCompany !== bIsCompany) return aIsCompany - bIsCompany
+          return a.name.localeCompare(b.name)
+        })
     }
 
     return all.sort((a, b) => (a.companyId || '').localeCompare(b.companyId || '') || a.name.localeCompare(b.name))

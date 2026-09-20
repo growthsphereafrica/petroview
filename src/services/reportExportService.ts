@@ -306,7 +306,55 @@ export function exportReportToPdf(data: ReportExportData): void {
   }
 
   const safeFilename = `${data.companyShortCode.toLowerCase()}-report-${data.periodLabel.toLowerCase().replace(/[^a-z0-9]/g, '-')}.pdf`
+
+  // Enable auto-print action in the generated PDF document metadata
+  try {
+    doc.autoPrint()
+  } catch (err) {
+    console.warn('Could not inject autoPrint action:', err)
+  }
+
+  // 1. Automatically download the PDF file directly to device
   doc.save(safeFilename)
+
+  // 2. Guide user directly through the print workflow via printable PDF blob
+  try {
+    const pdfBlob = doc.output('blob')
+    const blobUrl = URL.createObjectURL(pdfBlob)
+
+    const printFrame = document.createElement('iframe')
+    printFrame.style.position = 'fixed'
+    printFrame.style.right = '0'
+    printFrame.style.bottom = '0'
+    printFrame.style.width = '0'
+    printFrame.style.height = '0'
+    printFrame.style.border = '0'
+    printFrame.src = blobUrl
+    document.body.appendChild(printFrame)
+
+    printFrame.onload = () => {
+      setTimeout(() => {
+        try {
+          printFrame.contentWindow?.focus()
+          printFrame.contentWindow?.print()
+        } catch {
+          // Fallback: open in new window if iframe print blocked
+          const win = window.open(blobUrl, '_blank')
+          win?.focus()
+        }
+      }, 300)
+    }
+
+    // Clean up frame after print sequence
+    setTimeout(() => {
+      try {
+        document.body.removeChild(printFrame)
+        URL.revokeObjectURL(blobUrl)
+      } catch {}
+    }, 60000)
+  } catch (err) {
+    console.warn('Could not launch PDF print workflow automatically:', err)
+  }
 }
 
 /**

@@ -127,22 +127,68 @@ export function getApiBase(): string {
   return 'https://petroviewapi.growthspheregh.com'
 }
 
-function getStoredToken(): string | null {
+export function getStoredToken(): string | null {
   try {
-    return localStorage.getItem('mvp_prod_session_token') ?? localStorage.getItem('mvp_prod_supervisor_token')
+    return (
+      localStorage.getItem('petroview_cloud_token') ||
+      localStorage.getItem('mvp_unified_session_token') ||
+      (() => {
+        try {
+          const s = localStorage.getItem('mvp_unified_session')
+          return s ? JSON.parse(s).token : null
+        } catch {
+          return null
+        }
+      })() ||
+      localStorage.getItem('mvp_prod_session_token') ||
+      localStorage.getItem('mvp_prod_supervisor_token') ||
+      null
+    )
   } catch {
     return null
   }
 }
 
 /**
- * Uploads a single queued entity (SHIFT / TRANSACTION / RECEIPT) to the
+ * Uploads a single queued entity (SHIFT / TRANSACTION / RECEIPT / EXPENSE / TANK_READING) to the
  * backend. Throws on network or validation failure so the durable retry
  * queue can back off and try again later.
  */
 export async function uploadEntityToCloud(entityType: SyncEntityType, entityId: string): Promise<{ cloudTxId: string; timestamp: string }> {
   const base = getApiBase()
   if (!base) throw new Error('CLOUD_UNCONFIGURED')
+
+  const token = getStoredToken()
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) headers.Authorization = `Bearer ${token}`
+
+  if (entityType === 'EXPENSE') {
+    const expense = await prodDb.expenses.get(entityId)
+    if (!expense) throw new Error(`Expense ${entityId} not found in local store`)
+    const resp = await fetch(`${base}/api/expenses`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        companyId: expense.companyId,
+        companyShortCode: expense.companyShortCode,
+        stationId: expense.stationId,
+        stationName: expense.stationName,
+        category: expense.category,
+        amount: expense.amount,
+        paymentSource: expense.paymentSource,
+        payee: expense.payee,
+        referenceNumber: expense.referenceNumber,
+        notes: expense.notes,
+        date: expense.date,
+        recordedBy: expense.recordedBy,
+      }),
+    })
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}))
+      throw new Error(err.message || `Expense upload failed: HTTP ${resp.status}`)
+    }
+    return { cloudTxId: `EXP-${entityId}`, timestamp: new Date().toISOString() }
+  }
 
   const data = await loadEntityRecord(entityType, entityId)
   if (!data) throw new Error(`Entity ${entityType}:${entityId} not found in local store`)

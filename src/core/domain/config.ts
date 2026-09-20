@@ -116,11 +116,20 @@ export function getStationName(stationId: string): string {
   return stationId.startsWith('STN-') ? `Station ${stationId.replace(/^STN-/, '')}` : stationId
 }
 
-export const FUEL_META: Record<FuelCode, { label: string; shortLabel: string; color: string; bg: string }> = {
-  PMS: { label: 'Super Petrol (PMS)', shortLabel: 'PMS', color: '#22c55e', bg: 'bg-emerald-500' },
-  AGO: { label: 'Diesel (AGO)', shortLabel: 'AGO', color: '#3b82f6', bg: 'bg-blue-600' },
-  DPK: { label: 'Dual Purpose Kerosene (DPK)', shortLabel: 'DPK', color: '#f97316', bg: 'bg-orange-500' },
-  KERO: { label: 'Kerosene (KERO)', shortLabel: 'KERO', color: '#a855f7', bg: 'bg-purple-600' },
+export const FUEL_META: Record<string, { label: string; shortLabel: string; color: string; bg: string }> = {
+  PMS: { label: 'Super Petrol (PMS)', shortLabel: 'Super (PMS)', color: '#16a34a', bg: 'bg-emerald-500' },
+  AGO: { label: 'Diesel (AGO)', shortLabel: 'Diesel (AGO)', color: '#2563eb', bg: 'bg-blue-600' },
+  RON95: { label: 'Super XP / V-Power (RON 95)', shortLabel: 'RON 95', color: '#dc2626', bg: 'bg-red-600' },
+  'AGO-PREM': { label: 'Super Diesel (Low Sulphur)', shortLabel: 'Prem AGO', color: '#0284c7', bg: 'bg-sky-600' },
+  DPK: { label: 'Kerosene (DPK)', shortLabel: 'Kerosene (DPK)', color: '#ea580c', bg: 'bg-orange-500' },
+  KERO: { label: 'Kerosene (KERO)', shortLabel: 'KERO', color: '#9333ea', bg: 'bg-purple-600' },
+  LPG: { label: 'LPG / Autogas', shortLabel: 'LPG', color: '#ca8a04', bg: 'bg-yellow-600' },
+  PREMIX: { label: 'Premix Fuel', shortLabel: 'Premix', color: '#0d9488', bg: 'bg-teal-600' },
+  'LUB-20W50': { label: 'Engine Oil 20W-50 (4L)', shortLabel: '20W-50', color: '#7c3aed', bg: 'bg-violet-600' },
+  'LUB-15W40': { label: 'Diesel Oil 15W-40 (4L)', shortLabel: '15W-40', color: '#4f46e5', bg: 'bg-indigo-600' },
+  'LUB-ATF': { label: 'Transmission Fluid (ATF)', shortLabel: 'ATF', color: '#db2777', bg: 'bg-pink-600' },
+  'LUB-BRAKE': { label: 'Brake Fluid DOT 4 (500ml)', shortLabel: 'Brake', color: '#e11d48', bg: 'bg-rose-600' },
+  'LUB-COOLANT': { label: 'Radiator Coolant (4L)', shortLabel: 'Coolant', color: '#059669', bg: 'bg-emerald-600' },
 }
 
 export const PAYMENT_META: Record<PaymentMethod, { label: string; shortLabel: string; color: string; bg: string }> = {

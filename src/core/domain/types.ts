@@ -27,7 +27,7 @@ export type ShiftStatus = 'OPEN' | 'CLOSED' | 'REVIEWED' | 'APPROVED' | 'REJECTE
 
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED'
 
-export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT'
+export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT' | 'EXPENSE' | 'TANK_READING'
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 

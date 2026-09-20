@@ -4,11 +4,11 @@ import path from 'node:path'
 import { ENV, SUPER_ADMIN } from './config'
 import { hashPin } from './auth'
 
-export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO'
+export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO' | 'RON95' | 'AGO-PREM' | 'LPG' | 'PREMIX' | string
 export type PaymentMethod = 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'
 export type ShiftStatus = 'OPEN' | 'CLOSED' | 'REVIEWED' | 'APPROVED' | 'REJECTED'
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED'
-export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT'
+export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT' | 'EXPENSE' | 'TANK_READING'
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED'
 export type UserRole = 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
 export type AuditAction =

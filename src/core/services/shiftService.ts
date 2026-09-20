@@ -19,6 +19,7 @@ import {
 import { shiftRepo, transactionRepo, syncQueueRepo } from '../infra/repositories'
 import { liveSyncBus } from './liveSyncBus'
 import { productService } from './productService'
+import { syncService } from './syncService'
 import type {
   Attendant,
   FuelCode,
@@ -108,6 +109,21 @@ export class ShiftService {
 
     await shiftRepo.upsert(shift)
     liveSyncBus.publish({ table: 'SHIFTS', reason: 'INSERT', key: shift.id })
+
+    await syncQueueRepo.add({
+      id: `sync-shift-${shift.id}`,
+      entityType: 'SHIFT',
+      entityId: shift.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+    })
+    liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'INSERT', key: `sync-shift-${shift.id}` })
+    syncService.triggerBackgroundSync()
+
     return shift
   }
 
@@ -147,8 +163,36 @@ export class ShiftService {
     await transactionRepo.add(tx)
     liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'INSERT', key: tx.id })
 
+    await syncQueueRepo.add({
+      id: `sync-tx-${tx.id}`,
+      entityType: 'TRANSACTION',
+      entityId: tx.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'INSERT', key: `sync-tx-${tx.id}` })
+
     // Recompute cumulative sales & payments from all recorded transactions for an audit-proof trail.
-    return this.recalculateShiftTotals(input.shift.id)
+    const updated = await this.recalculateShiftTotals(input.shift.id)
+
+    await syncQueueRepo.add({
+      id: `sync-shift-${updated.id}`,
+      entityType: 'SHIFT',
+      entityId: updated.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    syncService.triggerBackgroundSync()
+
+    return updated
   }
 
   /**
@@ -202,7 +246,32 @@ export class ShiftService {
     await transactionRepo.update(updatedTx)
     liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'UPDATE', key: txId })
 
-    return this.recalculateShiftTotals(shiftId)
+    await syncQueueRepo.add({
+      id: `sync-tx-${updatedTx.id}`,
+      entityType: 'TRANSACTION',
+      entityId: updatedTx.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    const updated = await this.recalculateShiftTotals(shiftId)
+    await syncQueueRepo.add({
+      id: `sync-shift-${updated.id}`,
+      entityType: 'SHIFT',
+      entityId: updated.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    syncService.triggerBackgroundSync()
+
+    return updated
   }
 
   /**
@@ -225,7 +294,21 @@ export class ShiftService {
     await transactionRepo.delete(txId)
     liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'DELETE', key: txId })
 
-    return this.recalculateShiftTotals(shiftId)
+    const updated = await this.recalculateShiftTotals(shiftId)
+    await syncQueueRepo.add({
+      id: `sync-shift-${updated.id}`,
+      entityType: 'SHIFT',
+      entityId: updated.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+    syncService.triggerBackgroundSync()
+
+    return updated
   }
 
   /**
@@ -313,6 +396,7 @@ export class ShiftService {
       updatedAt: new Date().toISOString(),
     })
     liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'INSERT', key: `sync-shift-${closed.id}` })
+    syncService.triggerBackgroundSync()
 
     return closed
   }

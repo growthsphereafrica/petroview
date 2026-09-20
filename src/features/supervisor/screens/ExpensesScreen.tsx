@@ -23,6 +23,8 @@ import {
   AlertTriangle,
   Receipt,
   FileText,
+  FileSpreadsheet,
+  Download,
   Tag,
   ArrowDownRight,
   TrendingDown,
@@ -38,6 +40,12 @@ import { getStationName } from '../../../core/domain/config'
 import { expenseService, type ExpenseSummary } from '../../../core/services/expenseService'
 import { STANDARD_STATION_EXPENSE_CATEGORIES } from '../../../constants/expenseCategories'
 import { shiftRepo } from '../../../core/infra/repositories'
+import {
+  exportReportToPdf,
+  exportReportToExcel,
+  exportReportToCsv,
+  type ReportExportData,
+} from '../../../services/reportExportService'
 import type { StationExpense, ExpensePaymentSource } from '../../../core/domain/types'
 
 type RangeFilter = 'today' | '7days' | '30days' | 'all' | 'custom'
@@ -260,6 +268,44 @@ export const SupervisorExpensesScreen: React.FC<{
 
   const netTodayCash = Math.max(0, todaySales - (summary?.todayAmount || 0))
 
+  const getExpensesExportPayload = (): ReportExportData => {
+    const periodLabel = range === 'custom' ? `${customStart}_to_${customEnd}` : range
+    const companyShortCode = supervisor?.companyShortCode || 'PV'
+    const companyName = supervisor?.companyShortCode ? `${supervisor.companyShortCode} Petroleum` : 'PetroView Forecourt'
+
+    return {
+      title: `${stationName} - Station Expenses & Petty Cash Audit Report`,
+      companyName,
+      companyShortCode,
+      periodLabel,
+      generatedAt: new Date().toISOString(),
+      currency: 'GHS',
+      financials: {
+        grossFuelSales: todaySales,
+        totalExpenses: summary?.totalAmount || 0,
+        netRevenue: netTodayCash,
+        litresDispensed: 0,
+        totalShifts: 0,
+        netVariance: 0,
+      },
+      expenseRows: expenses.map(e => ({
+        date: e.date,
+        stationName: e.stationName,
+        category: e.category,
+        amount: e.amount,
+        paymentSource: e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
+        payee: e.payee || 'N/A',
+        referenceNumber: e.referenceNumber || 'N/A',
+        recordedBy: e.recordedBy.name,
+        notes: e.notes || '',
+      })),
+    }
+  }
+
+  const exportExpensesExcel = () => exportReportToExcel(getExpensesExportPayload())
+  const exportExpensesCsv = () => exportReportToCsv(getExpensesExportPayload())
+  const exportExpensesPdf = () => exportReportToPdf(getExpensesExportPayload())
+
   return (
     <div className="h-full flex flex-col bg-slate-950 text-slate-100 overflow-y-auto font-sans selection:bg-orange-500/30">
       <ScreenHeader
@@ -267,7 +313,28 @@ export const SupervisorExpensesScreen: React.FC<{
         subtitle={`${stationName} · Manager Petty Cash & Operations`}
         onBack={onBack}
         right={
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <button
+              onClick={exportExpensesExcel}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 transition"
+              title="Download Excel (.xlsx) Report"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+            </button>
+            <button
+              onClick={exportExpensesCsv}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-400 transition"
+              title="Download CSV (.csv) Report (with UTF-8 BOM)"
+            >
+              <Download className="w-4 h-4 text-cyan-400" />
+            </button>
+            <button
+              onClick={exportExpensesPdf}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-rose-400 transition"
+              title="Download PDF (.pdf) Report (Automatic download)"
+            >
+              <FileText className="w-4 h-4 text-rose-400" />
+            </button>
             <button
               onClick={loadData}
               disabled={refreshing}

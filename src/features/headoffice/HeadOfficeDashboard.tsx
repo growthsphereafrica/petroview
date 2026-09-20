@@ -20,6 +20,8 @@ import {
   DollarSign,
   Download,
   Edit2,
+  FileSpreadsheet,
+  FileText,
   Flame,
   KeyRound,
   Layers,
@@ -55,6 +57,12 @@ import { formatDateTime, formatGHS, formatLitres } from '../../utils/currencyFor
 import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
 import { loadUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import type { Attendant, Supervisor, Product, ProductCategory, StationExpense } from '../../core/domain/types'
+import {
+  exportReportToPdf,
+  exportReportToExcel,
+  exportReportToCsv,
+  type ReportExportData,
+} from '../../services/reportExportService'
 
 type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
 type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff' | 'products' | 'expenses'
@@ -405,120 +413,87 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
     }
   }
 
-  // Export Staff Summaries to Excel (CSV)
-  const downloadExcelCsv = () => {
-    if (!summary) return
+  // Build standardized export payload for Excel, CSV, and PDF
+  const buildExportPayload = (): ReportExportData | null => {
+    if (!summary) return null
     const periodLabel =
       rangePreset === 'custom'
         ? `${customStartDate}_to_${customEndDate}`
         : rangePreset
 
-    const header = [
-      'Staff Code',
-      'Staff Name',
-      'Assigned Station',
-      'Shifts Closed',
-      'Total Litres Dispensed (L)',
-      'Total Revenue Sales (GHS)',
-      'Net Variance (GHS)',
-      'Approved Shifts',
-      'Rejected Shifts',
-      'Average Shift Sales (GHS)',
-      'Status',
-    ]
-
-    const rows = summary.attendants.map(a => [
-      a.employeeCode,
-      a.name,
-      a.stationName,
-      a.shiftsClosed,
-      a.litres.toFixed(2),
-      a.sales.toFixed(2),
-      a.variance.toFixed(2),
-      a.approved,
-      a.rejected,
-      a.avgShiftSales.toFixed(2),
-      a.active ? 'ACTIVE' : a.approvalStatus,
-    ])
-
     const totalFleetExpenses = companyExpenses.reduce((a, b) => a + b.amount, 0)
     const netFleetRevenue = Math.max(0, summary.salesToday - totalFleetExpenses)
 
-    const stationHeader = ['', 'Station Name', 'Station Code', 'Location', 'Region', 'Total Litres (L)', 'Total Sales (GHS)', 'Variance (GHS)', 'Shifts']
-    const stationRows = summary.stations.map(s => [
-      '',
-      s.name,
-      s.code,
-      s.location,
-      s.region,
-      s.litresToday.toFixed(2),
-      s.salesToday.toFixed(2),
-      s.netVariance.toFixed(2),
-      s.shiftCount,
-    ])
-
-    const expenseHeader = [
-      'Date',
-      'Station Name',
-      'Expense Category',
-      'Amount (GHS)',
-      'Payment Source',
-      'Payee',
-      'Reference No.',
-      'Recorded By',
-      'Notes',
-    ]
-
-    const expenseRows = companyExpenses.map(e => [
-      e.date,
-      e.stationName,
-      e.category,
-      e.amount.toFixed(2),
-      e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
-      e.payee || 'N/A',
-      e.referenceNumber || 'N/A',
-      e.recordedBy.name,
-      e.notes || '',
-    ])
-
-    const allCsv = [
-      [`${companyName} Enterprise Sales, Expenses & Performance Master Report - Period: ${periodLabel}`],
-      [`Generated at: ${formatDateTime(summary.generatedAt)}`],
-      [''],
-      ['FINANCIAL RECONCILIATION SUMMARY'],
-      [`Total Fleet Gross Fuel Sales: GHS ${summary.salesToday.toFixed(2)}`],
-      [`Less Total Station Expenses: -GHS ${totalFleetExpenses.toFixed(2)}`],
-      [`Net Fleet Revenue: GHS ${netFleetRevenue.toFixed(2)}`],
-      [`Total Stations Active: ${summary.stationCount}`],
-      [`Total Shifts Recorded: ${summary.totalShifts}`],
-      [`Net Pump Variance: GHS ${summary.netVariance.toFixed(2)}`],
-      [''],
-      ['STAFF PERFORMANCE SUMMARY'],
-      header,
-      ...rows,
-      [''],
-      ['STATION BRANCH SUMMARY'],
-      stationHeader,
-      ...stationRows,
-      [''],
-      ['ENTERPRISE STATION EXPENSES AUDIT LOG'],
-      expenseHeader,
-      ...expenseRows,
-    ]
-      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-
-    const blob = new Blob([allCsv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${companyShortCode.toLowerCase()}-enterprise-report-${periodLabel}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    return {
+      title: 'Enterprise Sales, Expenses & Performance Master Report',
+      companyName,
+      companyShortCode,
+      periodLabel,
+      generatedAt: summary.generatedAt,
+      currency: 'GHS',
+      financials: {
+        grossFuelSales: summary.salesToday,
+        totalExpenses: totalFleetExpenses,
+        netRevenue: netFleetRevenue,
+        litresDispensed: summary.litresToday,
+        totalShifts: summary.totalShifts,
+        netVariance: summary.netVariance,
+        stationCount: summary.stationCount,
+      },
+      staffRows: summary.attendants.map(a => ({
+        employeeCode: a.employeeCode,
+        name: a.name,
+        stationName: a.stationName,
+        shiftsClosed: a.shiftsClosed,
+        litres: a.litres,
+        sales: a.sales,
+        variance: a.variance,
+        approved: a.approved,
+        rejected: a.rejected,
+        avgShiftSales: a.avgShiftSales,
+        status: a.active ? 'ACTIVE' : a.approvalStatus,
+      })),
+      stationRows: summary.stations.map(s => ({
+        name: s.name,
+        code: s.code,
+        location: s.location,
+        region: s.region,
+        litresToday: s.litresToday,
+        salesToday: s.salesToday,
+        netVariance: s.netVariance,
+        shiftCount: s.shiftCount,
+      })),
+      expenseRows: companyExpenses.map(e => ({
+        date: e.date,
+        stationName: e.stationName,
+        category: e.category,
+        amount: e.amount,
+        paymentSource: e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
+        payee: e.payee || 'N/A',
+        referenceNumber: e.referenceNumber || 'N/A',
+        recordedBy: e.recordedBy.name,
+        notes: e.notes || '',
+      })),
+    }
   }
 
-  // Print PDF
-  const printReport = () => window.print()
+  // Native Microsoft Excel (.xlsx) Download
+  const handleDownloadExcel = () => {
+    const payload = buildExportPayload()
+    if (payload) exportReportToExcel(payload)
+  }
+
+  // Standard CSV (.csv) with UTF-8 BOM Download
+  const handleDownloadCsv = () => {
+    const payload = buildExportPayload()
+    if (payload) exportReportToCsv(payload)
+  }
+
+  // Automatic PDF (.pdf) Download without print dialog
+  const handleDownloadPdf = () => {
+    const payload = buildExportPayload()
+    if (payload) exportReportToPdf(payload)
+  }
 
   if (!summary) return <Splash />
 
@@ -659,20 +634,29 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
           </div>
 
           <button
-            onClick={downloadExcelCsv}
+            onClick={handleDownloadExcel}
             className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition"
-            title="Export Excel / CSV Report"
+            title="Download Native Excel (.xlsx) Report"
           >
-            <Download className="w-4 h-4" />
+            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
             <span className="hidden sm:inline">Excel</span>
           </button>
 
           <button
-            onClick={printReport}
-            className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition"
-            title="Print PDF Report"
+            onClick={handleDownloadCsv}
+            className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-400 text-xs font-bold flex items-center gap-1.5 transition"
+            title="Download CSV (.csv) Report (with UTF-8 BOM)"
           >
-            <Printer className="w-4 h-4" />
+            <Download className="w-4 h-4 text-cyan-400" />
+            <span className="hidden sm:inline">CSV</span>
+          </button>
+
+          <button
+            onClick={handleDownloadPdf}
+            className="px-2.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-rose-400 text-xs font-bold flex items-center gap-1.5 transition"
+            title="Download Formatted PDF Report (Automatic download, no print dialog)"
+          >
+            <FileText className="w-4 h-4 text-rose-400" />
             <span className="hidden sm:inline">PDF</span>
           </button>
 
@@ -1013,13 +997,32 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
               </p>
             </div>
 
-            <button
-              onClick={downloadExcelCsv}
-              className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Export CSV/Excel</span>
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={handleDownloadExcel}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition"
+                title="Download Excel (.xlsx)"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Excel</span>
+              </button>
+              <button
+                onClick={handleDownloadCsv}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-400 text-xs font-bold flex items-center gap-1.5 transition"
+                title="Download CSV (.csv)"
+              >
+                <Download className="w-3.5 h-3.5 text-cyan-400" />
+                <span>CSV</span>
+              </button>
+              <button
+                onClick={handleDownloadPdf}
+                className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-rose-400 text-xs font-bold flex items-center gap-1.5 transition"
+                title="Download PDF (.pdf)"
+              >
+                <FileText className="w-3.5 h-3.5 text-rose-400" />
+                <span>PDF</span>
+              </button>
+            </div>
           </div>
 
           <Card className="overflow-x-auto divide-y divide-slate-800/70">
@@ -1500,13 +1503,32 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 Live forecourt operating expenses, generator maintenance, utilities and supplies logged across all {companyName} retail stations.
               </p>
             </div>
-            <button
-              onClick={downloadExcelCsv}
-              className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition self-start sm:self-auto border border-slate-700"
-            >
-              <Download className="w-4 h-4" />
-              <span>Export Expenses (Excel)</span>
-            </button>
+            <div className="flex items-center gap-1.5 self-start sm:self-auto">
+              <button
+                onClick={handleDownloadExcel}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-emerald-400 text-xs font-bold flex items-center gap-1.5 transition border border-slate-700"
+                title="Download Excel (.xlsx)"
+              >
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>Excel</span>
+              </button>
+              <button
+                onClick={handleDownloadCsv}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-cyan-400 text-xs font-bold flex items-center gap-1.5 transition border border-slate-700"
+                title="Download CSV (.csv)"
+              >
+                <Download className="w-4 h-4 text-cyan-400" />
+                <span>CSV</span>
+              </button>
+              <button
+                onClick={handleDownloadPdf}
+                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-rose-400 text-xs font-bold flex items-center gap-1.5 transition border border-slate-700"
+                title="Download PDF (.pdf)"
+              >
+                <FileText className="w-4 h-4 text-rose-400" />
+                <span>PDF</span>
+              </button>
+            </div>
           </div>
 
           {/* KPI Cards */}

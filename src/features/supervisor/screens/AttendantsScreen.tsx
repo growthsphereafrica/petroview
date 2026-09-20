@@ -13,6 +13,8 @@ import {
   DollarSign,
   Download,
   Edit2,
+  FileSpreadsheet,
+  FileText,
   Flame,
   KeyRound,
   Layers,
@@ -41,6 +43,12 @@ import { expenseService, type ExpenseSummary } from '../../../core/services/expe
 import { describeError } from '../../../core/domain/errors'
 import { formatDateTime, formatGHS, formatLitres } from '../../../utils/currencyFormatter'
 import type { Attendant, StationExpense } from '../../../core/domain/types'
+import {
+  exportReportToPdf,
+  exportReportToExcel,
+  exportReportToCsv,
+  type ReportExportData,
+} from '../../../services/reportExportService'
 
 type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
 type SupervisorTab = 'summaries' | 'roster'
@@ -217,104 +225,75 @@ export const SupervisorAttendantsScreen: React.FC<{
     }
   }
 
-  // Export Station Report to CSV (Excel)
-  const exportStationCsv = () => {
-    if (!summaryData) return
-    const periodLabel =
-      rangePreset === 'custom' ? `${customStartDate}_to_${customEndDate}` : rangePreset
+  const totalExpenses = stationExpenses.reduce((a, b) => a + b.amount, 0)
 
-    const totalExpenses = stationExpenses.reduce((a, b) => a + b.amount, 0)
+  // Build standardized export payload
+  const getStationExportPayload = (): ReportExportData | null => {
+    if (!summaryData) return null
+    const periodLabel = rangePreset === 'custom' ? `${customStartDate}_to_${customEndDate}` : rangePreset
     const netStationCash = Math.max(0, summaryData.salesToday - totalExpenses)
+    const companyShortCode = supervisor?.companyShortCode || 'PV'
+    const companyName = supervisor?.companyShortCode ? `${supervisor.companyShortCode} Petroleum` : 'PetroView Forecourt'
 
-    const header = [
-      'Attendant Code',
-      'Attendant Name',
-      'Phone',
-      'Shifts Closed',
-      'Volume Dispensed (L)',
-      'Total Sales Revenue (GHS)',
-      'Cash (GHS)',
-      'Mobile Money (GHS)',
-      'Credit (GHS)',
-      'Net Variance (GHS)',
-      'Approved Shifts',
-      'Avg Shift Sales (GHS)',
-      'Status',
-    ]
-
-    const rows = summaryData.attendants.map(a => [
-      a.employeeCode,
-      a.name,
-      a.phone || 'N/A',
-      a.shiftsClosed,
-      a.litres.toFixed(2),
-      a.sales.toFixed(2),
-      (a.cashTotal || 0).toFixed(2),
-      (a.momoTotal || 0).toFixed(2),
-      (a.creditTotal || 0).toFixed(2),
-      a.variance.toFixed(2),
-      a.approved,
-      a.avgShiftSales.toFixed(2),
-      a.active ? 'ACTIVE' : a.approvalStatus,
-    ])
-
-    const expenseHeader = [
-      'Date',
-      'Expense Category',
-      'Amount (GHS)',
-      'Payment Source',
-      'Payee',
-      'Reference No.',
-      'Recorded By',
-      'Notes',
-    ]
-
-    const expenseRows = stationExpenses.map(e => [
-      e.date,
-      e.category,
-      e.amount.toFixed(2),
-      e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
-      e.payee || 'N/A',
-      e.referenceNumber || 'N/A',
-      e.recordedBy.name,
-      e.notes || '',
-    ])
-
-    const csvContent = [
-      [`${stationName} - Attendant Sales, Expenses & Performance Summary Report`],
-      [`Period: ${periodLabel} | Generated: ${formatDateTime(summaryData.generatedAt)}`],
-      [`Supervisor / Manager: ${supervisor?.fullName || 'Manager'} (${supervisor?.employeeCode || 'SUP'})`],
-      [''],
-      ['FINANCIAL RECONCILIATION SUMMARY'],
-      [`Gross Forecourt Sales: GHS ${summaryData.salesToday.toFixed(2)}`],
-      [`Less Station Expenses: -GHS ${totalExpenses.toFixed(2)}`],
-      [`Net Station Cash (Handover/Bank): GHS ${netStationCash.toFixed(2)}`],
-      [`Total Fuel Volume: ${summaryData.litresToday.toFixed(2)} L`],
-      [`Total Shifts Closed: ${summaryData.totalShifts}`],
-      [`Pump Variance: GHS ${summaryData.netVariance.toFixed(2)}`],
-      [''],
-      ['ATTENDANT PERFORMANCE BREAKDOWN'],
-      header,
-      ...rows,
-      [''],
-      ['STATION EXPENSES & PETTY CASH AUDIT LOG'],
-      expenseHeader,
-      ...expenseRows,
-    ]
-      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
-      .join('\n')
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `station-report-${periodLabel}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+    return {
+      title: `${stationName} - Attendant Shift, Sales & Expenses Summary`,
+      companyName,
+      companyShortCode,
+      periodLabel,
+      generatedAt: summaryData.generatedAt,
+      currency: 'GHS',
+      financials: {
+        grossFuelSales: summaryData.salesToday,
+        totalExpenses,
+        netRevenue: netStationCash,
+        litresDispensed: summaryData.litresToday,
+        totalShifts: summaryData.totalShifts,
+        netVariance: summaryData.netVariance,
+      },
+      staffRows: summaryData.attendants.map(a => ({
+        employeeCode: a.employeeCode,
+        name: a.name,
+        stationName,
+        shiftsClosed: a.shiftsClosed,
+        litres: a.litres,
+        sales: a.sales,
+        variance: a.variance,
+        approved: a.approved,
+        rejected: 0,
+        avgShiftSales: a.avgShiftSales,
+        status: a.active ? 'ACTIVE' : a.approvalStatus,
+      })),
+      expenseRows: stationExpenses.map(e => ({
+        date: e.date,
+        stationName,
+        category: e.category,
+        amount: e.amount,
+        paymentSource: e.paymentSource === 'CASH' ? 'Cash Drawer' : e.paymentSource === 'MOMO' ? 'Mobile Money' : 'Station Account',
+        payee: e.payee || 'N/A',
+        referenceNumber: e.referenceNumber || 'N/A',
+        recordedBy: e.recordedBy.name,
+        notes: e.notes || '',
+      })),
+    }
   }
 
-  // Print PDF
-  const printReport = () => window.print()
+  // Export Native Excel (.xlsx)
+  const exportStationExcel = () => {
+    const payload = getStationExportPayload()
+    if (payload) exportReportToExcel(payload)
+  }
+
+  // Export CSV (.csv) with UTF-8 BOM
+  const exportStationCsv = () => {
+    const payload = getStationExportPayload()
+    if (payload) exportReportToCsv(payload)
+  }
+
+  // Automatic PDF (.pdf) Download without print dialog
+  const exportStationPdf = () => {
+    const payload = getStationExportPayload()
+    if (payload) exportReportToPdf(payload)
+  }
 
   // Filtered list of attendants
   const filteredRoster = attendants.filter(
@@ -341,18 +320,25 @@ export const SupervisorAttendantsScreen: React.FC<{
         right={
           <div className="flex items-center gap-1.5 print:hidden">
             <button
-              onClick={exportStationCsv}
+              onClick={exportStationExcel}
               className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-emerald-400 transition"
-              title="Export CSV / Excel"
+              title="Download Excel (.xlsx) Report"
             >
-              <Download className="w-4 h-4" />
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
             </button>
             <button
-              onClick={printReport}
-              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-white transition"
-              title="Print PDF Report"
+              onClick={exportStationCsv}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-cyan-400 transition"
+              title="Download CSV (.csv) Report"
             >
-              <Printer className="w-4 h-4" />
+              <Download className="w-4 h-4 text-cyan-400" />
+            </button>
+            <button
+              onClick={exportStationPdf}
+              className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-rose-400 transition"
+              title="Download PDF (.pdf) Report (Automatic download)"
+            >
+              <FileText className="w-4 h-4 text-rose-400" />
             </button>
             <button
               onClick={() => setShowRegisterForm(v => !v)}

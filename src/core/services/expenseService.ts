@@ -4,8 +4,9 @@
  * Scoped by station and company tenant.
  */
 
-import { expenseRepo, auditLogRepo } from '../infra/repositories'
+import { expenseRepo, auditLogRepo, syncQueueRepo } from '../infra/repositories'
 import { liveSyncBus } from './liveSyncBus'
+import { syncService } from './syncService'
 import { STANDARD_STATION_EXPENSE_CATEGORIES } from '../../constants/expenseCategories'
 import type { StationExpense, ExpensePaymentSource } from '../domain/types'
 
@@ -223,6 +224,21 @@ export class ExpenseService {
     })
 
     liveSyncBus.publish({ table: 'EXPENSES' as any, reason: 'INSERT', key: expense.id })
+
+    await syncQueueRepo.add({
+      id: `sync-exp-${expense.id}`,
+      entityType: 'EXPENSE',
+      entityId: expense.id,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'INSERT', key: `sync-exp-${expense.id}` })
+    syncService.triggerBackgroundSync()
+
     return expense
   }
 

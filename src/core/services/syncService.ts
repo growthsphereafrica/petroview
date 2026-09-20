@@ -42,6 +42,47 @@ const BACKOFF_BASE_MS = 1_000
 export class SyncService {
   private listeners: SyncListener[] = []
   private running = false
+  private debounceTimer: number | null = null
+  private autoSyncInterval: number | null = null
+
+  constructor() {
+    this.initAutoSync()
+  }
+
+  private initAutoSync(): void {
+    if (typeof window === 'undefined') return
+
+    // Immediately trigger upload when connection returns
+    window.addEventListener('online', () => {
+      console.log('[SyncService] Device is ONLINE. Triggering immediate background sync pass.')
+      void this.runPendingSync()
+    })
+
+    // Trigger sync when tab becomes active again
+    window.addEventListener('focus', () => {
+      void this.runPendingSync()
+    })
+
+    // Continuous background sync loop (checks every 12 seconds)
+    this.autoSyncInterval = window.setInterval(() => {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) return
+      void this.runPendingSync()
+    }, 12_000)
+  }
+
+  /**
+   * Triggers a debounced background sync pass whenever local data changes.
+   * Ensures high-frequency transactions don't overload the gateway while
+   * guaranteeing zero-delay background upload.
+   */
+  triggerBackgroundSync(delayMs = 600): void {
+    if (typeof window === 'undefined') return
+    if (this.debounceTimer) window.clearTimeout(this.debounceTimer)
+    this.debounceTimer = window.setTimeout(() => {
+      this.debounceTimer = null
+      void this.runPendingSync()
+    }, delayMs)
+  }
 
   subscribe(listener: SyncListener): () => void {
     this.listeners.push(listener)
@@ -73,6 +114,9 @@ export class SyncService {
    */
   async runPendingSync(): Promise<SyncResult> {
     if (this.running) return { attempted: 0, succeeded: 0, failed: 0 }
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      return { attempted: 0, succeeded: 0, failed: 0 }
+    }
     this.running = true
     try {
       const due = await syncQueueRepo.getPending()

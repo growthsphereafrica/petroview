@@ -1,7 +1,7 @@
 export interface NozzleConfig {
   id: string
   nozzleNumber: number
-  fuelCode: 'PMS' | 'AGO' | 'DPK' | 'KERO'
+  fuelCode: 'PMS' | 'AGO' | 'DPK' | 'KERO' | 'RON95' | 'AGO-PREM' | 'LPG' | string
   fuelName: string
   color: string
   unitPrice: number // GHS per Litre
@@ -27,8 +27,12 @@ export interface StationConfig {
 export const FUEL_PRICES: Record<string, { name: string; price: number; color: string; bg: string }> = {
   PMS: { name: 'Super Petrol (PMS)', price: 14.80, color: '#16a34a', bg: 'bg-emerald-500' },
   AGO: { name: 'Diesel (AGO)', price: 15.20, color: '#2563eb', bg: 'bg-blue-600' },
-  DPK: { name: 'Dual Purpose Kerosene (DPK)', price: 13.90, color: '#ea580c', bg: 'bg-orange-500' },
+  RON95: { name: 'Super XP / V-Power (RON 95)', price: 15.90, color: '#dc2626', bg: 'bg-red-600' },
+  'AGO-PREM': { name: 'Super Diesel (Low Sulphur)', price: 15.80, color: '#0284c7', bg: 'bg-sky-600' },
+  DPK: { name: 'Kerosene (DPK)', price: 13.90, color: '#ea580c', bg: 'bg-orange-500' },
   KERO: { name: 'Kerosene (KERO)', price: 13.50, color: '#9333ea', bg: 'bg-purple-600' },
+  LPG: { name: 'LPG / Autogas', price: 16.50, color: '#ca8a04', bg: 'bg-yellow-600' },
+  PREMIX: { name: 'Premix Fuel', price: 11.20, color: '#0d9488', bg: 'bg-teal-600' },
 }
 
 export const DEFAULT_STATION: StationConfig = {

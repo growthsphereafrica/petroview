@@ -6,7 +6,16 @@ export const ENV = {
   LOCKOUT_MS: 5 * 60 * 1000,
 }
 
-export const FUEL_PRICES = { PMS: 14.8, AGO: 15.2, DPK: 13.9, KERO: 13.5 }
+export const FUEL_PRICES: Record<string, number> = {
+  PMS: 14.8,
+  AGO: 15.2,
+  RON95: 15.9,
+  'AGO-PREM': 15.8,
+  DPK: 13.9,
+  KERO: 13.5,
+  LPG: 16.5,
+  PREMIX: 11.2,
+}
 
 export const SUPER_ADMIN = {
   id: 'sup-super-admin',

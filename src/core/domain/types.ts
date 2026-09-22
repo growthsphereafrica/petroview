@@ -182,6 +182,8 @@ export interface Shift {
   pumpName: string
   stationId: string
   stationName: string
+  companyId?: string
+  companyShortCode?: string
   status: ShiftStatus
   openedAt: string
   closedAt: string | null
@@ -269,4 +271,27 @@ export interface StationExpense {
   status: 'APPROVED' | 'PENDING' | 'REJECTED'
   createdAt: string
   updatedAt: string
+}
+
+export interface TankReadingEntry {
+  tankId: string
+  fuelCode: string
+  openingLevel: number
+  closingLevel: number
+  dipStock: number
+  received: number
+  notes?: string
+}
+
+export interface TankReadingRecord {
+  id: string
+  stationId: string
+  companyId?: string | null
+  recordedBy: string
+  recordedByName: string
+  readings: TankReadingEntry[]
+  notes?: string | null
+  recordedAt: string
+  createdAt: string
+  syncStatus?: SyncStatus
 }

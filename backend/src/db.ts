@@ -307,6 +307,33 @@ CREATE TABLE IF NOT EXISTS station_expenses (
   updatedAt TEXT NOT NULL
 );
 `,
+  products: `
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  companyId TEXT,
+  code TEXT NOT NULL,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'FUEL',
+  unitPrice REAL NOT NULL,
+  unit TEXT NOT NULL DEFAULT 'Litre',
+  color TEXT NOT NULL DEFAULT '#F97316',
+  active INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+`,
+  pumps: `
+CREATE TABLE IF NOT EXISTS pumps (
+  id TEXT PRIMARY KEY,
+  stationId TEXT NOT NULL,
+  companyId TEXT,
+  name TEXT NOT NULL,
+  fuels TEXT NOT NULL DEFAULT '["PMS","AGO"]',
+  active INTEGER NOT NULL DEFAULT 1,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL
+);
+`,
 }
 
 function tableColumns(table: string): string[] {
@@ -340,6 +367,21 @@ function migrateLegacyTables(): void {
     db.exec(`DROP TABLE ${legacy}`)
     console.log(`[db] Migrated legacy schema for ${m.table}`)
   }
+
+  // Non-destructive column additions on shifts
+  try {
+    const shiftCols = tableColumns('shifts')
+    if (!shiftCols.includes('companyId')) {
+      db.exec('ALTER TABLE shifts ADD COLUMN companyId TEXT')
+      console.log('[db] Added companyId column to shifts')
+    }
+    if (!shiftCols.includes('companyShortCode')) {
+      db.exec('ALTER TABLE shifts ADD COLUMN companyShortCode TEXT')
+      console.log('[db] Added companyShortCode column to shifts')
+    }
+  } catch (err) {
+    console.warn('[db] Shifts column addition warning:', err)
+  }
 }
 
 export function initSchema(): void {
@@ -353,10 +395,13 @@ export function initSchema(): void {
   }
   ensureIndex('idx_shifts_station_status', 'CREATE INDEX idx_shifts_station_status ON shifts (stationId, status)')
   ensureIndex('idx_shifts_openedAt', 'CREATE INDEX idx_shifts_openedAt ON shifts (openedAt)')
+  ensureIndex('idx_shifts_companyId', 'CREATE INDEX idx_shifts_companyId ON shifts (companyId)')
   ensureIndex('idx_audit_timestamp', 'CREATE INDEX idx_audit_timestamp ON audit_log (timestamp)')
   ensureIndex('idx_tankReadings_station', 'CREATE INDEX idx_tankReadings_station ON tankReadings (stationId, recordedAt)')
   ensureIndex('idx_attendants_company', 'CREATE INDEX idx_attendants_company ON attendants (companyId)')
   ensureIndex('idx_supervisors_company', 'CREATE INDEX idx_supervisors_company ON supervisors (companyId)')
+  ensureIndex('idx_products_company_code', 'CREATE INDEX idx_products_company_code ON products (companyId, code)')
+  ensureIndex('idx_pumps_station', 'CREATE INDEX idx_pumps_station ON pumps (stationId)')
 }
 
 export function seedSuperAdmin(): void {
@@ -402,10 +447,43 @@ export function seedSuperAdmin(): void {
   console.log(`[db] Seeded SUPER-ADMIN (${SUPER_ADMIN.employeeCode})`)
 }
 
+const DEFAULT_PLATFORM_PRODUCTS = [
+  { id: 'prod-pms',       code: 'PMS',      name: 'Super Petrol (PMS)',              category: 'FUEL',      unitPrice: 14.8,  unit: 'Litre',       color: '#16a34a' },
+  { id: 'prod-ago',       code: 'AGO',      name: 'Diesel (AGO)',                   category: 'FUEL',      unitPrice: 15.2,  unit: 'Litre',       color: '#2563eb' },
+  { id: 'prod-dpk',       code: 'DPK',      name: 'Kerosene (DPK)',                 category: 'FUEL',      unitPrice: 13.9,  unit: 'Litre',       color: '#ea580c' },
+  { id: 'prod-kero',      code: 'KERO',     name: 'Kerosene (KERO)',                category: 'FUEL',      unitPrice: 13.5,  unit: 'Litre',       color: '#9333ea' },
+  { id: 'prod-ron95',     code: 'RON95',    name: 'Super XP / V-Power (RON 95)',    category: 'FUEL',      unitPrice: 15.9,  unit: 'Litre',       color: '#dc2626' },
+  { id: 'prod-ago-prem',  code: 'AGO-PREM', name: 'Super Diesel (Low Sulphur)',     category: 'FUEL',      unitPrice: 15.8,  unit: 'Litre',       color: '#0284c7' },
+  { id: 'prod-lpg',       code: 'LPG',      name: 'LPG / Autogas',                  category: 'LPG',       unitPrice: 16.5,  unit: 'kg',          color: '#ca8a04' },
+  { id: 'prod-premix',    code: 'PREMIX',   name: 'Premix Fuel',                    category: 'FUEL',      unitPrice: 11.2,  unit: 'Litre',       color: '#0d9488' },
+  { id: 'prod-lub-20w50', code: 'LUB-20W50','name': 'Engine Oil 20W-50 (4L)',       category: 'LUBRICANT', unitPrice: 160.0, unit: 'Bottle (4L)', color: '#7c3aed' },
+  { id: 'prod-lub-15w40', code: 'LUB-15W40','name': 'Heavy Duty Diesel Oil 15W-40 (4L)', category: 'LUBRICANT', unitPrice: 185.0, unit: 'Bottle (4L)', color: '#4f46e5' },
+  { id: 'prod-lub-atf',   code: 'LUB-ATF',  name: 'Automatic Transmission Fluid (1L)', category: 'LUBRICANT', unitPrice: 65.0,  unit: 'Bottle (1L)', color: '#db2777' },
+  { id: 'prod-lub-brake', code: 'LUB-BRAKE',name: 'Brake Fluid DOT 4 (500ml)',     category: 'LUBRICANT', unitPrice: 45.0,  unit: 'Bottle (500ml)', color: '#e11d48' },
+] as const
+
+/**
+ * Seeds the default product catalog on first boot only.
+ * Uses INSERT OR IGNORE so existing rows (including admin-deleted ones) are NEVER restored.
+ * Admins can safely delete products and they will stay deleted across restarts.
+ */
+export function seedDefaultProducts(): void {
+  const now = new Date().toISOString()
+  const insert = db.prepare(
+    `INSERT OR IGNORE INTO products (id, companyId, code, name, category, unitPrice, unit, color, active, createdAt, updatedAt)
+     VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+  )
+  for (const p of DEFAULT_PLATFORM_PRODUCTS) {
+    insert.run(p.id, p.code, p.name, p.category, p.unitPrice, p.unit, p.color, now, now)
+  }
+  console.log('[db] Default products seeded (INSERT OR IGNORE — existing rows preserved)')
+}
+
 export function seedAllProductionData(): void {
   // Only initialize the master Super Admin account.
   // All OMCs, stations, managers, and attendants must be provisioned by the Super Admin / OMC admin.
   seedSuperAdmin()
+  seedDefaultProducts()
 }
 
 export function deserializeShift(row: ShiftRow): Shift {

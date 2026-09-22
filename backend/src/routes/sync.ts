@@ -17,15 +17,19 @@ interface SyncPayload {
 const upsertShift = db.prepare(`
   INSERT INTO shifts (
     id, number, attendantId, attendantName, pumpId, pumpName, stationId, stationName,
+    companyId, companyShortCode,
     status, openedAt, closedAt, openingReadings, closingReadings, sales,
     expectedTotal, payments, actualTotal, variance, notes, reviewerNotes, syncStatus, createdAt, updatedAt
   ) VALUES (
     @id, @number, @attendantId, @attendantName, @pumpId, @pumpName, @stationId, @stationName,
+    @companyId, @companyShortCode,
     @status, @openedAt, @closedAt, @openingReadings, @closingReadings, @sales,
     @expectedTotal, @payments, @actualTotal, @variance, @notes, @reviewerNotes, @syncStatus, @createdAt, @updatedAt
   )
   ON CONFLICT(id) DO UPDATE SET
     status = excluded.status,
+    companyId = CASE WHEN excluded.companyId IS NOT NULL THEN excluded.companyId ELSE shifts.companyId END,
+    companyShortCode = CASE WHEN excluded.companyShortCode IS NOT NULL THEN excluded.companyShortCode ELSE shifts.companyShortCode END,
     closedAt = excluded.closedAt,
     closingReadings = excluded.closingReadings,
     sales = excluded.sales,
@@ -50,6 +54,15 @@ const upsertReceipt = db.prepare(`
   VALUES (@id, @shiftId, @image, @capturedAt, @syncStatus)
   ON CONFLICT(id) DO UPDATE SET image = excluded.image, capturedAt = excluded.capturedAt, syncStatus = excluded.syncStatus
 `)
+
+const upsertTankReading = db.prepare(`
+  INSERT INTO tankReadings (id, stationId, companyId, recordedBy, recordedByName, readings, recordedAt, notes, createdAt)
+  VALUES (@id, @stationId, @companyId, @recordedBy, @recordedByName, @readings, @recordedAt, @notes, @createdAt)
+  ON CONFLICT(id) DO UPDATE SET
+    readings = excluded.readings,
+    notes = excluded.notes
+`)
+
 
 const queue = (entityType: SyncEntityType, entityId: string, createdAt: string): void => {
   db.prepare('DELETE FROM syncQueue WHERE entityType = ? AND entityId = ?').run(entityType, entityId)
@@ -87,6 +100,9 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
         const status = (s.status ?? 'OPEN') as ShiftStatus
         const syncStatus = status === 'CLOSED' ? 'PENDING' : (s.syncStatus ?? 'SYNCED')
         const now = new Date().toISOString()
+        const companyId = (s as any).companyId || req.session?.companyId || null
+        const companyShortCode = (s as any).companyShortCode || req.session?.companyShortCode || null
+
         upsertShift.run({
           id: s.id,
           number: s.number,
@@ -96,6 +112,8 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
           pumpName: s.pumpName ?? '',
           stationId: s.stationId ?? (req.session?.stationId ?? 'STN-GV-042'),
           stationName: s.stationName ?? 'Station',
+          companyId,
+          companyShortCode,
           status,
           openedAt: s.openedAt,
           closedAt: s.closedAt ?? null,
@@ -144,6 +162,23 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
         })
         queue('RECEIPT', String(r.id), new Date().toISOString())
         accepted.push(String(r.id))
+      } else if (entity.type === 'TANK_READING') {
+        const tr = data as Record<string, unknown>
+        if (!tr.id || !tr.stationId) throw new Error('tank reading is missing required fields (id, stationId)')
+        const readings = typeof tr.readings === 'string' ? tr.readings : JSON.stringify(tr.readings ?? [])
+        upsertTankReading.run({
+          id: tr.id,
+          stationId: tr.stationId,
+          companyId: tr.companyId || req.session?.companyId || null,
+          recordedBy: tr.recordedBy || req.session?.userId || '',
+          recordedByName: tr.recordedByName || req.session?.fullName || '',
+          readings,
+          recordedAt: (tr.recordedAt as string) || new Date().toISOString(),
+          notes: (tr.notes as string) || null,
+          createdAt: (tr.createdAt as string) || new Date().toISOString(),
+        })
+        queue('TANK_READING', String(tr.id), new Date().toISOString())
+        accepted.push(String(tr.id))
       } else {
         rejected.push({ id: entity?.data?.id as string, reason: `unsupported entity type: ${entity.type}` })
       }
@@ -162,7 +197,7 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
   })
 })
 
-syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor'), (req: AuthRequest, res) => {
+syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
   const { id } = req.params
   const { verdict, notes } = (req.body ?? {}) as { verdict?: 'APPROVED' | 'REJECTED'; notes?: string }
   if (verdict !== 'APPROVED' && verdict !== 'REJECTED') {

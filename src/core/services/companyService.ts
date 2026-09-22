@@ -16,6 +16,9 @@ import {
   backendGetCompanyStations,
   backendCreateStation,
   backendDeleteStation,
+  backendUpdateCompany,
+  backendUpdateStation,
+  backendResetPin,
 } from '../../services/backendApiService'
 
 export interface CreateCompanyInput {
@@ -291,7 +294,7 @@ export class CompanyService {
     return stObj
   }
 
-  /** Updates an existing company's information */
+  /** Updates an existing company's information — syncs to backend for global visibility */
   async updateCompany(
     companyId: string,
     updates: {
@@ -321,6 +324,18 @@ export class CompanyService {
       active: updates.active !== undefined ? updates.active : company.active,
     }
 
+    // Sync to backend (global)
+    try {
+      await backendUpdateCompany(companyId, {
+        name: updated.name,
+        tagline: updated.tagline,
+        phone: updated.phone,
+        primaryColor: updated.primaryColor,
+      })
+    } catch (backendErr) {
+      console.warn('[companyService] Backend updateCompany warning:', backendErr)
+    }
+
     await prodDb.companies.put(updated)
 
     // If admin PIN is being updated, update the supervisor account
@@ -333,6 +348,10 @@ export class CompanyService {
           pinSalt: salt,
           pinHash: hash,
         })
+        // Sync PIN reset to backend
+        try {
+          await backendResetPin({ userId: hqSupervisor.id, employeeCode: company.adminCode, role: 'supervisor', newPin: updates.adminPin })
+        } catch { /* best effort */ }
       }
     }
 
@@ -405,7 +424,7 @@ export class CompanyService {
     liveSyncBus.publish({ table: 'COMPANIES', reason: 'DELETE', key: companyId })
   }
 
-  /** Updates a station branch */
+  /** Updates a station branch — syncs to backend for global visibility */
   async updateStation(
     stationId: string,
     updates: { name?: string; code?: string; location?: string; region?: string; pumpsCount?: number },
@@ -420,6 +439,19 @@ export class CompanyService {
       location: updates.location?.trim() ?? station.location,
       region: updates.region?.trim() ?? station.region,
       pumpsCount: updates.pumpsCount ?? station.pumpsCount,
+    }
+
+    // Sync to backend (global)
+    try {
+      await backendUpdateStation(station.companyId, stationId, {
+        name: updated.name,
+        code: updated.code,
+        location: updated.location,
+        region: updated.region,
+        pumpsCount: updated.pumpsCount,
+      })
+    } catch (backendErr) {
+      console.warn('[companyService] Backend updateStation warning:', backendErr)
     }
 
     await prodDb.companyStations.put(updated)

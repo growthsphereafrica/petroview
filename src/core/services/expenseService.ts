@@ -289,22 +289,29 @@ export class ExpenseService {
   }
 
   /**
-   * Delete an expense
+   * Delete an expense — removes from backend first (global), then local IndexedDB.
    */
   async deleteExpense(id: string, actorName = 'Supervisor'): Promise<void> {
-    const existing = await expenseRepo.get(id)
-    if (!existing) return
+    // 1. Delete from backend (global, all devices)
+    try {
+      const { backendDeleteExpense } = await import('../../services/backendApiService')
+      await backendDeleteExpense(id)
+    } catch (backendErr) {
+      console.warn('[expenseService] Backend delete expense warning:', backendErr)
+    }
 
+    // 2. Remove from local IndexedDB cache
+    const existing = await expenseRepo.get(id)
     await expenseRepo.delete(id)
 
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,
       action: 'EXPENSE_DELETED',
-      actorId: existing.recordedBy.id,
+      actorId: existing?.recordedBy.id ?? 'admin',
       actorName,
       actorRole: 'SUPERVISOR',
       targetId: id,
-      targetDescription: `Deleted expense: ${existing.category} - GHS ${existing.amount.toFixed(2)} at ${existing.stationName}`,
+      targetDescription: `Deleted expense: ${existing?.category ?? id} - GHS ${existing?.amount.toFixed(2) ?? '0'} at ${existing?.stationName ?? ''}`,
       notes: null,
       timestamp: new Date().toISOString(),
     })
@@ -313,7 +320,9 @@ export class ExpenseService {
   }
 
   /**
-   * List expenses matching optional filters (companyId, stationId, date range, category)
+   * List expenses matching optional filters.
+   * Reads from the backend API first (global truth), falls back to local IndexedDB.
+   * Local IndexedDB is kept in sync as a cache via the sync queue.
    */
   async listExpenses(filter?: {
     companyId?: string
@@ -322,9 +331,48 @@ export class ExpenseService {
     endDate?: string
     category?: string
   }): Promise<StationExpense[]> {
-    await this.seedInitialExpenses()
-    let rows: StationExpense[] = []
+    // Try backend API first for cross-device consistency
+    try {
+      const { backendGetExpenses } = await import('../../services/backendApiService')
+      const result = await backendGetExpenses(filter)
+      const apiExpenses: StationExpense[] = (result.expenses ?? []).map((e: any) => ({
+        id: e.id,
+        companyId: e.companyId,
+        companyShortCode: e.companyShortCode ?? undefined,
+        stationId: e.stationId,
+        stationName: e.stationName,
+        category: e.category,
+        amount: e.amount,
+        paymentSource: e.paymentSource,
+        payee: e.payee ?? undefined,
+        referenceNumber: e.referenceNumber ?? undefined,
+        notes: e.notes ?? undefined,
+        date: e.date,
+        recordedBy: typeof e.recordedBy === 'object' ? e.recordedBy : { id: '', name: String(e.recordedBy ?? ''), employeeCode: '' },
+        status: e.status ?? 'APPROVED',
+        createdAt: e.createdAt,
+        updatedAt: e.updatedAt,
+      }))
 
+      // Apply client-side category filter (backend already filters companyId/stationId/dates)
+      let rows = apiExpenses
+      if (filter?.category && filter.category !== 'ALL') {
+        const match = filter.category.trim().toUpperCase()
+        rows = rows.filter(r => r.category === match)
+      }
+
+      // Cache to local IndexedDB for offline fallback
+      for (const exp of rows) {
+        await expenseRepo.add(exp).catch(() => expenseRepo.update(exp))
+      }
+
+      return rows.sort((a, b) => b.date.localeCompare(a.date) || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+    } catch (apiErr) {
+      console.warn('[expenseService] Falling back to local IndexedDB for expenses:', apiErr)
+    }
+
+    // Offline fallback: read from local IndexedDB
+    let rows: StationExpense[] = []
     if (filter?.stationId && filter.stationId !== 'ALL') {
       rows = await expenseRepo.listForStation(filter.stationId)
     } else if (filter?.companyId && filter.companyId !== 'ALL') {
@@ -333,13 +381,8 @@ export class ExpenseService {
       rows = await expenseRepo.listAll()
     }
 
-    // Date range filtering (by expense date YYYY-MM-DD)
-    if (filter?.startDate) {
-      rows = rows.filter(r => r.date >= filter.startDate!)
-    }
-    if (filter?.endDate) {
-      rows = rows.filter(r => r.date <= filter.endDate!)
-    }
+    if (filter?.startDate) rows = rows.filter(r => r.date >= filter.startDate!)
+    if (filter?.endDate)   rows = rows.filter(r => r.date <= filter.endDate!)
     if (filter?.category && filter.category !== 'ALL') {
       const match = filter.category.trim().toUpperCase()
       rows = rows.filter(r => r.category === match)

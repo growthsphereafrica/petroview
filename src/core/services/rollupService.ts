@@ -175,15 +175,30 @@ export class RollupService {
 
     const stationIdSet = new Set(targetStations.map(s => s.id))
 
-    // 2. Fetch all shifts and filter by company stations and date range
+    // 2. Fetch all shifts from backend API first (global synchronization), then local
+    if (options?.companyId) {
+      try {
+        const { backendGetShiftsByCompany } = await import('../../services/backendApiService')
+        const liveShifts = await backendGetShiftsByCompany(options.companyId)
+        if (liveShifts?.shifts && Array.isArray(liveShifts.shifts)) {
+          for (const s of liveShifts.shifts) {
+            await shiftRepo.upsert(s as any)
+          }
+        }
+      } catch { /* offline fallback */ }
+    }
+
     const allShifts = await shiftRepo.listAll()
 
+    const cleanComp = options?.companyId?.toLowerCase().replace('comp-', '') || ''
     let companyShifts = options?.companyId
       ? allShifts.filter(
           s =>
+            (s as any).companyId === options.companyId ||
             stationIdSet.has(s.stationId) ||
-            s.stationId.toLowerCase().includes(options.companyId!.toLowerCase().replace('comp-', '')) ||
-            (s.attendantName && s.attendantName.startsWith(options.companyId!.replace('comp-', '').toUpperCase())),
+            s.stationId.toLowerCase().includes(cleanComp) ||
+            (s.attendantName && s.attendantName.toUpperCase().startsWith(cleanComp.toUpperCase())) ||
+            (targetStations.length > 0 && targetStations.some(st => st.name.toLowerCase() === s.stationName?.toLowerCase())),
         )
       : allShifts
 
@@ -208,24 +223,24 @@ export class RollupService {
 
     const closed = inRangeShifts.filter(s => s.closedAt)
     const closedToday = closed.filter(s => (s.closedAt || '').slice(0, 10) === today)
-    const litresToday = closed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0)
-    const salesToday = Math.round(closed.reduce((a, s) => a + s.actualTotal, 0))
+    const litresToday = inRangeShifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0)
+    const salesToday = Math.round(inRangeShifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0))
     const netVariance = Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100
 
     const paymentTotals = {
-      cash: Math.round(closed.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
-      momo: Math.round(closed.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
-      credit: Math.round(closed.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
-      voucher: Math.round(closed.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
+      cash: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
+      momo: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
+      credit: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
+      voucher: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
     }
 
     const pendingReview = closed.filter(s => s.status === 'CLOSED').length
     const approved = closed.filter(s => s.status === 'APPROVED').length
     const rejected = closed.filter(s => s.status === 'REJECTED').length
 
-    // Cars served = total transactions across closed shifts
-    const carsServedToday = await countTransactionsForShifts(closedToday.map(s => s.id))
-    const carsServedTotal = await countTransactionsForShifts(closed.map(s => s.id))
+    // Cars served = total transactions across shifts
+    const carsServedToday = await countTransactionsForShifts(inRangeShifts.filter(s => (s.openedAt || '').slice(0, 10) === today).map(s => s.id))
+    const carsServedTotal = await countTransactionsForShifts(inRangeShifts.map(s => s.id))
 
     const pendingShiftSync = inRangeShifts.filter(s => s.syncStatus === 'PENDING').length
     const totalSyncUnits = inRangeShifts.length + 1
@@ -233,7 +248,7 @@ export class RollupService {
 
     // 3. Compute Per-Station Rollup
     const stationRollups: StationRollup[] = targetStations.map(st => {
-      const shifts = inRangeShifts.filter(s => s.stationId === st.id)
+      const shifts = inRangeShifts.filter(s => s.stationId === st.id || s.stationName?.toLowerCase() === st.name.toLowerCase())
       const siteClosed = shifts.filter(s => s.closedAt)
       const lastSyncTimes = shifts
         .map(s => s.updatedAt)
@@ -247,8 +262,8 @@ export class RollupService {
         region: st.region,
         location: st.location,
         shiftCount: shifts.length,
-        litresToday: siteClosed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
-        salesToday: Math.round(siteClosed.reduce((a, s) => a + s.actualTotal, 0)),
+        litresToday: shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0),
+        salesToday: Math.round(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0)),
         carsServedToday: 0,
         carsServedTotal: 0,
         netVariance: Math.round(siteClosed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
@@ -283,10 +298,10 @@ export class RollupService {
 
     const attendantRollups: AttendantRollup[] = (await Promise.all(targetAttendants
       .map(async att => {
-        const shifts = inRangeShifts.filter(s => s.attendantId === att.id || s.attendantName === att.fullName)
+        const shifts = inRangeShifts.filter(s => s.attendantId === att.id || s.attendantName?.toLowerCase() === att.fullName?.toLowerCase())
         const closedShifts = shifts.filter(s => s.closedAt)
-        const totalSales = Math.round(closedShifts.reduce((a, s) => a + s.actualTotal, 0))
-        const totalLitres = closedShifts.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0)
+        const totalSales = Math.round(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0))
+        const totalLitres = shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0)
         const totalVar = Math.round(closedShifts.reduce((a, s) => a + s.variance, 0) * 100) / 100
 
         const stn = targetStations.find(s => s.id === att.stationId)

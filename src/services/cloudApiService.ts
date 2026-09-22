@@ -201,6 +201,7 @@ async function loadEntityRecord(entityType: SyncEntityType, entityId: string): P
   if (entityType === 'SHIFT') return ((await prodDb.shifts.get(entityId)) as unknown as Record<string, unknown> | null) ?? null
   if (entityType === 'TRANSACTION') return ((await prodDb.transactions.get(entityId)) as unknown as Record<string, unknown> | null) ?? null
   if (entityType === 'RECEIPT') return ((await prodDb.receipts.get(entityId)) as unknown as Record<string, unknown> | null) ?? null
+  if (entityType === 'TANK_READING') return ((await prodDb.tankReadings.get(entityId)) as unknown as Record<string, unknown> | null) ?? null
   return null
 }
 

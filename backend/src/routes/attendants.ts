@@ -125,3 +125,64 @@ attendantsRouter.post('/:id/deactivate', authenticate, requireRole('supervisor',
   )
   res.json({ id: req.params.id, active: false })
 })
+
+// --- Update attendant profile (name, phone, station, active) ---
+attendantsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
+  const { fullName, phone, stationId, active } = (req.body ?? {}) as {
+    fullName?: string
+    phone?: string
+    stationId?: string
+    active?: boolean
+  }
+  const row = db.prepare('SELECT * FROM attendants WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined
+  if (!row) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Attendant not found.' })
+    return
+  }
+  const updates: string[] = []
+  const params: unknown[] = []
+  if (fullName !== undefined) { updates.push('fullName = ?'); params.push(fullName.trim()) }
+  if (phone !== undefined) { updates.push('phone = ?'); params.push(phone.trim() || null) }
+  if (stationId !== undefined) { updates.push('stationId = ?'); params.push(stationId || null) }
+  if (active !== undefined) {
+    updates.push('active = ?')
+    params.push(active ? 1 : 0)
+    if (!active) {
+      // Invalidate active sessions on deactivation
+      db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
+    }
+  }
+  if (updates.length === 0) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'No fields to update.' })
+    return
+  }
+  params.push(req.params.id)
+  db.prepare(`UPDATE attendants SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    newToken(), 'ATTENDANT_UPDATED', req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'SUPERVISOR',
+    req.params.id, `Updated profile for ${row.employeeCode as string}`, null, now, null,
+  )
+  const updated = db.prepare('SELECT * FROM attendants WHERE id = ?').get(req.params.id) as Record<string, unknown>
+  res.json(publicAttendant(updated))
+})
+
+// --- Delete attendant permanently ---
+attendantsRouter.delete('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
+  const row = db.prepare('SELECT employeeCode, fullName FROM attendants WHERE id = ?').get(req.params.id) as
+    | { employeeCode: string; fullName: string }
+    | undefined
+  if (!row) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Attendant not found.' })
+    return
+  }
+  db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
+  db.prepare('DELETE FROM attendants WHERE id = ?').run(req.params.id)
+  const now = new Date().toISOString()
+  db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    newToken(), 'ATTENDANT_DELETED', req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'SUPERVISOR',
+    req.params.id, `Deleted attendant ${row.employeeCode} (${row.fullName})`, null, now, null,
+  )
+  res.json({ success: true, id: req.params.id, employeeCode: row.employeeCode })
+})
+

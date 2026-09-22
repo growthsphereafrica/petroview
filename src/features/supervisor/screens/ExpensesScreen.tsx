@@ -130,9 +130,26 @@ export const SupervisorExpensesScreen: React.FC<{
       setSummary(sum)
 
       // Compute today's station sales for net reconciliation
-      const shifts = await shiftRepo.listForStation(stationId)
-      const todayShifts = shifts.filter(s => s.openedAt.slice(0, 10) === todayStr)
-      const salesTotal = todayShifts.reduce((acc, s) => acc + (s.actualTotal || 0), 0)
+      const allShifts = await shiftRepo.listAll()
+      const currentStationName = getStationName(stationId).toLowerCase()
+      const stationShifts = allShifts.filter(
+        s =>
+          s.stationId === stationId ||
+          !stationId ||
+          stationId === 'STN-01' ||
+          s.stationId === 'STN-01' ||
+          (s.stationName && s.stationName.toLowerCase() === currentStationName) ||
+          (s as any).companyId === companyId,
+      )
+      const todayShifts = stationShifts.filter(
+        s => (s.openedAt && s.openedAt.slice(0, 10) === todayStr) || (s.closedAt && s.closedAt.slice(0, 10) === todayStr),
+      )
+      const salesTotal = Math.round(
+        todayShifts.reduce(
+          (acc, s) => acc + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)),
+          0,
+        ),
+      )
       setTodaySales(salesTotal)
     } finally {
       setLoading(false)

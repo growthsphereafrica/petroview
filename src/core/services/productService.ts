@@ -1,13 +1,85 @@
 /**
- * Product & Dynamic Fuel Pricing Service.
- * Allows Super Admin and OMC Head Office to create, edit prices,
- * and activate/deactivate products unique to each OMC or platform-wide.
+ * Product & Dynamic Fuel Pricing Service — API-backed.
+ *
+ * All reads and writes go directly to the backend REST API
+ * (https://petroviewapi.growthspheregh.com/api/products) so that changes
+ * made by the Super Admin are immediately visible to ALL users on ALL devices.
+ *
+ * A localStorage cache is maintained as a read-through fallback for
+ * offline resilience — the cache is refreshed on every successful API call.
  */
 
-import { prodDb } from '../infra/db'
 import { liveSyncBus } from './liveSyncBus'
-import { auditLogRepo } from '../infra/repositories'
 import type { Product, ProductCategory } from '../domain/types'
+
+const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+const CACHE_KEY = 'pv_products_cache'
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
+
+// ── Local cache helpers ───────────────────────────────────────────────────────
+
+interface CacheEntry {
+  ts: number
+  products: Product[]
+}
+
+function readCache(): Product[] | null {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY)
+    if (!raw) return null
+    const entry: CacheEntry = JSON.parse(raw)
+    if (Date.now() - entry.ts > CACHE_TTL_MS) return null
+    return entry.products
+  } catch {
+    return null
+  }
+}
+
+function writeCache(products: Product[]): void {
+  try {
+    const entry: CacheEntry = { ts: Date.now(), products }
+    localStorage.setItem(CACHE_KEY, JSON.stringify(entry))
+  } catch {
+    // storage quota — non-fatal
+  }
+}
+
+function invalidateCache(): void {
+  try { localStorage.removeItem(CACHE_KEY) } catch { /* noop */ }
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+
+function getAuthHeader(): Record<string, string> {
+  // The session token is saved to localStorage by the unified login screen.
+  try {
+    const raw = localStorage.getItem('mvp_unified_session')
+    if (raw) {
+      const session = JSON.parse(raw) as { token?: string }
+      if (session?.token) return { Authorization: `Bearer ${session.token}` }
+    }
+  } catch { /* noop */ }
+  return {}
+}
+
+async function apiFetch<T>(path: string, opts?: RequestInit): Promise<T> {
+  const url = `${API_BASE}/api/products${path}`
+  const res = await fetch(url, {
+    ...opts,
+    headers: {
+      'Content-Type': 'application/json',
+      ...getAuthHeader(),
+      ...(opts?.headers ?? {}),
+    },
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { message?: string }
+    throw new Error(body.message ?? `API error ${res.status}`)
+  }
+  return res.json() as Promise<T>
+}
+
+// ── Input interfaces ──────────────────────────────────────────────────────────
 
 export interface CreateProductInput {
   companyId?: string
@@ -31,316 +103,143 @@ export interface UpdateProductInput {
   actorName?: string
 }
 
-export const DEFAULT_PRODUCTS: Omit<Product, 'id' | 'createdAt' | 'updatedAt'>[] = [
-  {
-    code: 'PMS',
-    name: 'Super Petrol (PMS)',
-    category: 'FUEL',
-    unitPrice: 14.8,
-    unit: 'Litre',
-    color: '#16a34a',
-    active: true,
-  },
-  {
-    code: 'AGO',
-    name: 'Diesel (AGO)',
-    category: 'FUEL',
-    unitPrice: 15.2,
-    unit: 'Litre',
-    color: '#2563eb',
-    active: true,
-  },
-  {
-    code: 'RON95',
-    name: 'Super XP / V-Power (RON 95)',
-    category: 'FUEL',
-    unitPrice: 15.9,
-    unit: 'Litre',
-    color: '#dc2626',
-    active: true,
-  },
-  {
-    code: 'AGO-PREM',
-    name: 'Super Diesel (Low Sulphur)',
-    category: 'FUEL',
-    unitPrice: 15.8,
-    unit: 'Litre',
-    color: '#0284c7',
-    active: true,
-  },
-  {
-    code: 'DPK',
-    name: 'Kerosene (DPK)',
-    category: 'FUEL',
-    unitPrice: 13.9,
-    unit: 'Litre',
-    color: '#ea580c',
-    active: true,
-  },
-  {
-    code: 'LPG',
-    name: 'LPG / Autogas',
-    category: 'LPG',
-    unitPrice: 16.5,
-    unit: 'kg',
-    color: '#ca8a04',
-    active: true,
-  },
-  {
-    code: 'PREMIX',
-    name: 'Premix Fuel',
-    category: 'FUEL',
-    unitPrice: 11.2,
-    unit: 'Litre',
-    color: '#0d9488',
-    active: true,
-  },
-  {
-    code: 'LUB-20W50',
-    name: 'Engine Oil 20W-50 (4L)',
-    category: 'LUBRICANT',
-    unitPrice: 160.0,
-    unit: 'Bottle (4L)',
-    color: '#7c3aed',
-    active: true,
-  },
-  {
-    code: 'LUB-15W40',
-    name: 'Heavy Duty Diesel Oil 15W-40 (4L)',
-    category: 'LUBRICANT',
-    unitPrice: 185.0,
-    unit: 'Bottle (4L)',
-    color: '#4f46e5',
-    active: true,
-  },
-  {
-    code: 'LUB-ATF',
-    name: 'Automatic Transmission Fluid (1L)',
-    category: 'LUBRICANT',
-    unitPrice: 65.0,
-    unit: 'Bottle (1L)',
-    color: '#db2777',
-    active: true,
-  },
-  {
-    code: 'LUB-BRAKE',
-    name: 'Brake Fluid DOT 4 (500ml)',
-    category: 'LUBRICANT',
-    unitPrice: 45.0,
-    unit: 'Bottle (500ml)',
-    color: '#e11d48',
-    active: true,
-  },
-]
+// ── ProductService ────────────────────────────────────────────────────────────
 
 export class ProductService {
   /**
-   * Ensures standard default fuel items exist if products table is empty.
-   */
-  async seedDefaultProducts(): Promise<void> {
-    const count = await prodDb.products.count()
-    if (count === 0) {
-      const now = new Date().toISOString()
-      for (const def of DEFAULT_PRODUCTS) {
-        await prodDb.products.add({
-          id: `prod-def-${def.code.toLowerCase()}`,
-          companyId: undefined, // Global default
-          code: def.code,
-          name: def.name,
-          category: def.category,
-          unitPrice: def.unitPrice,
-          unit: def.unit,
-          color: def.color,
-          active: true,
-          createdAt: now,
-          updatedAt: now,
-        })
-      }
-    }
-  }
-
-  /**
-   * Lists active products for an OMC forecourt.
-   * Merges global active products with company-specific products.
-   * If the OMC has customized a product with the same code (e.g. custom PMS price),
-   * the OMC's version takes precedence. Products from other OMCs are strictly excluded.
-   */
-  async listActiveProducts(companyId?: string): Promise<Product[]> {
-    await this.seedDefaultProducts()
-    const all = await prodDb.products.toArray()
-
-    const activeGlobals = all.filter(p => (!p.companyId || p.companyId === 'GLOBAL') && p.active)
-    
-    if (!companyId || companyId === 'GLOBAL' || companyId === 'ALL') {
-      return activeGlobals.sort((a, b) => a.name.localeCompare(b.name))
-    }
-
-    const companyProducts = all.filter(p => p.companyId === companyId && p.active)
-    const companyCodes = new Set(companyProducts.map(p => p.code))
-
-    // Include global products that haven't been overridden by company-specific products
-    const nonOverriddenGlobals = activeGlobals.filter(g => !companyCodes.has(g.code))
-
-    const merged = [...companyProducts, ...nonOverriddenGlobals]
-    return merged.sort((a, b) => a.name.localeCompare(b.name))
-  }
-
-  /**
-   * Retrieves all products for administration.
-   * When scoped to a company, returns only that company's products + global products.
-   * Products belonging to other OMCs are strictly isolated and never shown.
+   * Lists ALL products for admin views.
+   * Super Admin gets everything (all=1).
+   * OMC-scoped admins get global + their company products.
    */
   async getAllProducts(companyId?: string): Promise<Product[]> {
-    await this.seedDefaultProducts()
-    const all = await prodDb.products.toArray()
-
-    if (companyId && companyId !== 'ALL') {
-      return all
-        .filter(p => !p.companyId || p.companyId === 'GLOBAL' || p.companyId === companyId)
-        .sort((a, b) => {
-          // Put company's own custom products first, then global
-          const aIsCompany = a.companyId === companyId ? 0 : 1
-          const bIsCompany = b.companyId === companyId ? 0 : 1
-          if (aIsCompany !== bIsCompany) return aIsCompany - bIsCompany
-          return a.name.localeCompare(b.name)
-        })
+    if (!API_BASE) return this._fallback()
+    try {
+      const isAll = !companyId || companyId === 'ALL'
+      const qs = isAll ? '?all=1' : `?companyId=${encodeURIComponent(companyId!)}`
+      const products = await apiFetch<Product[]>(qs)
+      writeCache(products)
+      return products
+    } catch (err) {
+      console.warn('[productService] getAllProducts fallback to cache:', err)
+      return this._fallback()
     }
-
-    return all.sort((a, b) => (a.companyId || '').localeCompare(b.companyId || '') || a.name.localeCompare(b.name))
   }
 
   /**
-   * Returns a map of FuelCode -> UnitPrice (GHS/L) for calculating shift sales and readings.
+   * Lists active products visible on a forecourt.
+   * Merges global + company-specific (company takes precedence).
+   */
+  async listActiveProducts(companyId?: string): Promise<Product[]> {
+    if (!API_BASE) return this._fallback()
+    try {
+      const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+      const products = await apiFetch<Product[]>(`/active${qs}`)
+      writeCache(products)
+      return products
+    } catch (err) {
+      console.warn('[productService] listActiveProducts fallback to cache:', err)
+      return this._fallback()
+    }
+  }
+
+  /**
+   * Returns a { CODE: price } map used for shift sales calculations.
    */
   async getFuelPriceMap(companyId?: string): Promise<Record<string, number>> {
-    const products = await this.listActiveProducts(companyId)
-    const map: Record<string, number> = {}
-    for (const p of products) {
-      map[p.code] = p.unitPrice
+    if (!API_BASE) {
+      const prods = await this._fallback()
+      return this._toMap(prods)
     }
-    // Guarantee basic fallback keys
-    if (!map.PMS) map.PMS = 14.8
-    if (!map.AGO) map.AGO = 15.2
-    if (!map.DPK) map.DPK = 13.9
-    if (!map.KERO) map.KERO = 13.5
-    return map
+    try {
+      const qs = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+      return await apiFetch<Record<string, number>>(`/price-map${qs}`)
+    } catch (err) {
+      console.warn('[productService] getFuelPriceMap fallback:', err)
+      const prods = await this._fallback()
+      return this._toMap(prods)
+    }
   }
 
   /**
-   * Creates a new product with custom price for an OMC or platform-wide.
+   * Creates a new product. Change is immediately global (stored on backend).
    */
   async createProduct(input: CreateProductInput): Promise<Product> {
-    const now = new Date().toISOString()
-    const code = input.code.trim().toUpperCase()
-    const name = input.name.trim()
-
-    if (!code) throw new Error('Product code is required (e.g. PMS, AGO, V-POWER).')
-    if (!name) throw new Error('Product name is required.')
-    if (input.unitPrice <= 0 || isNaN(input.unitPrice)) {
-      throw new Error('Unit price must be a positive number.')
-    }
-
-    const id = `prod-${crypto.randomUUID()}`
-    const product: Product = {
-      id,
-      companyId: input.companyId || undefined,
-      code,
-      name,
-      category: input.category || 'FUEL',
-      unitPrice: Math.round(input.unitPrice * 100) / 100,
-      unit: input.unit || 'Litre',
-      color: input.color || (code === 'PMS' ? '#22c55e' : code === 'AGO' ? '#3b82f6' : '#f97316'),
-      active: input.active !== false,
-      createdAt: now,
-      updatedAt: now,
-    }
-
-    await prodDb.products.add(product)
-
-    await auditLogRepo.add({
-      id: `audit-${crypto.randomUUID()}`,
-      action: 'PRODUCT_CREATED',
-      actorId: input.companyId || 'SUPER-ADMIN',
-      actorName: input.actorName || 'Admin',
-      actorRole: 'SUPERVISOR',
-      targetId: product.id,
-      targetDescription: `Created product ${product.name} (${product.code}) at GHS ${product.unitPrice.toFixed(2)}/${product.unit}`,
-      notes: null,
-      timestamp: now,
-      meta: { companyId: input.companyId || 'GLOBAL', code: product.code, price: product.unitPrice },
+    if (!API_BASE) throw new Error('No backend configured.')
+    const product = await apiFetch<Product>('', {
+      method: 'POST',
+      body: JSON.stringify({
+        companyId: input.companyId || null,
+        code: input.code,
+        name: input.name,
+        category: input.category,
+        unitPrice: input.unitPrice,
+        unit: input.unit ?? 'Litre',
+        color: input.color ?? '#F97316',
+        active: input.active !== false,
+      }),
     })
-
+    invalidateCache()
     liveSyncBus.publish({ table: 'PRODUCTS' as any, reason: 'INSERT', key: product.id })
     return product
   }
 
   /**
-   * Updates an existing product's details or unit pricing.
+   * Updates an existing product. Change is immediately global.
    */
   async updateProduct(id: string, updates: UpdateProductInput): Promise<Product> {
-    const existing = await prodDb.products.get(id)
-    if (!existing) throw new Error(`Product not found with id: ${id}`)
-
-    const now = new Date().toISOString()
-    const updated: Product = {
-      ...existing,
-      name: updates.name !== undefined ? updates.name.trim() : existing.name,
-      unitPrice:
-        updates.unitPrice !== undefined
-          ? Math.round(Number(updates.unitPrice) * 100) / 100
-          : existing.unitPrice,
-      category: updates.category !== undefined ? updates.category : existing.category,
-      unit: updates.unit !== undefined ? updates.unit : existing.unit,
-      color: updates.color !== undefined ? updates.color : existing.color,
-      active: updates.active !== undefined ? updates.active : existing.active,
-      updatedAt: now,
-    }
-
-    if (updated.unitPrice <= 0 || isNaN(updated.unitPrice)) {
-      throw new Error('Unit price must be a positive number.')
-    }
-
-    await prodDb.products.put(updated)
-
-    await auditLogRepo.add({
-      id: `audit-${crypto.randomUUID()}`,
-      action: 'PRODUCT_UPDATED',
-      actorId: existing.companyId || 'SUPER-ADMIN',
-      actorName: updates.actorName || 'Admin',
-      actorRole: 'SUPERVISOR',
-      targetId: updated.id,
-      targetDescription: `Updated product ${updated.name} (${updated.code}) price to GHS ${updated.unitPrice.toFixed(2)}/${updated.unit} (Active: ${updated.active})`,
-      notes: null,
-      timestamp: now,
-      meta: { code: updated.code, price: updated.unitPrice, active: updated.active },
+    if (!API_BASE) throw new Error('No backend configured.')
+    const product = await apiFetch<Product>(`/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        name: updates.name,
+        unitPrice: updates.unitPrice,
+        category: updates.category,
+        unit: updates.unit,
+        color: updates.color,
+        active: updates.active,
+      }),
     })
-
-    liveSyncBus.publish({ table: 'PRODUCTS' as any, reason: 'UPDATE', key: updated.id })
-    return updated
+    invalidateCache()
+    liveSyncBus.publish({ table: 'PRODUCTS' as any, reason: 'UPDATE', key: product.id })
+    return product
   }
 
   /**
-   * Deletes a product by ID.
+   * Permanently deletes a product. It will NOT be re-seeded on restart.
    */
-  async deleteProduct(id: string, actorName = 'Admin'): Promise<void> {
-    const existing = await prodDb.products.get(id)
-    if (!existing) return
-
-    await prodDb.products.delete(id)
-
-    await auditLogRepo.add({
-      id: `audit-${crypto.randomUUID()}`,
-      action: 'PRODUCT_DELETED',
-      actorId: existing.companyId || 'SUPER-ADMIN',
-      actorName,
-      actorRole: 'SUPERVISOR',
-      targetId: id,
-      targetDescription: `Deleted product ${existing.name} (${existing.code})`,
-      notes: null,
-      timestamp: new Date().toISOString(),
-    })
-
+  async deleteProduct(id: string, _actorName = 'Admin'): Promise<void> {
+    if (!API_BASE) throw new Error('No backend configured.')
+    await apiFetch<{ success: boolean }>(`/${id}`, { method: 'DELETE' })
+    invalidateCache()
     liveSyncBus.publish({ table: 'PRODUCTS' as any, reason: 'DELETE', key: id })
+  }
+
+  // ── Private helpers ─────────────────────────────────────────────────────────
+
+  /** Offline fallback: return cached products, or hard-coded defaults. */
+  private async _fallback(): Promise<Product[]> {
+    const cached = readCache()
+    if (cached) return cached
+    // Hard-coded minimal fallback so the UI never breaks offline
+    const now = new Date().toISOString()
+    return [
+      { id: 'prod-pms',  companyId: undefined, code: 'PMS',  name: 'Super Petrol (PMS)', category: 'FUEL', unitPrice: 14.8, unit: 'Litre', color: '#16a34a', active: true, createdAt: now, updatedAt: now },
+      { id: 'prod-ago',  companyId: undefined, code: 'AGO',  name: 'Diesel (AGO)',        category: 'FUEL', unitPrice: 15.2, unit: 'Litre', color: '#2563eb', active: true, createdAt: now, updatedAt: now },
+      { id: 'prod-dpk',  companyId: undefined, code: 'DPK',  name: 'Kerosene (DPK)',      category: 'FUEL', unitPrice: 13.9, unit: 'Litre', color: '#ea580c', active: true, createdAt: now, updatedAt: now },
+      { id: 'prod-kero', companyId: undefined, code: 'KERO', name: 'Kerosene (KERO)',     category: 'FUEL', unitPrice: 13.5, unit: 'Litre', color: '#9333ea', active: true, createdAt: now, updatedAt: now },
+    ]
+  }
+
+  private _toMap(products: Product[]): Record<string, number> {
+    const map: Record<string, number> = {}
+    for (const p of products) {
+      if (p.active) map[p.code] = p.unitPrice
+    }
+    if (!map.PMS)  map.PMS  = 14.8
+    if (!map.AGO)  map.AGO  = 15.2
+    if (!map.DPK)  map.DPK  = 13.9
+    if (!map.KERO) map.KERO = 13.5
+    return map
   }
 }
 

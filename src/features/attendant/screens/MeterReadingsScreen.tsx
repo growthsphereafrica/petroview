@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react'
 import { Gauge } from 'lucide-react'
 import { ScreenHeader } from '../ui'
-import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS } from '../../../core/domain/config'
+import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
 import type { FuelCode, MeterReading } from '../../../core/domain/types'
 
 interface Props {
@@ -17,7 +17,7 @@ interface Props {
 }
 
 export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onBack }) => {
-  const pump = PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
+  const pump = getStationPumps().find(p => p.id === pumpId) ?? PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
   const [values, setValues] = useState<Record<FuelCode, string>>(() =>
     Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>,
   )

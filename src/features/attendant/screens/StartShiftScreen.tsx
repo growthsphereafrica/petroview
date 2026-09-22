@@ -1,27 +1,62 @@
-/**
- * Start Shift — step 1: choose the pump the attendant will operate.
- * Opening readings are captured on the next screen.
- */
-
-import React, { useState } from 'react'
-import { Fuel, CheckCircle2 } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { Fuel, CheckCircle2, RefreshCw } from 'lucide-react'
 import { Card, ScreenHeader } from '../ui'
-import { PRODUCTION_PUMPS } from '../../../core/domain/config'
+import { PRODUCTION_PUMPS, getStationPumps, registerStationPumps, type ProductionPumpConfig } from '../../../core/domain/config'
 import { useAttendantSession } from '../providers'
+import { backendGetPumps } from '../../../services/backendApiService'
 
 export const StartShiftScreen: React.FC<{ onNext: (pumpId: string) => void; onBack: () => void }> = ({ onNext, onBack }) => {
   const { attendant } = useAttendantSession()
+  const [pumps, setPumps] = useState<ProductionPumpConfig[]>(() => getStationPumps(attendant?.stationId))
   const [selected, setSelected] = useState<string | null>(attendant?.pumpId ?? null)
+  const [loadingPumps, setLoadingPumps] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    const loadPumps = async () => {
+      setLoadingPumps(true)
+      try {
+        const res = await backendGetPumps(attendant?.stationId, attendant?.companyId)
+        if (!cancelled && res?.pumps && res.pumps.length > 0) {
+          const mapped: ProductionPumpConfig[] = res.pumps.map(p => ({
+            id: p.id,
+            name: p.name,
+            fuels: p.fuels as any,
+          }))
+          if (attendant?.stationId) {
+            registerStationPumps(attendant.stationId, mapped)
+          }
+          setPumps(mapped)
+          if (!selected && mapped.length > 0) {
+            setSelected(attendant?.pumpId || mapped[0].id)
+          }
+        }
+      } catch {
+        // fallback to local station pumps
+        if (!cancelled) {
+          const fallback = getStationPumps(attendant?.stationId)
+          setPumps(fallback)
+        }
+      } finally {
+        if (!cancelled) setLoadingPumps(false)
+      }
+    }
+    void loadPumps()
+    return () => { cancelled = true }
+  }, [attendant?.stationId, attendant?.companyId])
 
   return (
     <div className="h-full flex flex-col bg-[#090d16]">
       <ScreenHeader title="Start Shift" subtitle="Step 1 of 3 — choose your pump" onBack={onBack} />
       <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-3 max-w-md w-full mx-auto">
-        <p className="text-xs text-slate-400 leading-relaxed">
-          Confirm the pump assigned to you. The opening meter readings for this pump are captured next.
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Confirm the pump assigned to you. The opening meter readings for this pump are captured next.
+          </p>
+          {loadingPumps && <RefreshCw className="w-3.5 h-3.5 text-orange-400 animate-spin shrink-0 ml-2" />}
+        </div>
 
-        {PRODUCTION_PUMPS.map(pump => {
+        {pumps.map(pump => {
           const active = selected === pump.id
           return (
             <button

@@ -15,6 +15,7 @@ import {
   Download,
   Edit2,
   Flame,
+  Fuel,
   KeyRound,
   Layers,
   Lock,
@@ -44,8 +45,9 @@ import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS } from '../../utils/currencyFormatter'
 import { GHANA_REGIONS, getStationName } from '../../core/domain/config'
 import type { Company, CompanyStation, Attendant, Supervisor, Product, ProductCategory } from '../../core/domain/types'
+import { PumpsManagementView } from '../shared/PumpsManagementView'
 
-type SuperAdminTab = 'companies' | 'staff' | 'products' | 'telemetry'
+type SuperAdminTab = 'companies' | 'staff' | 'products' | 'pumps' | 'telemetry'
 
 export const SuperSuperAdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SuperAdminTab>('companies')
@@ -668,6 +670,18 @@ export const SuperSuperAdminDashboard: React.FC = () => {
               <Flame className="w-3.5 h-3.5" />
               <span>Products & Pricing ({products.length})</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('pumps')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
+                activeTab === 'pumps'
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Fuel className="w-3.5 h-3.5" />
+              <span>Pumps & Nozzles</span>
+            </button>
           </div>
 
           <button
@@ -1215,6 +1229,19 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                   )
                 })}
             </div>
+          </div>
+        )}
+
+        {/* TAB: PUMPS & NOZZLES (SUPER ADMIN) */}
+        {activeTab === 'pumps' && (
+          <div className="p-4 sm:p-6 flex flex-col gap-4">
+            <PumpsManagementView
+              companyId={selectedCompanyFilter !== 'ALL' ? selectedCompanyFilter : undefined}
+              companyName={selectedCompanyFilter !== 'ALL' ? (companies.find(c => c.id === selectedCompanyFilter)?.name || 'OMC') : 'Global Platform'}
+              stations={Object.values(stationsMap).flat()}
+              availableProducts={products}
+              isSuperAdmin={true}
+            />
           </div>
         )}
       </div>

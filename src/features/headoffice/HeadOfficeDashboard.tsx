@@ -23,6 +23,7 @@ import {
   FileSpreadsheet,
   FileText,
   Flame,
+  Fuel,
   KeyRound,
   Layers,
   Lock,
@@ -63,9 +64,10 @@ import {
   exportReportToCsv,
   type ReportExportData,
 } from '../../services/reportExportService'
+import { PumpsManagementView } from '../shared/PumpsManagementView'
 
 type RangePreset = 'today' | '7days' | '30days' | 'all' | 'custom'
-type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff' | 'products' | 'expenses'
+type HQTab = 'overview' | 'summaries' | 'approvals' | 'staff' | 'products' | 'pumps' | 'expenses'
 
 const Splash: React.FC = () => (
   <div className="h-full flex flex-col items-center justify-center bg-[#090d16] gap-3">
@@ -613,6 +615,18 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
             >
               <Flame className="w-3.5 h-3.5" />
               <span>Products & Pricing</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('pumps')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
+                activeTab === 'pumps'
+                  ? 'bg-gradient-to-r from-orange-600 to-amber-500 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <Fuel className="w-3.5 h-3.5" />
+              <span>Pumps & Nozzles</span>
             </button>
 
             <button
@@ -1486,6 +1500,18 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 </Card>
               ))}
           </div>
+        </div>
+      )}
+
+      {/* ----------------- TAB: PUMPS & NOZZLES ----------------- */}
+      {activeTab === 'pumps' && (
+        <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-5xl w-full mx-auto">
+          <PumpsManagementView
+            companyId={companyId}
+            companyName={companyName}
+            stations={(summary?.stations || []).map(s => ({ id: s.stationId, name: s.name, code: s.code }))}
+            availableProducts={products}
+          />
         </div>
       )}
 

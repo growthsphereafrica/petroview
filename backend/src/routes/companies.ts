@@ -212,6 +212,51 @@ companiesRouter.delete('/:id/stations/:stationId', authenticate, requireRole('su
   res.json({ success: true, message: 'Station deleted.' })
 })
 
+// --- Update station branch (name, code, location, region, pumpsCount) ---
+companiesRouter.put('/:id/stations/:stationId', authenticate, requireRole('superadmin', 'headoffice'), (req: AuthRequest, res) => {
+  if (req.session?.role === 'headoffice' && req.session.companyId !== req.params.id) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You can only manage stations for your own OMC.' })
+    return
+  }
+  const { name, code, location, region, pumpsCount } = (req.body ?? {}) as {
+    name?: string
+    code?: string
+    location?: string
+    region?: string
+    pumpsCount?: number
+  }
+  const station = db.prepare('SELECT * FROM companyStations WHERE id = ? AND companyId = ?').get(
+    req.params.stationId, req.params.id,
+  ) as Record<string, unknown> | undefined
+  if (!station) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Station not found.' })
+    return
+  }
+  const updates: string[] = []
+  const params: unknown[] = []
+  if (name !== undefined) { updates.push('name = ?'); params.push(name.trim()) }
+  if (code !== undefined) { updates.push('code = ?'); params.push(code.trim().toUpperCase()) }
+  if (location !== undefined) { updates.push('location = ?'); params.push(location.trim()) }
+  if (region !== undefined) { updates.push('region = ?'); params.push(region.trim()) }
+  if (pumpsCount !== undefined) { updates.push('pumpsCount = ?'); params.push(Number(pumpsCount) || 4) }
+  if (updates.length === 0) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'No fields to update.' })
+    return
+  }
+  params.push(req.params.stationId)
+  db.prepare(`UPDATE companyStations SET ${updates.join(', ')} WHERE id = ?`).run(...params)
+  const now = new Date().toISOString()
+  db.prepare(
+    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+  ).run(
+    newToken(), 'STATION_UPDATED',
+    req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'ADMIN',
+    req.params.stationId, `Updated station ${station.name as string}`, null, now, null,
+  )
+  const updated = db.prepare('SELECT * FROM companyStations WHERE id = ?').get(req.params.stationId)
+  res.json(updated)
+})
+
 // --- SUPER-ADMIN: update company ---
 companiesRouter.put('/:id', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
   const { name, tagline, phone, primaryColor } = (req.body ?? {}) as {

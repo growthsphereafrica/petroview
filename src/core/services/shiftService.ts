@@ -5,7 +5,7 @@
  */
 
 import { DomainError } from '../domain/errors'
-import { PRODUCTION_PUMPS, PRODUCTION_STATION } from '../domain/config'
+import { PRODUCTION_PUMPS, PRODUCTION_STATION, getStationPumps, getStationName } from '../domain/config'
 import {
   computeFuelSales,
   emptyPayments,
@@ -59,8 +59,10 @@ export class ShiftService {
   async openShift(input: OpenShiftInput): Promise<Shift> {
     validateReadingsSet(input.openingReadings)
 
-    const pump = PRODUCTION_PUMPS.find(p => p.id === input.pumpId)
-    if (!pump) throw new DomainError('SHIFT_NOT_FOUND', 'Selected pump does not exist.', input.pumpId)
+    const stationPumps = getStationPumps(input.attendant.stationId)
+    const pump = stationPumps.find(p => p.id === input.pumpId) ||
+      PRODUCTION_PUMPS.find(p => p.id === input.pumpId) ||
+      { id: input.pumpId, name: `Pump ${input.pumpId.replace(/\D/g, '') || '1'}`, fuels: ['PMS', 'AGO', 'DPK', 'KERO'] as FuelCode[] }
 
     const existing = await shiftRepo.getActiveForAttendant(input.attendant.id)
     if (existing) {
@@ -81,6 +83,9 @@ export class ShiftService {
     const readings = input.openingReadings.filter(r => pump.fuels.includes(r.fuelCode))
     for (const r of readings) validateMeterReading(r)
 
+    const stationId = input.attendant.stationId || PRODUCTION_STATION.id
+    const stationName = getStationName(stationId) || PRODUCTION_STATION.name
+
     const shift: Shift = {
       id: `shift-${crypto.randomUUID()}`,
       number,
@@ -88,8 +93,10 @@ export class ShiftService {
       attendantName: input.attendant.fullName,
       pumpId: pump.id,
       pumpName: pump.name,
-      stationId: PRODUCTION_STATION.id,
-      stationName: PRODUCTION_STATION.name,
+      stationId,
+      stationName,
+      companyId: input.attendant.companyId,
+      companyShortCode: input.attendant.companyShortCode,
       status: 'OPEN',
       openedAt: now.toISOString(),
       closedAt: null,

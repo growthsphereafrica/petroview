@@ -20,6 +20,7 @@ import type {
   SupervisorSession,
   SyncQueueItem,
   StationExpense,
+  TankReadingRecord,
 } from '../domain/types'
 
 export class ProductionDatabase extends Dexie {
@@ -34,6 +35,7 @@ export class ProductionDatabase extends Dexie {
   products!: Table<Product, string>
   expenses!: Table<StationExpense, string>
   receipts!: Table<ReceiptRecord, string>
+  tankReadings!: Table<TankReadingRecord, string>
   syncQueue!: Table<SyncQueueItem, string>
   auditLog!: Table<AuditEntry, string>
 
@@ -150,6 +152,22 @@ export class ProductionDatabase extends Dexie {
       syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
       auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
     })
+    this.version(9).stores({
+      companies: 'id, shortCode, name, adminCode, active',
+      companyStations: 'id, companyId, code, name',
+      products: 'id, companyId, code, category, active',
+      expenses: 'id, stationId, companyId, date, category, status, createdAt',
+      attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      tankReadings: 'id, stationId, companyId, recordedBy, recordedAt, createdAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
+    })
   }
 }
 
@@ -196,151 +214,9 @@ export async function seedProductionData(): Promise<boolean> {
     console.error('Error seeding SUPER-ADMIN:', err)
   }
 
-  // 2. Default Fuel Products only (PMS, AGO, DPK, KERO)
-  // All companies, stations, supervisors, and attendants are provisioned by the Super Admin / OMC admin.
-
-  // 6. Seed Default Products
-  try {
-    const defaultProducts: Product[] = [
-      {
-        id: 'prod-pms',
-        code: 'PMS',
-        name: 'Super Petrol (PMS)',
-        category: 'FUEL',
-        unitPrice: 14.8,
-        unit: 'Litre',
-        color: '#16a34a',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-ago',
-        code: 'AGO',
-        name: 'Diesel (AGO)',
-        category: 'FUEL',
-        unitPrice: 15.2,
-        unit: 'Litre',
-        color: '#2563eb',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-ron95',
-        code: 'RON95',
-        name: 'Super XP / V-Power (RON 95)',
-        category: 'FUEL',
-        unitPrice: 15.9,
-        unit: 'Litre',
-        color: '#dc2626',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-ago-prem',
-        code: 'AGO-PREM',
-        name: 'Super Diesel (Low Sulphur)',
-        category: 'FUEL',
-        unitPrice: 15.8,
-        unit: 'Litre',
-        color: '#0284c7',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-dpk',
-        code: 'DPK',
-        name: 'Kerosene (DPK)',
-        category: 'FUEL',
-        unitPrice: 13.9,
-        unit: 'Litre',
-        color: '#ea580c',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-lpg',
-        code: 'LPG',
-        name: 'LPG / Autogas',
-        category: 'LPG',
-        unitPrice: 16.5,
-        unit: 'kg',
-        color: '#ca8a04',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-premix',
-        code: 'PREMIX',
-        name: 'Premix Fuel',
-        category: 'FUEL',
-        unitPrice: 11.2,
-        unit: 'Litre',
-        color: '#0d9488',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-lub-20w50',
-        code: 'LUB-20W50',
-        name: 'Engine Oil 20W-50 (4L)',
-        category: 'LUBRICANT',
-        unitPrice: 160.0,
-        unit: 'Bottle (4L)',
-        color: '#7c3aed',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-lub-15w40',
-        code: 'LUB-15W40',
-        name: 'Heavy Duty Diesel Oil 15W-40 (4L)',
-        category: 'LUBRICANT',
-        unitPrice: 185.0,
-        unit: 'Bottle (4L)',
-        color: '#4f46e5',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-lub-atf',
-        code: 'LUB-ATF',
-        name: 'Automatic Transmission Fluid (1L)',
-        category: 'LUBRICANT',
-        unitPrice: 65.0,
-        unit: 'Bottle (1L)',
-        color: '#db2777',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-      {
-        id: 'prod-lub-brake',
-        code: 'LUB-BRAKE',
-        name: 'Brake Fluid DOT 4 (500ml)',
-        category: 'LUBRICANT',
-        unitPrice: 45.0,
-        unit: 'Bottle (500ml)',
-        color: '#e11d48',
-        active: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-    ]
-    for (const p of defaultProducts) {
-      await prodDb.products.put(p)
-    }
-  } catch (err) {
-    console.error('Error seeding products:', err)
-  }
+  // Products are now managed by the backend API (/api/products).
+  // The backend seeds defaults using INSERT OR IGNORE on first boot,
+  // so deletions by admins are never automatically restored.
 
   // 7. Auto-activate & approve any self-registered accounts previously pending
   try {

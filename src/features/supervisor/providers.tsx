@@ -160,12 +160,14 @@ export const SupervisorDataProvider: React.FC<{ children: React.ReactNode }> = (
   const [lastRefreshAt, setLastRefreshAt] = useState<string | null>(null)
 
   const refresh = useCallback(async () => {
+    const stationId = supervisor?.stationId
+    const companyId = supervisor?.companyId
     const [allShifts, allAttendants, dashboard, pending, log] = await Promise.all([
-      supervisorService.listAllShifts(),
+      supervisorService.listAllShifts(stationId, companyId),
       supervisorService.listAttendants(),
-      supervisorService.dashboardStats(),
+      supervisorService.dashboardStats(stationId, companyId),
       syncService.pendingCount(),
-      supervisorService.listAuditLog(),
+      supervisorService.listAuditLog(stationId, companyId),
     ])
     setShifts(allShifts)
     setAttendants(allAttendants)
@@ -174,7 +176,7 @@ export const SupervisorDataProvider: React.FC<{ children: React.ReactNode }> = (
     setAuditLog(log)
     setLastRefreshAt(new Date().toISOString())
     setLoading(false)
-  }, [])
+  }, [supervisor?.stationId, supervisor?.companyId])
 
   useEffect(() => {
     void refresh()

@@ -36,7 +36,7 @@ import {
 } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
 import { Badge, Card, ScreenHeader, StatusBar } from '../../shared/ui'
-import { PRODUCTION_PUMPS, getStationName } from '../../../core/domain/config'
+import { PRODUCTION_PUMPS, getStationName, getStationPumps } from '../../../core/domain/config'
 import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../../core/services/rollupService'
 import { supervisorService } from '../../../core/services/supervisorService'
 import { expenseService, type ExpenseSummary } from '../../../core/services/expenseService'
@@ -687,9 +687,9 @@ export const SupervisorAttendantsScreen: React.FC<{
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
                   >
                     <option value="">Assign Pump (Optional)…</option>
-                    {PRODUCTION_PUMPS.map(p => (
+                    {getStationPumps(supervisor?.stationId).map(p => (
                       <option key={p.id} value={p.id}>
-                        {p.name}
+                        {p.name} · ({p.fuels.join(', ')})
                       </option>
                     ))}
                   </select>

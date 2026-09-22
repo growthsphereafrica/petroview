@@ -11,6 +11,9 @@ import { headOfficeRouter } from './routes/headoffice'
 import { companiesRouter } from './routes/companies'
 import { tankReadingsRouter } from './routes/tankReadings'
 import { expensesRouter } from './routes/expenses'
+import { productsRouter } from './routes/products'
+import { supervisorsRouter } from './routes/supervisors'
+import { pumpsRouter } from './routes/pumps'
 
 bootDb()
 
@@ -41,11 +44,14 @@ app.use('/api/auth', authRouter)
 app.use('/api/sync', syncRouter)
 app.use('/api/shifts', shiftsRouter)
 app.use('/api/attendants', attendantsRouter)
+app.use('/api/supervisors', supervisorsRouter)
 app.use('/api/audit', auditRouter)
 app.use('/api/headoffice', headOfficeRouter)
 app.use('/api/companies', companiesRouter)
 app.use('/api/tank-readings', tankReadingsRouter)
 app.use('/api/expenses', expensesRouter)
+app.use('/api/products', productsRouter)
+app.use('/api/pumps', pumpsRouter)
 
 app.use((req, res) => {
   res.status(404).json({ error: 'NOT_FOUND', message: `No route for ${req.method} ${req.path}` })

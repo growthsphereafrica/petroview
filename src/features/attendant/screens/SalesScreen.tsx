@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, ScreenHeader } from '../ui'
-import { FUEL_META, PAYMENT_META, PRODUCTION_PUMPS } from '../../../core/domain/config'
+import { FUEL_META, PAYMENT_META, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
 import { saleAmount } from '../../../core/domain/rules'
 import { transactionRepo } from '../../../core/infra/repositories'
 import { productService } from '../../../core/services/productService'
@@ -40,8 +40,8 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   const isDark = theme === 'dark'
 
   const pump = useMemo(
-    () => PRODUCTION_PUMPS.find(p => p.id === activeShift?.pumpId) ?? PRODUCTION_PUMPS[0],
-    [activeShift?.pumpId],
+    () => getStationPumps(activeShift?.stationId).find(p => p.id === activeShift?.pumpId) ?? PRODUCTION_PUMPS[0],
+    [activeShift?.pumpId, activeShift?.stationId],
   )
 
   // Dynamic products and prices loaded from OMC / ProductService

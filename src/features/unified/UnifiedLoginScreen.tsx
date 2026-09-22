@@ -30,7 +30,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { MVPLogo } from '../../components/common/MVPLogo'
-import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
+import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName, getStationPumps, registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
 import { backendLogin, backendRegister, backendGetCompanies, backendGetCompanyStations, backendGetNextStaffCode, type BackendLoginResponse } from '../../services/backendApiService'
 import { generateNextStaffCode } from '../../core/services/staffCodeService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
@@ -97,7 +97,8 @@ export const UnifiedLoginScreen: React.FC<{
   const [regFullName, setRegFullName] = useState('')
   const [regPhone, setRegPhone] = useState('')
   const [regStationId, setRegStationId] = useState('')
-  const [regPumpId, setRegPumpId] = useState(PRODUCTION_PUMPS[0].id)
+  const [stationPumps, setStationPumps] = useState<ProductionPumpConfig[]>([])
+  const [regPumpId, setRegPumpId] = useState('')
   const [regPin, setRegPin] = useState('')
   const [regConfirmPin, setRegConfirmPin] = useState('')
   const [regError, setRegError] = useState<string | null>(null)
@@ -196,6 +197,46 @@ export const UnifiedLoginScreen: React.FC<{
       }
     })()
   }, [regCompanyId, regRole, companies])
+
+  // Load dynamic station pumps whenever regStationId changes
+  useEffect(() => {
+    if (!regStationId) {
+      setStationPumps(PRODUCTION_PUMPS)
+      setRegPumpId(PRODUCTION_PUMPS[0].id)
+      return
+    }
+    let cancelled = false
+    async function loadDynamicPumps() {
+      try {
+        const { backendGetPumps } = await import('../../services/backendApiService')
+        const res = await backendGetPumps(regStationId)
+        if (!cancelled && res?.pumps && res.pumps.length > 0) {
+          const cfg: ProductionPumpConfig[] = res.pumps.map(p => ({
+            id: p.id,
+            name: p.name,
+            fuels: p.fuels as any[],
+          }))
+          registerStationPumps(regStationId, cfg)
+          setStationPumps(cfg)
+          setRegPumpId(prev => (cfg.some(p => p.id === prev) ? prev : cfg[0].id))
+          return
+        }
+      } catch (err) {
+        console.warn('Failed to load server pumps for registration:', err)
+      }
+      if (!cancelled) {
+        const local = getStationPumps(regStationId)
+        setStationPumps(local)
+        if (local.length > 0) {
+          setRegPumpId(prev => (local.some(p => p.id === prev) ? prev : local[0].id))
+        }
+      }
+    }
+    void loadDynamicPumps()
+    return () => {
+      cancelled = true
+    }
+  }, [regStationId])
 
   const selectedCompany = companies.find(c => c.id === regCompanyId) || companies[0]
 
@@ -674,7 +715,7 @@ export const UnifiedLoginScreen: React.FC<{
                     onChange={e => setRegPumpId(e.target.value)}
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
                   >
-                    {PRODUCTION_PUMPS.map(p => (
+                    {(stationPumps.length > 0 ? stationPumps : PRODUCTION_PUMPS).map(p => (
                       <option key={p.id} value={p.id}>
                         {p.name} · ({p.fuels.join(', ')})
                       </option>

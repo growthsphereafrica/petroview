@@ -10,6 +10,10 @@ import { Badge, BigActionButton, Card, ScreenHeader, StatusBar, TappableRow } fr
 import { formatDateTime, formatLitres } from '../../../utils/currencyFormatter'
 import { FUEL_META } from '../../../core/domain/config'
 import { backendGetTankReadings, backendRecordTankReadings } from '../../../services/backendApiService'
+import { prodDb } from '../../../core/infra/db'
+import { syncQueueRepo } from '../../../core/infra/repositories'
+import { syncService } from '../../../core/services/syncService'
+import type { TankReadingRecord } from '../../../core/domain/types'
 
 interface TankReadingEntry {
   tankId: string
@@ -31,6 +35,7 @@ interface ReadingRow {
   recordedAt: string
   notes: string | null
   createdAt: string
+  syncStatus?: 'PENDING' | 'SYNCED' | 'FAILED'
 }
 
 const TANK_ID_PREFIX = /^[A-Z]{3}(\d)?$/
@@ -61,10 +66,66 @@ export const SupervisorTankReadingsScreen: React.FC<{
     setLoading(true)
     setError(null)
     try {
-      const res = await backendGetTankReadings(stationId || undefined, 30)
-      setReadings(res.readings as unknown as ReadingRow[])
-    } catch {
-      setError('Could not load tank readings. Check your connection and try again.')
+      // 1. Load local offline records first
+      let localRecords: ReadingRow[] = []
+      try {
+        const local = await prodDb.tankReadings
+          .filter(r => !stationId || r.stationId === stationId)
+          .toArray()
+        localRecords = local.map(r => ({
+          id: r.id,
+          stationId: r.stationId,
+          companyId: r.companyId ?? null,
+          recordedBy: r.recordedBy,
+          recordedByName: r.recordedByName,
+          readings: r.readings,
+          recordedAt: r.recordedAt,
+          notes: r.notes ?? null,
+          createdAt: r.createdAt,
+          syncStatus: r.syncStatus,
+        }))
+      } catch (localErr) {
+        console.warn('[TankReadings] Local DB read error:', localErr)
+      }
+
+      // 2. Fetch remote records from server if online
+      try {
+        const res = await backendGetTankReadings(stationId || undefined, 30)
+        const remoteList = (res.readings as unknown as ReadingRow[]) || []
+        
+        // Cache remote records into local Dexie for offline backup
+        for (const rem of remoteList) {
+          await prodDb.tankReadings.put({
+            id: rem.id,
+            stationId: rem.stationId,
+            companyId: rem.companyId,
+            recordedBy: rem.recordedBy,
+            recordedByName: rem.recordedByName,
+            readings: rem.readings,
+            notes: rem.notes,
+            recordedAt: rem.recordedAt,
+            createdAt: rem.createdAt,
+            syncStatus: 'SYNCED',
+          })
+        }
+
+        // Merge local & remote (remote wins for duplicates)
+        const mergedMap = new Map<string, ReadingRow>()
+        localRecords.forEach(r => mergedMap.set(r.id, r))
+        remoteList.forEach(r => mergedMap.set(r.id, { ...r, syncStatus: 'SYNCED' }))
+
+        const merged = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime(),
+        )
+        setReadings(merged)
+      } catch {
+        // Offline: display local records
+        if (localRecords.length > 0) {
+          setReadings(localRecords.sort((a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime()))
+        } else {
+          setError('Could not reach server. Showing offline readings.')
+        }
+      }
     } finally {
       setLoading(false)
     }
@@ -109,13 +170,55 @@ export const SupervisorTankReadingsScreen: React.FC<{
     setSaving(true)
     setError(null)
     setSuccess(null)
+
+    const now = new Date().toISOString()
+    const newId = `tr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+
+    // 1. Store in local Dexie database FIRST (zero-data loss guarantee)
+    const localRecord: TankReadingRecord = {
+      id: newId,
+      stationId,
+      companyId: supervisor?.companyId || null,
+      recordedBy: supervisor?.id || 'supervisor',
+      recordedByName: supervisor?.fullName || 'Supervisor',
+      readings: validEntries,
+      notes: notes || null,
+      recordedAt: now,
+      createdAt: now,
+      syncStatus: 'PENDING',
+    }
+    await prodDb.tankReadings.put(localRecord)
+
+    // 2. Add to syncQueue
+    await syncQueueRepo.add({
+      id: `sq-${crypto.randomUUID()}`,
+      entityType: 'TANK_READING',
+      entityId: newId,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    // 3. Attempt cloud push immediately
+    let synced = false
     try {
-      const res = await backendRecordTankReadings({
+      await backendRecordTankReadings({
         stationId,
         readings: validEntries,
         notes: notes || undefined,
       })
-      setSuccess(`Saved ${res.readingsCount} reading${res.readingsCount === 1 ? '' : 's'}.`)
+      await prodDb.tankReadings.update(newId, { syncStatus: 'SYNCED' })
+      synced = true
+      setSuccess(`Saved ${validEntries.length} reading${validEntries.length === 1 ? '' : 's'} (Synced to Cloud).`)
+    } catch {
+      // Offline fallback
+      setSuccess(`Saved ${validEntries.length} reading${validEntries.length === 1 ? '' : 's'} (Saved Offline · Will auto-sync when online).`)
+      void syncService.runPendingSync()
+    } finally {
+      setSaving(false)
       setEntries([
         { tankId: 'TK1', fuelCode: 'PMS', openingLevel: 0, closingLevel: 0, dipStock: 0, received: 0 },
         { tankId: 'TK2', fuelCode: 'AGO', openingLevel: 0, closingLevel: 0, dipStock: 0, received: 0 },
@@ -123,10 +226,6 @@ export const SupervisorTankReadingsScreen: React.FC<{
       setNotes('')
       setMode('history')
       void load()
-    } catch {
-      setError('Failed to save readings. Check your connection and try again.')
-    } finally {
-      setSaving(false)
     }
   }
 
@@ -205,7 +304,18 @@ export const SupervisorTankReadingsScreen: React.FC<{
                     <div key={r.id} className="px-4 py-3">
                       <div className="flex items-center justify-between">
                         <p className="text-[12px] font-bold text-white">{formatDateTime(r.recordedAt)}</p>
-                        <span className="text-[10px] text-slate-500">{r.readings.length} tank{r.readings.length === 1 ? '' : 's'}</span>
+                        <div className="flex items-center gap-2">
+                          {r.syncStatus === 'PENDING' ? (
+                            <span className="text-[9px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30 px-1.5 py-0.5 rounded">
+                              OFFLINE PENDING
+                            </span>
+                          ) : (
+                            <span className="text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-1.5 py-0.5 rounded">
+                              SYNCED
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-500">{r.readings.length} tank{r.readings.length === 1 ? '' : 's'}</span>
+                        </div>
                       </div>
                       <p className="text-[10px] text-slate-500 mb-2">{r.recordedByName}</p>
                       <div className="flex flex-col gap-1.5">

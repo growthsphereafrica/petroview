@@ -386,3 +386,150 @@ export async function backendDeleteExpense(id: string): Promise<{ success: boole
   })
 }
 
+// ── Attendant management ──────────────────────────────────────────────────────
+
+export async function backendUpdateAttendant(
+  id: string,
+  updates: { fullName?: string; phone?: string; stationId?: string; active?: boolean },
+): Promise<{ id: string; active: boolean }> {
+  return apiCall(`/api/attendants/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  })
+}
+
+export async function backendDeleteAttendant(id: string): Promise<{ success: boolean }> {
+  return apiCall(`/api/attendants/${id}`, { method: 'DELETE' })
+}
+
+export async function backendDeactivateAttendant(id: string): Promise<{ id: string; active: boolean }> {
+  return apiCall(`/api/attendants/${id}/deactivate`, { method: 'POST' })
+}
+
+// ── Supervisor management ─────────────────────────────────────────────────────
+
+export async function backendUpdateSupervisor(
+  id: string,
+  updates: { fullName?: string; phone?: string; stationId?: string; active?: boolean },
+): Promise<{ id: string; active: boolean }> {
+  return apiCall(`/api/supervisors/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  })
+}
+
+export async function backendDeleteSupervisor(id: string): Promise<{ success: boolean }> {
+  return apiCall(`/api/supervisors/${id}`, { method: 'DELETE' })
+}
+
+export async function backendDeactivateSupervisor(id: string): Promise<{ id: string; active: boolean }> {
+  return apiCall(`/api/supervisors/${id}/deactivate`, { method: 'POST' })
+}
+
+// ── Station management ────────────────────────────────────────────────────────
+
+export async function backendUpdateStation(
+  companyId: string,
+  stationId: string,
+  updates: { name?: string; code?: string; location?: string; region?: string; pumpsCount?: number },
+): Promise<BackendCompanyStation> {
+  return apiCall(`/api/companies/${companyId}/stations/${stationId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  })
+}
+
+// ── Company management ────────────────────────────────────────────────────────
+
+export async function backendUpdateCompany(
+  companyId: string,
+  updates: { name?: string; tagline?: string; phone?: string; primaryColor?: string },
+): Promise<{ success: boolean }> {
+  return apiCall(`/api/companies/${companyId}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  })
+}
+
+// ── Shifts (for HQ pull-down) ─────────────────────────────────────────────────
+
+export async function backendGetShiftsByCompany(
+  companyId: string,
+  options?: { status?: string; limit?: number; station?: string },
+): Promise<{ count: number; shifts: Array<Record<string, unknown>> }> {
+  const params = new URLSearchParams()
+  params.set('companyId', companyId)
+  if (options?.station) params.set('station', options.station)
+  if (options?.status) params.set('status', options.status)
+  if (options?.limit) params.set('limit', String(options.limit))
+  return apiCall(`/api/shifts?${params.toString()}`)
+}
+
+// ── Audit log ─────────────────────────────────────────────────────────────────
+
+export async function backendGetAuditLogGlobal(options?: {
+  limit?: number
+  companyId?: string
+  actorId?: string
+  action?: string
+}): Promise<{ count: number; entries: Array<Record<string, unknown>> }> {
+  const params = new URLSearchParams()
+  if (options?.limit) params.set('limit', String(options.limit))
+  if (options?.companyId) params.set('companyId', options.companyId)
+  if (options?.actorId) params.set('actorId', options.actorId)
+  if (options?.action) params.set('action', options.action)
+  const qs = params.toString()
+  return apiCall(`/api/audit${qs ? '?' + qs : ''}`)
+}
+
+// ── Pumps Management ─────────────────────────────────────────────────────────
+
+export interface BackendPump {
+  id: string
+  stationId: string
+  companyId?: string | null
+  name: string
+  fuels: string[]
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export async function backendGetPumps(
+  stationId?: string,
+  companyId?: string,
+): Promise<{ count: number; pumps: BackendPump[] }> {
+  const params = new URLSearchParams()
+  if (stationId) params.set('stationId', stationId)
+  if (companyId) params.set('companyId', companyId)
+  const qs = params.toString()
+  return apiCall(`/api/pumps${qs ? '?' + qs : ''}`)
+}
+
+export async function backendCreatePump(data: {
+  stationId: string
+  companyId?: string
+  name: string
+  fuels?: string[]
+}): Promise<{ pump: BackendPump }> {
+  return apiCall('/api/pumps', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  })
+}
+
+export async function backendUpdatePump(
+  id: string,
+  updates: { name?: string; fuels?: string[]; active?: boolean },
+): Promise<{ success: boolean; pump: BackendPump }> {
+  return apiCall(`/api/pumps/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  })
+}
+
+export async function backendDeletePump(id: string): Promise<{ success: boolean; message: string }> {
+  return apiCall(`/api/pumps/${id}`, {
+    method: 'DELETE',
+  })
+}

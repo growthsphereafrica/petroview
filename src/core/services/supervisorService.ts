@@ -10,8 +10,9 @@ import { DomainError } from '../domain/errors'
 import { LOCKOUT_MS, MAX_PIN_ATTEMPTS, PIN_LENGTH, SESSION_TTL_MS } from '../domain/config'
 import { verifyPin, hashPin } from '../infra/password'
 import { prodDb } from '../infra/db'
-import { attendantRepo, auditLogRepo, shiftRepo, supervisorRepo, supervisorSessionRepo } from '../infra/repositories'
+import { attendantRepo, auditLogRepo, shiftRepo, supervisorRepo, supervisorSessionRepo, syncQueueRepo } from '../infra/repositories'
 import { liveSyncBus } from './liveSyncBus'
+import { syncService } from './syncService'
 import { generateNextStaffCode } from './staffCodeService'
 import { getStationName } from '../domain/config'
 import { backendResetPin } from '../../services/backendApiService'
@@ -126,9 +127,65 @@ export class SupervisorService {
     if (token) await supervisorSessionRepo.delete(token)
   }
 
-  /** All shifts across stations, newest first. */
-  async listAllShifts(): Promise<Shift[]> {
-    return shiftRepo.listAll()
+  /** All shifts across stations, merged from backend and local IndexedDB, newest first. */
+  async listAllShifts(stationId?: string, companyId?: string): Promise<Shift[]> {
+    try {
+      const { backendGetShiftsByCompany, backendGetShifts } = await import('../../services/backendApiService')
+      let remoteShifts: any[] = []
+      if (companyId) {
+        const res = await backendGetShiftsByCompany(companyId, stationId ? { station: stationId } : undefined)
+        remoteShifts = res.shifts || []
+      } else {
+        const res = await backendGetShifts(undefined, stationId)
+        remoteShifts = res.shifts || []
+      }
+
+      for (const s of remoteShifts) {
+        if (!s || !s.id) continue
+        const local = await prodDb.shifts.get(s.id)
+        // Never overwrite a local shift that has uncommitted pending mutations in syncQueue
+        if (!local || local.syncStatus !== 'PENDING') {
+          await prodDb.shifts.put({
+            id: s.id,
+            number: s.number,
+            attendantId: s.attendantId,
+            attendantName: s.attendantName,
+            pumpId: s.pumpId,
+            pumpName: s.pumpName,
+            stationId: s.stationId,
+            stationName: s.stationName,
+            companyId: s.companyId,
+            companyShortCode: s.companyShortCode,
+            status: s.status,
+            openedAt: s.openedAt,
+            closedAt: s.closedAt,
+            openingReadings: s.openingReadings || [],
+            closingReadings: s.closingReadings || [],
+            sales: s.sales || [],
+            expectedTotal: s.expectedTotal || 0,
+            payments: s.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+            actualTotal: s.actualTotal || 0,
+            variance: s.variance || 0,
+            notes: s.notes,
+            reviewerNotes: s.reviewerNotes,
+            syncStatus: 'SYNCED',
+            createdAt: s.createdAt || s.openedAt,
+            updatedAt: s.updatedAt || s.openedAt,
+          })
+        }
+      }
+    } catch (err) {
+      console.warn('[supervisorService] Fallback to local DB for shifts:', err)
+    }
+
+    const localRows = await shiftRepo.listAll()
+    if (stationId) {
+      return localRows.filter(s => s.stationId === stationId)
+    }
+    if (companyId) {
+      return localRows.filter(s => (s as any).companyId === companyId || (s as any).companyShortCode === companyId)
+    }
+    return localRows
   }
 
   async listByStatus(status: ShiftStatus): Promise<Shift[]> {
@@ -142,8 +199,14 @@ export class SupervisorService {
   /**
    * Reviews a closed shift. Only CLOSED shifts may be approved/rejected.
    * Rejections require a note explaining the discrepancy.
+   * Automatically enqueues into syncQueue and sends live update to backend.
    */
-  async reviewShift(shiftId: string, verdict: Extract<ShiftStatus, 'APPROVED' | 'REJECTED'>, notes: string, reviewer?: Pick<Supervisor, 'id' | 'fullName'>): Promise<Shift> {
+  async reviewShift(
+    shiftId: string,
+    verdict: Extract<ShiftStatus, 'APPROVED' | 'REJECTED'>,
+    notes: string,
+    reviewer?: Pick<Supervisor, 'id' | 'fullName'>,
+  ): Promise<Shift> {
     const shift = await shiftRepo.getById(shiftId)
     if (!shift) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.', undefined, { shiftId })
     if (shift.status !== 'CLOSED') {
@@ -157,6 +220,29 @@ export class SupervisorService {
     }
     const updated = await shiftRepo.review(shiftId, verdict, notes.trim() || `Reviewed by supervisor`)
     if (!updated) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.')
+
+    // 1. Enqueue to durable sync queue for guaranteed zero-loss delivery
+    await syncQueueRepo.add({
+      id: `sq-${crypto.randomUUID()}`,
+      entityType: 'SHIFT',
+      entityId: shiftId,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      lastError: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    })
+
+    // 2. Direct push to backend for real-time reflection across HQ & Super Admin
+    try {
+      const { backendReviewShift } = await import('../../services/backendApiService')
+      await backendReviewShift(shiftId, verdict, notes.trim())
+      await prodDb.shifts.update(shiftId, { syncStatus: 'SYNCED' })
+    } catch (pushErr) {
+      console.warn('[supervisorService] Immediate shift review upload warning, queued in background:', pushErr)
+      void syncService.runPendingSync()
+    }
 
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,
@@ -175,12 +261,42 @@ export class SupervisorService {
     return updated
   }
 
-  async listAuditLog(): Promise<AuditEntry[]> {
-    return auditLogRepo.list()
+  async listAuditLog(stationId?: string, companyId?: string): Promise<AuditEntry[]> {
+    const local = await auditLogRepo.list()
+    try {
+      const { backendGetAuditLog } = await import('../../services/backendApiService')
+      const remote = await backendGetAuditLog(150)
+      const remoteEntries: AuditEntry[] = (remote.entries || []).map((e: any) => ({
+        id: e.id,
+        action: e.action,
+        actorId: e.actorId,
+        actorName: e.actorName,
+        actorRole: e.actorRole,
+        targetId: e.targetId,
+        targetDescription: e.targetDescription,
+        notes: e.notes,
+        timestamp: e.timestamp,
+        meta: e.meta ? (typeof e.meta === 'string' ? JSON.parse(e.meta) : e.meta) : undefined,
+      }))
+
+      const map = new Map<string, AuditEntry>()
+      for (const e of remoteEntries) map.set(e.id, e)
+      for (const e of local) map.set(e.id, e)
+
+      let merged = Array.from(map.values()).sort(
+        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      )
+      if (stationId) {
+        merged = merged.filter(e => !e.meta?.stationId || e.meta.stationId === stationId)
+      }
+      return merged
+    } catch {
+      return local
+    }
   }
 
-  async dashboardStats(): Promise<SupervisorStats> {
-    const all = await shiftRepo.listAll()
+  async dashboardStats(stationId?: string, companyId?: string): Promise<SupervisorStats> {
+    const all = await this.listAllShifts(stationId, companyId)
     const today = new Date().toISOString().slice(0, 10)
     const todayShifts = all.filter(s => (s.openedAt || '').slice(0, 10) === today)
     const closed = all.filter(s => s.closedAt)
@@ -600,9 +716,17 @@ export class SupervisorService {
   async deactivateAttendant(id: string, actor?: Pick<Supervisor, 'id' | 'fullName'>): Promise<void> {
     const attendant = await attendantRepo.getById(id)
     if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
+
+    // Call backend first so deactivation is global (attendant can't log in on any device)
+    try {
+      const { backendDeactivateAttendant } = await import('../../services/backendApiService')
+      await backendDeactivateAttendant(id)
+    } catch (backendErr) {
+      console.warn('[supervisorService] Backend deactivate attendant warning:', backendErr)
+    }
+
     await attendantRepo.deactivate(id)
     liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'UPDATE', key: attendant.id })
-    liveSyncBus.publish({ table: 'AUDIT_LOG', reason: 'INSERT', key: `audit-${crypto.randomUUID()}` })
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,
       action: 'ATTENDANT_DEACTIVATED',
@@ -724,13 +848,26 @@ export class SupervisorService {
     })
   }
 
-  /** Updates staff profile (name, phone, station, active status) */
+  /** Updates staff profile (name, phone, station, active status) — globally on backend */
   async updateStaff(
     id: string,
     role: 'attendant' | 'supervisor',
     updates: { fullName?: string; phone?: string; stationId?: string; active?: boolean },
     actorName = 'Administrator',
   ): Promise<void> {
+    // Sync to backend first (global)
+    try {
+      if (role === 'attendant') {
+        const { backendUpdateAttendant } = await import('../../services/backendApiService')
+        await backendUpdateAttendant(id, updates)
+      } else {
+        const { backendUpdateSupervisor } = await import('../../services/backendApiService')
+        await backendUpdateSupervisor(id, updates)
+      }
+    } catch (backendErr) {
+      console.warn('[supervisorService] Backend updateStaff warning:', backendErr)
+    }
+
     if (role === 'attendant') {
       const attendant = await attendantRepo.getById(id)
       if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
@@ -770,12 +907,25 @@ export class SupervisorService {
     })
   }
 
-  /** Deletes staff account */
+  /** Deletes staff account — globally on backend + local IndexedDB */
   async deleteStaff(
     id: string,
     role: 'attendant' | 'supervisor',
     actorName = 'Administrator',
   ): Promise<void> {
+    // Delete from backend first (global)
+    try {
+      if (role === 'attendant') {
+        const { backendDeleteAttendant } = await import('../../services/backendApiService')
+        await backendDeleteAttendant(id)
+      } else {
+        const { backendDeleteSupervisor } = await import('../../services/backendApiService')
+        await backendDeleteSupervisor(id)
+      }
+    } catch (backendErr) {
+      console.warn('[supervisorService] Backend deleteStaff warning:', backendErr)
+    }
+
     if (role === 'attendant') {
       await prodDb.attendants.delete(id)
       liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'DELETE', key: id })

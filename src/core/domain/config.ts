@@ -47,10 +47,25 @@ export const PRODUCTION_STATION: ProductionStationConfig = {
 
 export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
   { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
-  { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO'] },
-  { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO'] },
-  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] },
+  { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
+  { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
+  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
 ]
+
+const dynamicPumpsMap = new Map<string, ProductionPumpConfig[]>()
+
+export function registerStationPumps(stationId: string, pumps: ProductionPumpConfig[]): void {
+  if (stationId && Array.isArray(pumps) && pumps.length > 0) {
+    dynamicPumpsMap.set(stationId, pumps)
+  }
+}
+
+export function getStationPumps(stationId?: string): ProductionPumpConfig[] {
+  if (stationId && dynamicPumpsMap.has(stationId)) {
+    return dynamicPumpsMap.get(stationId)!
+  }
+  return PRODUCTION_PUMPS
+}
 
 export const GHANA_REGIONS = [
   'Greater Accra',

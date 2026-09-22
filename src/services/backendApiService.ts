@@ -5,8 +5,13 @@
 
 const API_BASE_KEY = 'petroview_api_base'
 
+let activeWorkingBase: string | null = null
+
 export function getBackendUrl(): string {
+  if (activeWorkingBase) return activeWorkingBase
   try {
+    const override = localStorage.getItem(API_BASE_KEY)?.trim()
+    if (override) return override.replace(/\/+$/, '')
     const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
     if (configured && configured.length > 4) return configured.replace(/\/+$/, '')
   } catch { /* not in browser */ }
@@ -47,24 +52,47 @@ export interface BackendPendingApproval {
 }
 
 async function apiCall<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const base = getBackendUrl()
+  const primaryBase = getBackendUrl()
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...((options.headers as Record<string, string>) ?? {}) }
   const token = getStoredCloudToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  let resp: Response
-  try {
-    resp = await fetch(`${base}${path}`, { ...options, headers })
-  } catch (err) {
-    throw new Error('BACKEND_UNREACHABLE')
+  // Candidate base URLs to try in order
+  const basesToTry = [primaryBase]
+  if (!basesToTry.includes('http://localhost:4000')) {
+    basesToTry.push('http://localhost:4000')
+  }
+  if (!basesToTry.includes('http://127.0.0.1:4000')) {
+    basesToTry.push('http://127.0.0.1:4000')
   }
 
-  const json = await resp.json().catch(() => ({}))
-  if (!resp.ok) {
-    const msg = (json as { message?: string; error?: string }).message ?? (json as { error?: string }).error ?? `HTTP ${resp.status}`
-    throw new Error(msg)
+  let lastError: Error | null = null
+
+  for (const base of basesToTry) {
+    try {
+      const resp = await fetch(`${base}${path}`, { ...options, headers })
+      // If we got a 502/503/504 Bad Gateway from a remote upstream proxy, try the next candidate
+      if (resp.status >= 502 && resp.status <= 504 && (base.includes('growthsphere') || !base.includes('4000'))) {
+        continue
+      }
+      const json = await resp.json().catch(() => ({}))
+      if (!resp.ok) {
+        const msg = (json as { message?: string; error?: string }).message ?? (json as { error?: string }).error ?? `HTTP ${resp.status}`
+        throw new Error(msg)
+      }
+      activeWorkingBase = base
+      return json as T
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // If it's a domain/validation error rejected by the API (like Invalid PIN or Pending Approval), rethrow immediately!
+      if (msg !== 'BACKEND_UNREACHABLE' && !msg.startsWith('HTTP 502') && !msg.startsWith('HTTP 503') && !msg.startsWith('HTTP 504') && !(err instanceof TypeError)) {
+        throw err
+      }
+      lastError = new Error('BACKEND_UNREACHABLE')
+    }
   }
-  return json as T
+
+  throw lastError ?? new Error('BACKEND_UNREACHABLE')
 }
 
 export function getStoredCloudToken(): string | null {

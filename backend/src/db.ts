@@ -479,10 +479,136 @@ export function seedDefaultProducts(): void {
   console.log('[db] Default products seeded (INSERT OR IGNORE — existing rows preserved)')
 }
 
+export function seedDefaultCompanies(): void {
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM companies').get() as { c: number }).c
+  if (count > 0) return
+
+  const now = new Date().toISOString()
+  const defaultCompanies = [
+    {
+      id: 'comp-pv',
+      name: 'PetroView Petroleum',
+      shortCode: 'PV',
+      tagline: 'Local-First. Sync When Possible. Never Lose Data.',
+      primaryColor: '#F97316',
+      primaryDark: '#C2410C',
+      accentColor: '#F59E0B',
+      adminCode: 'PV-HQ01',
+      adminName: 'PetroView HQ Admin',
+      stations: [
+        { id: 'stn-pv-01', name: 'Green Valley Station', code: 'GV-042', location: 'Accra - Tema Motorway Corridor', region: 'Greater Accra', pumpsCount: 4 }
+      ]
+    },
+    {
+      id: 'comp-goil',
+      name: 'GOIL Ghana PLC',
+      shortCode: 'GOIL',
+      tagline: "Good Energy. Ghana's Pride.",
+      primaryColor: '#FF8200',
+      primaryDark: '#D46A00',
+      accentColor: '#009639',
+      adminCode: 'GOIL-HQ01',
+      adminName: 'GOIL HQ Admin',
+      stations: [
+        { id: 'stn-goil-01', name: 'Accra Ridge Flagship', code: 'GOIL-RDG', location: 'Ridge Roundabout, Accra', region: 'Greater Accra', pumpsCount: 4 }
+      ]
+    },
+    {
+      id: 'comp-all',
+      name: 'Allied Oil Ghana',
+      shortCode: 'ALL',
+      tagline: 'Delivering Quality and Reliability.',
+      primaryColor: '#0284C7',
+      primaryDark: '#0369A1',
+      accentColor: '#38BDF8',
+      adminCode: 'ALL-HQ01',
+      adminName: 'Allied Oil HQ Admin',
+      stations: [
+        { id: 'stn-all-01', name: 'Airport City Branch', code: 'ALL-APT', location: 'Airport City, Accra', region: 'Greater Accra', pumpsCount: 4 }
+      ]
+    },
+    {
+      id: 'comp-star',
+      name: 'Star Oil Company',
+      shortCode: 'STAR',
+      tagline: 'Fueled for the Journey.',
+      primaryColor: '#0B2545',
+      primaryDark: '#07162C',
+      accentColor: '#EE9B00',
+      adminCode: 'STAR-HQ01',
+      adminName: 'Star Oil HQ Admin',
+      stations: [
+        { id: 'stn-star-01', name: 'Spintex Coastal Station', code: 'STAR-SPX', location: 'Spintex Road, Batsonaa', region: 'Greater Accra', pumpsCount: 4 }
+      ]
+    },
+    {
+      id: 'comp-total',
+      name: 'TotalEnergies Ghana',
+      shortCode: 'TOTAL',
+      tagline: 'Committed to Better Energy.',
+      primaryColor: '#E20613',
+      primaryDark: '#B8000B',
+      accentColor: '#002B49',
+      adminCode: 'TOT-HQ01',
+      adminName: 'TotalEnergies HQ Admin',
+      stations: [
+        { id: 'stn-tot-01', name: 'Ring Road Central Express', code: 'TOT-RRC', location: 'Ring Road Central, Accra', region: 'Greater Accra', pumpsCount: 4 }
+      ]
+    },
+  ]
+
+  const insertComp = db.prepare(
+    `INSERT OR IGNORE INTO companies (id, name, shortCode, tagline, logoText, primaryColor, primaryDark, accentColor, currency, phone, active, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'GHS', '030 000 0000', 1, ?)`
+  )
+  const insertStation = db.prepare(
+    `INSERT OR IGNORE INTO companyStations (id, companyId, name, code, location, region, pumpsCount, active, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
+  )
+  const insertSupervisor = db.prepare(
+    `INSERT OR IGNORE INTO supervisors (id, employeeCode, fullName, pinSalt, pinHash, stationId, companyId, companyShortCode,
+     phone, isHeadOffice, isSuperAdmin, approvalStatus, approvedAt, approvedBy, active, failedAttempts, lockoutUntil, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, '030 000 0000', 1, 0, 'APPROVED', ?, 'SYSTEM_SEED', 1, 0, NULL, ?)`
+  )
+  const insertAttendant = db.prepare(
+    `INSERT OR IGNORE INTO attendants (id, employeeCode, fullName, pinSalt, pinHash, pumpId, stationId, companyId, companyShortCode,
+     phone, approvalStatus, approvedAt, approvedBy, active, failedAttempts, lockoutUntil, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '024 000 0000', 'APPROVED', ?, 'SYSTEM_SEED', 1, 0, NULL, ?)`
+  )
+
+  const { salt: hqSalt, hash: hqHash } = hashPin('9999')
+  const { salt: attSalt, hash: attHash } = hashPin('1234')
+
+  for (const c of defaultCompanies) {
+    insertComp.run(c.id, c.name, c.shortCode, c.tagline, c.shortCode, c.primaryColor, c.primaryDark, c.accentColor, now)
+    for (const s of c.stations) {
+      insertStation.run(s.id, c.id, s.name, s.code, s.location, s.region, s.pumpsCount, now)
+    }
+    // HQ Admin (PIN 9999)
+    insertSupervisor.run(`sup-${c.adminCode.toLowerCase()}`, c.adminCode, c.adminName, hqSalt, hqHash, null, c.id, c.shortCode, now, now)
+
+    // Initial Attendant 001A (e.g. ALL001A, PV001A, GOIL001A) with PIN 1234
+    const attCode = `${c.shortCode}001A`
+    insertAttendant.run(
+      `att-${attCode.toLowerCase()}`,
+      attCode,
+      `${c.name} Attendant`,
+      attSalt,
+      attHash,
+      'Pump 1',
+      c.stations[0]?.id || null,
+      c.id,
+      c.shortCode,
+      now,
+      now
+    )
+  }
+  console.log('[db] Seeded default OMCs, stations, HQ Admins (PIN 9999), and Attendants (PIN 1234)')
+}
+
 export function seedAllProductionData(): void {
-  // Only initialize the master Super Admin account.
-  // All OMCs, stations, managers, and attendants must be provisioned by the Super Admin / OMC admin.
   seedSuperAdmin()
+  seedDefaultCompanies()
   seedDefaultProducts()
 }
 
@@ -502,6 +628,9 @@ export function bootDb(): void {
   initSchema()
   seedAllProductionData()
 }
+
+// Auto-bootstrap schema immediately so any router importing db has tables available
+bootDb()
 
 export const countAttendants = (): number => (db.prepare('SELECT COUNT(*) AS c FROM attendants').get() as { c: number }).c
 

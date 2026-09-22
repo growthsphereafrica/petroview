@@ -1,6 +1,7 @@
 import type { ShiftRecord } from '../db/database'
 import { prodDb } from '../core/infra/db'
 import type { SyncEntityType } from '../core/domain/types'
+import { getBackendUrl } from './backendApiService'
 
 export interface HeadOfficeStats {
   totalStations: number
@@ -120,11 +121,13 @@ export async function uploadShiftToCloud(shift: ShiftRecord): Promise<{ success:
  * simulated-sync (demo) mode.
  */
 export function getApiBase(): string {
-  const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
-  if (configured && configured.length > 4) {
-    return configured.replace(/\/+$/, '')
+  try {
+    return getBackendUrl()
+  } catch {
+    const configured = (import.meta.env.VITE_API_URL as string | undefined)?.trim()
+    if (configured && configured.length > 4) return configured.replace(/\/+$/, '')
+    return 'http://localhost:4000'
   }
-  return 'https://petroviewapi.growthspheregh.com'
 }
 
 export function getStoredToken(): string | null {

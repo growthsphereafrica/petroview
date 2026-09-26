@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, History, LogOut, Receipt, RefreshCw, Settings, ShieldAlert, TrendingDown, Users, Wifi } from 'lucide-react'
+import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, Fuel, History, LogOut, Receipt, RefreshCw, Settings, ShieldAlert, TrendingDown, Users, Wifi } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
 import { getStationName, PRODUCTION_STATIONS, getStationById } from '../../../core/domain/config'
 import { Badge, Card, StatusBar, TappableRow } from '../../shared/ui'
@@ -20,8 +20,9 @@ export const SupervisorDashboardScreen: React.FC<{
   onGoToAudit: () => void
   onGoToTankReadings: () => void
   onGoToExpenses: () => void
+  onGoToPumps: () => void
   onOpenShift: (shiftId: string) => void
-}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onOpenShift }) => {
+}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onGoToPumps, onOpenShift }) => {
   const { supervisor, signOut } = useSupervisorSession()
   const { shifts, stats, pendingSync, loading, pushSync } = useSupervisorData()
   const [tankReadingCount, setTankReadingCount] = useState(0)
@@ -30,24 +31,30 @@ export const SupervisorDashboardScreen: React.FC<{
 
   const pendingReview = stats?.pendingReviews ?? 0
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const result = await backendGetTankReadings(supervisor?.stationId, 1)
-        setTankReadingCount(result.count)
-      } catch { /* */ }
+  const refreshDashboardData = async () => {
+    try {
+      const result = await backendGetTankReadings(supervisor?.stationId, 1)
+      setTankReadingCount(result.count)
+    } catch { /* */ }
 
-      try {
-        const todayStr = new Date().toISOString().slice(0, 10)
-        const expSum = await expenseService.getExpenseSummary({
-          stationId: supervisor?.stationId,
-          startDate: todayStr,
-          endDate: todayStr,
-        })
-        setExpensesToday(expSum.todayAmount)
-        setExpenseCountToday(expSum.todayCount)
-      } catch { /* */ }
-    })()
+    try {
+      const todayStr = new Date().toISOString().slice(0, 10)
+      const expSum = await expenseService.getExpenseSummary({
+        stationId: supervisor?.stationId,
+        startDate: todayStr,
+        endDate: todayStr,
+      })
+      setExpensesToday(expSum.todayAmount)
+      setExpenseCountToday(expSum.todayCount)
+    } catch { /* */ }
+  }
+
+  useEffect(() => {
+    void refreshDashboardData()
+    const timer = window.setInterval(() => {
+      void refreshDashboardData()
+    }, 10_000)
+    return () => window.clearInterval(timer)
   }, [supervisor?.stationId])
 
   return (
@@ -174,6 +181,14 @@ export const SupervisorDashboardScreen: React.FC<{
             value={expensesToday > 0 ? `-${formatGHS(expensesToday)}` : 'GHS 0.00'}
             onClick={onGoToExpenses}
             accent="#F43F5E"
+          />
+          <TappableRow
+            icon={<Fuel className="w-4 h-4" />}
+            title="Forecourt Pumps & Nozzles"
+            subtitle="Configure dispensers, rename fuel grades, edit or delete nozzles"
+            value="Configure"
+            onClick={onGoToPumps}
+            accent="#F97316"
           />
           <TappableRow
             icon={<ClipboardCheck className="w-4 h-4" />}

@@ -15,7 +15,8 @@
         {
           "cameraPermission": "Master View uses the camera to scan QR sync codes from other devices."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "ios": {
       "supportsTablet": true,

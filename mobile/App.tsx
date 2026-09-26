@@ -7,7 +7,6 @@ import { LoginScreen, type MobileSession } from './src/screens/LoginScreen'
 import { AttendantDashboard } from './src/screens/AttendantDashboard'
 import { SupervisorConsole } from './src/screens/supervisor/SupervisorConsole'
 import { mobileAuth } from './src/core/services/authService'
-import { seedProductionData } from './src/core/infra/repositories'
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -48,24 +47,18 @@ export default function App() {
 
   const restore = useCallback(async () => {
     try {
-      await seedProductionData()
       const auth = await mobileAuth.restore()
-      if (auth && (auth.attendant || auth.supervisor)) {
-        if (auth.role === 'superadmin' || auth.role === 'headoffice') {
-          await mobileAuth.logout()
-          return
-        }
-        const info = auth.role === 'supervisor' ? auth.supervisor : auth.attendant
-        if (info) {
-          setSession({
-            role: auth.role,
-            fullName: info.fullName,
-            employeeCode: info.employeeCode,
-            stationId: info.stationId ?? null,
-            stationName: undefined,
-            companyShortCode: info.companyShortCode ?? null,
-          })
-        }
+      if (auth) {
+        setSession({
+          role: auth.role,
+          userId: auth.session.userId,
+          fullName: auth.session.fullName,
+          employeeCode: auth.session.employeeCode,
+          stationId: auth.session.stationId,
+          stationName: auth.session.stationName,
+          companyId: auth.session.companyId,
+          companyShortCode: auth.session.companyShortCode,
+        })
       }
     } catch (err) {
       setStartupError(err instanceof Error ? `${err.name}: ${err.message}` : String(err))
@@ -75,10 +68,17 @@ export default function App() {
   }, [])
 
   useEffect(() => {
-    void restore()
-    // Watchdog: no matter what, surface something visible so the user is
-    // never stuck on a black screen (e.g. if AsyncStorage hangs on a device).
-    const watchdog = setTimeout(() => setReady(true), 8000)
+    let completed = false
+    void restore().finally(() => {
+      completed = true
+    })
+    // Watchdog: surface an explicit error if restore hangs unexpectedly.
+    const watchdog = setTimeout(() => {
+      if (!completed) {
+        setStartupError('Startup timed out. Please check your network connection and retry.')
+        setReady(true)
+      }
+    }, 12000)
     return () => clearTimeout(watchdog)
   }, [restore])
 
@@ -91,7 +91,7 @@ export default function App() {
             <Text style={styles.splashLogoText}>MVP</Text>
           </View>
           <Text style={styles.splashTitle}>Master View Petroleum</Text>
-          <Text style={styles.splashSub}>Starting local forecourt…</Text>
+          <Text style={styles.splashSub}>Connecting securely…</Text>
         </View>
       </SafeAreaProvider>
     )

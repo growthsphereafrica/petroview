@@ -16,8 +16,11 @@ import { SupervisorSettingsScreen } from './screens/SettingsScreen'
 import { SupervisorAuditLogScreen } from './screens/AuditLogScreen'
 import { SupervisorTankReadingsScreen } from './screens/TankReadingsScreen'
 import { SupervisorExpensesScreen } from './screens/ExpensesScreen'
+import { PumpsManagementView } from '../shared/PumpsManagementView'
+import { ScreenHeader, StatusBar } from '../shared/ui'
+import { getStationName } from '../../core/domain/config'
 
-type Screen = 'dashboard' | 'tank_readings' | 'expenses' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings'
+type Screen = 'dashboard' | 'tank_readings' | 'expenses' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings' | 'pumps'
 
 export interface ToastState {
   message: string
@@ -32,6 +35,7 @@ const Splash: React.FC = () => (
 )
 
 const SupervisorNavigator: React.FC = () => {
+  const { supervisor } = useSupervisorSession()
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
@@ -58,8 +62,34 @@ const SupervisorNavigator: React.FC = () => {
           onGoToAudit={() => go('audit')}
           onGoToTankReadings={() => go('tank_readings')}
           onGoToExpenses={() => go('expenses')}
+          onGoToPumps={() => go('pumps')}
           onOpenShift={openShift}
         />
+      )}
+
+      {screen === 'pumps' && (
+        <div className="h-full flex flex-col bg-[#090d16] overflow-y-auto">
+          <StatusBar online />
+          <ScreenHeader
+            title="Forecourt Pumps & Nozzles"
+            subtitle={`${supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch'} · Nozzle & Dispenser Layout`}
+            onBack={() => go('dashboard')}
+          />
+          <div className="flex-1 px-4 py-4 max-w-5xl w-full mx-auto">
+            <PumpsManagementView
+              companyId={supervisor?.companyId}
+              companyName={supervisor?.companyShortCode || 'Station'}
+              userRole="supervisor"
+              userStationId={supervisor?.stationId}
+              stations={[
+                {
+                  id: supervisor?.stationId || 'stn-01',
+                  name: supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch',
+                },
+              ]}
+            />
+          </div>
+        </div>
       )}
 
       {screen === 'expenses' && <SupervisorExpensesScreen onBack={() => go('dashboard')} onToast={notify} />}

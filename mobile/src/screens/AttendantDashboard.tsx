@@ -15,22 +15,17 @@ import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
 import { TankReadingsSheet } from './supervisor/TankReadingsSheet'
 import { shiftService, syncNow } from '../core/services/shiftService'
-import type { Shift } from '../core/domain/types'
+import type { Attendant, Shift } from '../core/domain/types'
 import type { MobileSession } from './LoginScreen'
 import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
+import { PRODUCTION_PUMPS, PRODUCTION_STATION } from '../core/domain/config'
 
-const PUMPS = [
-  { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
-  { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO'] },
-  { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO'] },
-  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] },
-]
-
-const FUEL_PRICES: Record<string, number> = { PMS: 14.8, AGO: 15.2, DPK: 13.9, KERO: 13.5 }
+const PUMPS = PRODUCTION_PUMPS
+const FUEL_PRICES: Record<string, number> = PRODUCTION_STATION.fuelPrices
 
 export const AttendantDashboard: React.FC<{
   session: MobileSession
-  onSignOut?: () => void
+  onSignOut: () => void
 }> = ({ session, onSignOut }) => {
   const [shift, setShift] = useState<Shift | null>(null)
   const [attendantId, setAttendantId] = useState<string | null>(null)
@@ -47,43 +42,19 @@ export const AttendantDashboard: React.FC<{
   const [qrOpen, setQrOpen] = useState(false)
   const [tankOpen, setTankOpen] = useState(false)
 
-  // Look up attendant ID on startup from code
   useEffect(() => {
     let active = true
     async function init() {
       try {
-        const { findAttendantByCode, upsertAttendant, getActiveShiftForAttendant, pendingSyncCount } = await import(
-          '../core/infra/repositories'
-        )
-        let att = await findAttendantByCode(session.employeeCode)
-        if (!att && active) {
-          att = {
-            id: `att-${session.employeeCode.toLowerCase()}`,
-            employeeCode: session.employeeCode,
-            fullName: session.fullName,
-            pinSalt: '',
-            pinHash: '',
-            pumpId: null,
-            stationId: session.stationId ?? '',
-            companyShortCode: session.companyShortCode ?? undefined,
-            approvalStatus: 'APPROVED',
-            active: true,
-            failedAttempts: 0,
-            lockoutUntil: null,
-            createdAt: new Date().toISOString(),
-          }
-          await upsertAttendant(att)
-        }
-        if (att && active) {
-          setAttendantId(att.id)
-          const [curShift, pending] = await Promise.all([
-            getActiveShiftForAttendant(att.id),
-            pendingSyncCount(),
-          ])
-          if (active) {
-            setShift(curShift)
-            setPendingCount(pending)
-          }
+        const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
+        const [curShift, pending] = await Promise.all([
+          getActiveShiftForAttendant(session.userId),
+          pendingSyncCount(),
+        ])
+        if (active) {
+          setAttendantId(session.userId)
+          setShift(curShift)
+          setPendingCount(pending)
         }
       } finally {
         if (active) setLoading(false)
@@ -91,7 +62,7 @@ export const AttendantDashboard: React.FC<{
     }
     void init()
     return () => { active = false }
-  }, [session.employeeCode, session.fullName, session.stationId, session.companyShortCode])
+  }, [session.userId])
 
   const refresh = useCallback(async () => {
     if (!attendantId) return
@@ -126,11 +97,9 @@ export const AttendantDashboard: React.FC<{
             <Text style={styles.subGreeting} numberOfLines={1}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
-            {onSignOut && (
-              <Pressable onPress={onSignOut} style={styles.iconBtn} hitSlop={8}>
-                <LogOut size={16} color={colors.rose} />
-              </Pressable>
-            )}
+            <Pressable onPress={onSignOut} style={styles.iconBtn} hitSlop={8}>
+              <LogOut size={16} color={colors.rose} />
+            </Pressable>
             <Pressable onPress={() => setTankOpen(true)} style={styles.iconBtn} hitSlop={8}>
               <Droplets size={16} color={colors.blue} />
             </Pressable>
@@ -233,7 +202,7 @@ export const AttendantDashboard: React.FC<{
         )}
 
         {/* Sign out */}
-        <Pressable onPress={() => void mobileSignOut()} style={[styles.signOut, { marginBottom: Math.max(insets.bottom, 16) }]} disabled={!!shift}>
+        <Pressable onPress={onSignOut} style={[styles.signOut, { marginBottom: Math.max(insets.bottom, 16) }]} disabled={!!shift}>
           <LogOut size={14} color={shift ? colors.textFaint : colors.rose} />
           <Text style={[styles.signOutText, shift && { color: colors.textFaint }]}>
             Sign out{shift ? ' (Close shift first)' : ''}
@@ -249,29 +218,25 @@ export const AttendantDashboard: React.FC<{
           try {
             setOpenModal(false)
             setError(null)
-            const { findAttendantByCode, upsertAttendant } = await import('../core/infra/repositories')
-            let att = await findAttendantByCode(session.employeeCode)
-            if (!att) {
-              att = {
-                id: `att-${session.employeeCode.toLowerCase()}`,
-                employeeCode: session.employeeCode,
-                fullName: session.fullName,
-                pinSalt: '',
-                pinHash: '',
-                pumpId: null,
-                stationId: session.stationId ?? '',
-                companyShortCode: session.companyShortCode ?? undefined,
-                approvalStatus: 'APPROVED',
-                active: true,
-                failedAttempts: 0,
-                lockoutUntil: null,
-                createdAt: new Date().toISOString(),
-              }
-              await upsertAttendant(att)
+            const attendant: Attendant = {
+              id: session.userId,
+              employeeCode: session.employeeCode,
+              fullName: session.fullName,
+              pinSalt: '',
+              pinHash: '',
+              pumpId: null,
+              stationId: session.stationId,
+              companyId: session.companyId,
+              companyShortCode: session.companyShortCode ?? undefined,
+              approvalStatus: 'APPROVED',
+              active: true,
+              failedAttempts: 0,
+              lockoutUntil: null,
+              createdAt: new Date().toISOString(),
             }
-            setAttendantId(att.id)
+            setAttendantId(attendant.id)
             await shiftService.openShift({
-              attendant: att,
+              attendant,
               pumpId,
               openingReadings: {
                 PMS: { fuelCode: 'PMS', value: 1000 },
@@ -401,10 +366,6 @@ export const AttendantDashboard: React.FC<{
     </View>
   )
 
-  async function mobileSignOut() {
-    const { mobileAuth } = await import('../core/services/authService')
-    await mobileAuth.logout()
-  }
 }
 
 // ---- Modals ---------------------------------------------------------------

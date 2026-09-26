@@ -1,202 +1,138 @@
-/**
- * Authentication for the mobile build — Backend-first auth.
- * Both web and mobile apps call the same backend API, so credentials are shared.
- * Falls back to local-only auth when backend is unreachable.
- */
+import { keys, sDel, sGet, sSet } from '../store/storage'
+import { cloudGetMe, cloudLogin, cloudLogout, type CloudSession } from '../infra/cloudApi'
 
-import { keys, sGet, sSet } from '../store/storage'
-import { cloudLogin, type CloudSession } from '../infra/cloudApi'
-import { SESSION_TTL_MS, uid } from '../domain/config'
-import type { Attendant, AttendantSession, Supervisor, SupervisorSession } from '../domain/types'
+export type MobileRole = 'attendant' | 'supervisor'
 
-export type MobileRole = 'attendant' | 'supervisor' | 'headoffice' | 'superadmin'
+export type AuthenticatedCloudSession = CloudSession & {
+  role: 'attendant' | 'supervisor'
+  stationId: string
+  companyId: string
+  companyShortCode: string | null
+}
 
 export interface AuthenticateResult {
-  role: MobileRole
-  attendant?: Attendant
-  supervisor?: Supervisor
-  session: AttendantSession | SupervisorSession
-  cloudSession?: CloudSession
+  role: 'attendant' | 'supervisor'
+  session: AuthenticatedCloudSession
+}
+
+function isStoredSession(value: unknown): value is AuthenticatedCloudSession {
+  if (!value || typeof value !== 'object') return false
+  const session = value as Partial<CloudSession>
+  return typeof session.token === 'string' && session.token.length > 0
+    && typeof session.userId === 'string' && session.userId.length > 0
+    && (session.role === 'attendant' || session.role === 'supervisor')
+    && typeof session.employeeCode === 'string' && session.employeeCode.length > 0
+    && typeof session.fullName === 'string' && session.fullName.length > 0
+    && typeof session.stationId === 'string' && session.stationId.length > 0
+    && typeof session.companyId === 'string' && session.companyId.length > 0
+    && (session.companyShortCode === null || typeof session.companyShortCode === 'string')
+    && typeof session.expiresAt === 'string'
+    && Number.isFinite(Date.parse(session.expiresAt))
 }
 
 export class MobileAuthService {
+  private async clearLocalSession(): Promise<void> {
+    await Promise.all([
+      sDel(keys.activeSession),
+      sDel(keys.cloudToken),
+      sDel(keys.sessionToken),
+      sDel(keys.sessions),
+    ])
+  }
+
+  private async persistSession(session: CloudSession): Promise<void> {
+    await Promise.all([
+      sSet(keys.cloudToken, session.token),
+      sSet(keys.activeSession, session),
+    ])
+  }
+
   async authenticate(employeeCode: string, pin: string): Promise<AuthenticateResult> {
-    if (!/^\d{4}$/.test(pin)) {
-      throw new Error('PIN must be 4 digits.')
+    if (!/^\d{4}$/.test(pin)) throw new Error('PIN must be 4 digits.')
+    const code = employeeCode.trim().toUpperCase()
+    if (!code) throw new Error('Please enter your Staff / Admin Code.')
+
+    const result = await cloudLogin(code, pin)
+    if (!result.ok) throw new Error(result.message)
+
+    const session = result.session
+    if (session.role !== 'attendant' && session.role !== 'supervisor') {
+      await cloudLogout()
+      await this.clearLocalSession()
+      throw new Error('This mobile app is exclusively for Forecourt Attendants and Station Supervisors.')
     }
-    const raw = employeeCode.trim()
-    if (!raw) {
-      throw new Error('Please enter your Staff / Admin Code.')
-    }
-    const code = raw.toUpperCase()
-
-    // 1. Try backend API first — the single source of truth
-    const cloudRes = await cloudLogin(code, pin)
-
-    if (cloudRes.ok) {
-      const cloudResult = cloudRes.session
-      // Backend is reachable and authenticated
-      const role: MobileRole = cloudResult.role === 'superadmin' ? 'superadmin'
-        : cloudResult.role === 'headoffice' ? 'headoffice'
-        : cloudResult.role === 'supervisor' ? 'supervisor'
-        : 'attendant'
-
-      // Create a local session for offline state management
-      const session: AttendantSession = {
-        id: uid('sess'),
-        token: cloudResult.token,
-        attendantId: cloudResult.employeeCode,
-        employeeCode: cloudResult.employeeCode,
-        fullName: cloudResult.fullName,
-        createdAt: new Date().toISOString(),
-        expiresAt: cloudResult.expiresAt,
-      }
-      await sSet(keys.sessionToken, session.token)
-
-      // Create a minimal local user record for offline state
-      if (role === 'supervisor' || role === 'headoffice' || role === 'superadmin') {
-        const supervisor: Supervisor = {
-          id: `sup-${cloudResult.employeeCode.toLowerCase()}`,
-          employeeCode: cloudResult.employeeCode,
-          fullName: cloudResult.fullName,
-          pinSalt: '',
-          pinHash: '',
-          stationId: cloudResult.stationId ?? undefined,
-          companyId: cloudResult.companyId ?? undefined,
-          companyShortCode: cloudResult.companyShortCode ?? undefined,
-          isHeadOffice: cloudResult.isHeadOffice,
-          isSuperAdmin: cloudResult.isSuperAdmin,
-          approvalStatus: 'APPROVED',
-          active: true,
-          failedAttempts: 0,
-          lockoutUntil: null,
-          createdAt: new Date().toISOString(),
-        }
-        const { upsertSupervisor } = await import('../infra/repositories')
-        await upsertSupervisor(supervisor)
-        return { role, supervisor, session: session as unknown as SupervisorSession, cloudSession: cloudResult }
-      } else {
-        const attendant: Attendant = {
-          id: `att-${cloudResult.employeeCode.toLowerCase()}`,
-          employeeCode: cloudResult.employeeCode,
-          fullName: cloudResult.fullName,
-          pinSalt: '',
-          pinHash: '',
-          pumpId: null,
-          stationId: cloudResult.stationId ?? '',
-          companyId: cloudResult.companyId ?? undefined,
-          companyShortCode: cloudResult.companyShortCode ?? undefined,
-          approvalStatus: 'APPROVED',
-          active: true,
-          failedAttempts: 0,
-          lockoutUntil: null,
-          createdAt: new Date().toISOString(),
-        }
-        const { upsertAttendant } = await import('../infra/repositories')
-        await upsertAttendant(attendant)
-        return { role, attendant, session, cloudSession: cloudResult }
-      }
+    if (!session.stationId || !session.companyId || session.isHeadOffice || session.isSuperAdmin) {
+      await cloudLogout()
+      await this.clearLocalSession()
+      throw new Error('Your account is not assigned to an active forecourt station.')
     }
 
-    // 2. If the backend rejected the login (e.g. invalid PIN, unapproved account), surface server message
-    if (!cloudRes.isNetworkError) {
-      throw new Error(cloudRes.message)
+    const authenticatedSession: AuthenticatedCloudSession = {
+      ...session,
+      role: session.role,
+      stationId: session.stationId,
+      companyId: session.companyId,
     }
-
-    // 3. Backend is unreachable (offline mode) — attempt local PIN verification against seeded/cached accounts
-    const { findSupervisorByCode, findAttendantByCode } = await import('../infra/repositories')
-    const { verifyPin: localVerifyPin } = await import('../infra/password')
-
-    const localSup = await findSupervisorByCode(code)
-    if (localSup && localSup.active && localSup.pinSalt && localSup.pinHash) {
-      const isSuper = localSup.isSuperAdmin || code === 'SUPER-ADMIN'
-      const valid = (await localVerifyPin(pin, localSup.pinSalt, localSup.pinHash)) || (isSuper && (pin === '7256' || pin === '9999'))
-      if (valid) {
-        const sess: SupervisorSession = {
-          id: uid('sess'),
-          token: uid('tok'),
-          supervisorId: localSup.id,
-          employeeCode: localSup.employeeCode,
-          fullName: localSup.fullName,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        }
-        await sSet(keys.sessionToken, sess.token)
-        const role: MobileRole = localSup.isSuperAdmin ? 'superadmin' : localSup.isHeadOffice ? 'headoffice' : 'supervisor'
-        return { role, supervisor: localSup, session: sess }
-      }
-      throw new Error('Incorrect PIN.')
-    }
-
-    const localAtt = await findAttendantByCode(code)
-    if (localAtt && localAtt.active && localAtt.pinSalt && localAtt.pinHash) {
-      const valid = await localVerifyPin(pin, localAtt.pinSalt, localAtt.pinHash)
-      if (valid) {
-        const sess: AttendantSession = {
-          id: uid('sess'),
-          token: uid('tok'),
-          attendantId: localAtt.id,
-          employeeCode: localAtt.employeeCode,
-          fullName: localAtt.fullName,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-        }
-        await sSet(keys.sessionToken, sess.token)
-        return { role: 'attendant', attendant: localAtt, session: sess }
-      }
-      throw new Error('Incorrect PIN.')
-    }
-
-    throw new Error(cloudRes.message || 'Unable to reach the server. Please check your connection and try again.')
+    await this.persistSession(authenticatedSession)
+    return { role: authenticatedSession.role, session: authenticatedSession }
   }
 
   async restore(): Promise<AuthenticateResult | null> {
-    const token = await sGet<string>(keys.sessionToken)
-    if (!token) return null
-
-    // Check if token is still valid (not expired)
-    // For backend tokens, we can't verify locally, so just check expiry from the session
-    // If it fails on next API call, the user will need to re-login
-
-    // Try to restore from local supervisor/attendant data
-    const { findSupervisorByCode, findAttendantByCode } = await import('../infra/repositories')
-
-    // Check if this is a backend token (UUID format)
-    if (token.length > 30 && token.includes('-')) {
-      // Backend token — we need to re-authenticate to restore
-      // For now, return null so the user sees the login screen
-      // TODO: Add a /api/auth/me endpoint to verify tokens
+    const session = await sGet<CloudSession>(keys.activeSession)
+    const token = await sGet<string>(keys.cloudToken)
+    if (!session || !token || session.token !== token || !isStoredSession(session) || Date.parse(session.expiresAt) <= Date.now()) {
+      await this.clearLocalSession()
       return null
     }
 
-    // Legacy local session token — try to find the user
-    const sessions = await import('../infra/repositories')
-    const session = await sessions.findSessionByToken(token)
-    if (!session) return null
-    if (new Date(session.expiresAt).getTime() <= Date.now()) {
-      await sessions.deleteSession(token)
-      await sSet(keys.sessionToken, null as never)
+    const result = await cloudGetMe()
+    if (!result.ok) {
+      if (result.status === 401 || result.status === 403) {
+        await this.clearLocalSession()
+        return null
+      }
+      throw new Error(result.message)
+    }
+
+    const account = result.account
+    const role = account.role
+    if (role !== 'attendant' && role !== 'supervisor') {
+      await cloudLogout()
+      await this.clearLocalSession()
       return null
     }
-    if ('attendantId' in session) {
-      const attendant = await findAttendantByCode(session.employeeCode ?? '')
-      if (!attendant || !attendant.active) return null
-      return { role: 'attendant', attendant, session }
+    if (!account.stationId || !account.companyId) {
+      await cloudLogout()
+      await this.clearLocalSession()
+      return null
     }
-    const supervisor = await findSupervisorByCode(session.employeeCode ?? '')
-    if (!supervisor) return null
-    const role: MobileRole = supervisor.isSuperAdmin ? 'superadmin' : supervisor.isHeadOffice ? 'headoffice' : 'supervisor'
-    return { role, supervisor, session: session as unknown as SupervisorSession }
+    if (account.userId !== session.userId
+      || role !== session.role
+      || account.employeeCode !== session.employeeCode
+      || account.stationId !== session.stationId
+      || account.companyId !== session.companyId) {
+      await cloudLogout()
+      await this.clearLocalSession()
+      throw new Error('Your account scope changed. Please sign in again.')
+    }
+
+    const refreshed: AuthenticatedCloudSession = {
+      ...account,
+      token: session.token,
+      role,
+      stationId: account.stationId,
+      companyId: account.companyId,
+    }
+    await this.persistSession(refreshed)
+    return { role, session: refreshed }
   }
 
   async logout(): Promise<void> {
-    const token = await sGet<string>(keys.sessionToken)
-    if (token) {
-      const { deleteSession } = await import('../infra/repositories')
-      await deleteSession(token)
+    try {
+      await cloudLogout()
+    } finally {
+      await this.clearLocalSession()
     }
-    await sSet(keys.sessionToken, null as never)
-    await sSet(keys.cloudToken, null as never)
   }
 }
 

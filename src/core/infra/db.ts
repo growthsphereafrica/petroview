@@ -5,7 +5,6 @@
  */
 
 import Dexie, { type Table } from 'dexie'
-import { hashPin } from './password'
 import type {
   AuditEntry,
   Attendant,
@@ -106,22 +105,6 @@ export class ProductionDatabase extends Dexie {
       receipts: 'id, shiftId, capturedAt',
       syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
       auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
-    }).upgrade(async tx => {
-      for (const table of [
-        'companies',
-        'companyStations',
-        'attendants',
-        'sessions',
-        'supervisors',
-        'supervisorSessions',
-        'shifts',
-        'transactions',
-        'receipts',
-        'syncQueue',
-        'auditLog',
-      ] as const) {
-        await tx.table(table).clear()
-      }
     })
     this.version(7).stores({
       companies: 'id, shortCode, name, adminCode, active',
@@ -173,80 +156,7 @@ export class ProductionDatabase extends Dexie {
 
 export const prodDb = new ProductionDatabase()
 
-function cleanCode(code: string): string {
-  return (code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
-}
-
-/**
- * Seeds platform Super Super Admin, default enterprise OMCs, stations,
- * HQ Admins, Station Managers, Fuel Attendants, and Products.
- */
 export async function seedProductionData(): Promise<boolean> {
-  const now = new Date().toISOString()
-
-  // 1. Always guarantee SUPER-ADMIN is seeded and active with PIN 7256
-  try {
-    const { salt: saSalt, hash: saHash } = await hashPin('7256')
-    const allSups = await prodDb.supervisors.toArray()
-    const existingSuperAdmin = allSups.find(
-      s => cleanCode(s.employeeCode) === 'SUPERADMIN' || s.isSuperAdmin === true || s.id === 'sup-super-admin',
-    )
-
-    await prodDb.supervisors.put({
-      id: existingSuperAdmin ? existingSuperAdmin.id : 'sup-super-admin',
-      employeeCode: 'SUPER-ADMIN',
-      fullName: 'PetroView Platform Master Admin',
-      pinSalt: saSalt,
-      pinHash: saHash,
-      stationId: 'STN-PV-01',
-      phone: '030 000 0000',
-      isHeadOffice: true,
-      isSuperAdmin: true,
-      approvalStatus: 'APPROVED',
-      approvedAt: now,
-      approvedBy: 'System Master',
-      active: true,
-      failedAttempts: 0,
-      lockoutUntil: null,
-      createdAt: existingSuperAdmin?.createdAt || now,
-    })
-  } catch (err) {
-    console.error('Error seeding SUPER-ADMIN:', err)
-  }
-
-  // Products are now managed by the backend API (/api/products).
-  // The backend seeds defaults using INSERT OR IGNORE on first boot,
-  // so deletions by admins are never automatically restored.
-
-  // 7. Auto-activate & approve any self-registered accounts previously pending
-  try {
-    const allAtts = await prodDb.attendants.toArray()
-    for (const a of allAtts) {
-      if (a.approvalStatus === 'PENDING' || !a.active) {
-        await prodDb.attendants.update(a.id, {
-          approvalStatus: 'APPROVED',
-          active: true,
-          approvedAt: now,
-          approvedBy: 'System Auto-Approval',
-        })
-      }
-    }
-
-    const allSupsList = await prodDb.supervisors.toArray()
-    for (const s of allSupsList) {
-      if (s.approvalStatus === 'PENDING' || !s.active) {
-        await prodDb.supervisors.update(s.id, {
-          approvalStatus: 'APPROVED',
-          active: true,
-          approvedAt: now,
-          approvedBy: 'System Auto-Approval',
-        })
-      }
-    }
-  } catch (err) {
-    console.error('Error auto-approving staff:', err)
-  }
-
   return true
 }
 

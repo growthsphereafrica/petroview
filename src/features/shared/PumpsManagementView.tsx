@@ -11,6 +11,8 @@ import {
   Check,
   X,
   Layers,
+  Sparkles,
+  Tag,
 } from 'lucide-react'
 import { Card, Badge } from './ui'
 import {
@@ -18,6 +20,7 @@ import {
   backendCreatePump,
   backendUpdatePump,
   backendDeletePump,
+  backendDeleteNozzle,
   type BackendPump,
 } from '../../services/backendApiService'
 import { registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
@@ -29,6 +32,8 @@ interface Props {
   stations: Array<CompanyStation | { id: string; name: string; code?: string }>
   availableProducts?: Product[]
   isSuperAdmin?: boolean
+  userRole?: 'supervisor' | 'headoffice' | 'superadmin'
+  userStationId?: string
 }
 
 export const PumpsManagementView: React.FC<Props> = ({
@@ -37,10 +42,12 @@ export const PumpsManagementView: React.FC<Props> = ({
   stations,
   availableProducts = [],
   isSuperAdmin = false,
+  userRole,
+  userStationId,
 }) => {
-  const [selectedStationId, setSelectedStationId] = useState<string>(
-    stations.length > 0 ? stations[0].id : '',
-  )
+  const isStationSupervisor = userRole === 'supervisor' || Boolean(userStationId && userRole !== 'headoffice' && userRole !== 'superadmin')
+  const defaultStationId = userStationId || (stations.length > 0 ? stations[0].id : '')
+  const [selectedStationId, setSelectedStationId] = useState<string>(defaultStationId)
   const [pumps, setPumps] = useState<BackendPump[]>([])
   const [loading, setLoading] = useState(false)
   const [actionNotice, setActionNotice] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -57,6 +64,16 @@ export const PumpsManagementView: React.FC<Props> = ({
   const [editPumpFuels, setEditPumpFuels] = useState<string[]>([])
   const [editPumpActive, setEditPumpActive] = useState(true)
   const [editSaving, setEditSaving] = useState(false)
+
+  // Edit Nozzle Fuel Name Modal
+  const [editingNozzle, setEditingNozzle] = useState<{ pump: BackendPump; fuelCode: string } | null>(null)
+  const [editNozzleNewName, setEditNozzleNewName] = useState('')
+  const [savingNozzle, setSavingNozzle] = useState(false)
+
+  // Add Individual Nozzle Modal
+  const [addingNozzlePump, setAddingNozzlePump] = useState<BackendPump | null>(null)
+  const [newNozzleFuelName, setNewNozzleFuelName] = useState('')
+  const [savingNewNozzle, setSavingNewNozzle] = useState(false)
 
   // Fallback fuel codes
   const fuelOptions = useMemo(() => {
@@ -98,10 +115,12 @@ export const PumpsManagementView: React.FC<Props> = ({
   }
 
   useEffect(() => {
-    if (stations.length > 0 && !selectedStationId) {
+    if (userStationId) {
+      setSelectedStationId(userStationId)
+    } else if (stations.length > 0 && !selectedStationId) {
       setSelectedStationId(stations[0].id)
     }
-  }, [stations])
+  }, [stations, userStationId])
 
   useEffect(() => {
     if (selectedStationId) {
@@ -187,6 +206,92 @@ export const PumpsManagementView: React.FC<Props> = ({
     }
   }
 
+  // Nozzle Management Actions:
+  // 1. Rename Nozzle Fuel
+  const handleOpenEditNozzle = (pump: BackendPump, fuelCode: string) => {
+    setEditingNozzle({ pump, fuelCode })
+    setEditNozzleNewName(fuelCode)
+  }
+
+  const handleSaveRenameNozzle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingNozzle || !editNozzleNewName.trim()) return
+    const { pump, fuelCode } = editingNozzle
+    const newName = editNozzleNewName.trim().toUpperCase()
+    if (newName === fuelCode) {
+      setEditingNozzle(null)
+      return
+    }
+
+    setSavingNozzle(true)
+    try {
+      const res = await backendUpdatePump(pump.id, {
+        renameNozzle: { oldName: fuelCode, newName },
+      })
+      setPumps(prev => prev.map(p => (p.id === pump.id ? res.pump : p)))
+      const updated = pumps.map(p => (p.id === pump.id ? res.pump : p))
+      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any })))
+      setEditingNozzle(null)
+      setActionNotice({ text: `Renamed nozzle on ${pump.name} from "${fuelCode}" to "${newName}".`, type: 'success' })
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      setActionNotice({ text: err.message || 'Failed to rename nozzle.', type: 'error' })
+    } finally {
+      setSavingNozzle(false)
+    }
+  }
+
+  // 2. Delete Nozzle from Pump
+  const handleDeleteNozzle = async (pump: BackendPump, fuelCode: string) => {
+    if (!window.confirm(`Are you sure you want to remove nozzle "${fuelCode}" from ${pump.name}?`)) return
+    try {
+      const res = await backendDeleteNozzle(pump.id, fuelCode)
+      const updatedPump: BackendPump = {
+        ...pump,
+        fuels: res.fuels,
+      }
+      setPumps(prev => prev.map(p => (p.id === pump.id ? updatedPump : p)))
+      const updated = pumps.map(p => (p.id === pump.id ? updatedPump : p))
+      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any })))
+      setActionNotice({ text: `Removed nozzle "${fuelCode}" from ${pump.name}.`, type: 'success' })
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      setActionNotice({ text: err.message || 'Failed to remove nozzle.', type: 'error' })
+    }
+  }
+
+  // 3. Add Individual Nozzle to Pump
+  const handleOpenAddNozzle = (pump: BackendPump) => {
+    setAddingNozzlePump(pump)
+    // Suggest first available fuel code not already on this pump
+    const unused = fuelOptions.find(f => !pump.fuels.includes(f.code))
+    setNewNozzleFuelName(unused ? unused.code : 'RON95')
+  }
+
+  const handleSaveAddNozzle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!addingNozzlePump || !newNozzleFuelName.trim()) return
+    const pump = addingNozzlePump
+    const fuelToAdd = newNozzleFuelName.trim().toUpperCase()
+
+    setSavingNewNozzle(true)
+    try {
+      const res = await backendUpdatePump(pump.id, {
+        addNozzle: fuelToAdd,
+      })
+      setPumps(prev => prev.map(p => (p.id === pump.id ? res.pump : p)))
+      const updated = pumps.map(p => (p.id === pump.id ? res.pump : p))
+      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any })))
+      setAddingNozzlePump(null)
+      setActionNotice({ text: `Added nozzle "${fuelToAdd}" to ${pump.name}.`, type: 'success' })
+      setTimeout(() => setActionNotice(null), 4000)
+    } catch (err: any) {
+      setActionNotice({ text: err.message || 'Failed to add nozzle.', type: 'error' })
+    } finally {
+      setSavingNewNozzle(false)
+    }
+  }
+
   const currentStation = stations.find(s => s.id === selectedStationId)
 
   return (
@@ -212,12 +317,12 @@ export const PumpsManagementView: React.FC<Props> = ({
             <h2 className="text-sm font-extrabold text-white">Forecourt Pump & Nozzle Management</h2>
           </div>
           <p className="text-[11px] text-slate-400 mt-0.5">
-            Configure fuel dispensing options, assigned nozzles, and active pumps per station across {companyName}.
+            Configure fuel dispensing nozzles, edit fuel names, and manage dispenser layout for {isStationSupervisor ? currentStation?.name || 'this station' : companyName}.
           </p>
         </div>
 
         <div className="flex items-center gap-2.5 w-full sm:w-auto">
-          {stations.length > 0 && (
+          {stations.length > 0 && !isStationSupervisor && (
             <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
               <Building2 className="w-3.5 h-3.5 text-slate-400" />
               <select
@@ -231,6 +336,13 @@ export const PumpsManagementView: React.FC<Props> = ({
                   </option>
                 ))}
               </select>
+            </div>
+          )}
+
+          {isStationSupervisor && currentStation && (
+            <div className="flex items-center gap-1.5 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs text-white font-bold">
+              <Building2 className="w-3.5 h-3.5 text-orange-400" />
+              <span>{currentStation.name}</span>
             </div>
           )}
 
@@ -276,39 +388,81 @@ export const PumpsManagementView: React.FC<Props> = ({
                 </Badge>
               </div>
 
-              {/* Nozzles list */}
+              {/* Nozzles list with individual edit & delete */}
               <div className="mt-3 pt-3 border-t border-slate-800/60">
-                <span className="text-[10px] uppercase font-bold text-slate-500 block mb-1.5">
-                  Assigned Fuel Nozzles ({pump.fuels?.length || 0})
-                </span>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] uppercase font-bold text-slate-400">
+                    Active Nozzles ({pump.fuels?.length || 0})
+                  </span>
+                  <button
+                    onClick={() => handleOpenAddNozzle(pump)}
+                    className="text-[10px] font-bold text-orange-400 hover:text-orange-300 flex items-center gap-0.5"
+                    title="Add a nozzle to this dispenser"
+                  >
+                    <Plus className="w-3 h-3" /> Add Nozzle
+                  </button>
+                </div>
+
+                <div className="flex flex-col gap-2">
                   {pump.fuels && pump.fuels.length > 0 ? (
                     pump.fuels.map(f => {
                       const opt = fuelOptions.find(o => o.code === f)
                       return (
-                        <span
+                        <div
                           key={f}
-                          className="px-2 py-0.5 rounded-lg bg-slate-800 text-[11px] font-bold font-mono border border-slate-700/60 text-slate-200"
+                          className="flex items-center justify-between p-2 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition"
                         >
-                          {f}
-                        </span>
+                          <div className="flex items-center gap-2">
+                            <span
+                              className="w-2.5 h-2.5 rounded-full"
+                              style={{ backgroundColor: opt?.color || '#F97316' }}
+                            />
+                            <div>
+                              <span className="text-xs font-bold font-mono text-white block">
+                                {f}
+                              </span>
+                              {opt?.name && opt.name !== f && (
+                                <span className="text-[9px] text-slate-500 block">
+                                  {opt.name}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => handleOpenEditNozzle(pump, f)}
+                              className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-orange-400 transition"
+                              title={`Rename fuel on nozzle ${f}`}
+                            >
+                              <Edit2 className="w-3 h-3" />
+                            </button>
+                            <button
+                              onClick={() => void handleDeleteNozzle(pump, f)}
+                              className="p-1 rounded-lg hover:bg-rose-500/10 text-slate-500 hover:text-rose-400 transition"
+                              title={`Delete nozzle ${f}`}
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                        </div>
                       )
                     })
                   ) : (
-                    <span className="text-xs text-rose-400 italic">No nozzles configured</span>
+                    <span className="text-xs text-rose-400 italic">No nozzles configured on this pump</span>
                   )}
                 </div>
               </div>
             </div>
 
             {/* Pump Actions */}
-            <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-end gap-2">
+            <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2">
               <button
                 onClick={() => handleOpenEdit(pump)}
                 className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1 transition"
               >
                 <Edit2 className="w-3 h-3 text-orange-400" />
-                <span>Configure Nozzles</span>
+                <span>Configure Pump</span>
               </button>
 
               <button
@@ -338,6 +492,150 @@ export const PumpsManagementView: React.FC<Props> = ({
           </div>
         )}
       </div>
+
+      {/* MODAL: Rename/Edit Nozzle Fuel */}
+      {editingNozzle && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Tag className="w-4 h-4 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Edit Fuel on Nozzle</h3>
+              </div>
+              <button onClick={() => setEditingNozzle(null)} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveRenameNozzle} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Dispenser</label>
+                <div className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white font-bold text-xs flex items-center gap-2">
+                  <Fuel className="w-4 h-4 text-orange-400" />
+                  <span>{editingNozzle.pump.name} ({currentStation?.name || selectedStationId})</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Current Fuel Code / Name</label>
+                <div className="p-2 rounded-xl bg-slate-950/80 border border-slate-800 text-slate-300 font-mono font-bold text-xs">
+                  {editingNozzle.fuelCode}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                  New Fuel Name / Product Code
+                </label>
+                <input
+                  value={editNozzleNewName}
+                  onChange={e => setEditNozzleNewName(e.target.value)}
+                  placeholder="e.g. Super XP, V-Power, PMS, RON95"
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none uppercase font-bold"
+                  required
+                />
+              </div>
+
+              {/* Quick Preset Selector */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                  Or select standard grade
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {fuelOptions.map(f => (
+                    <button
+                      key={f.code}
+                      type="button"
+                      onClick={() => setEditNozzleNewName(f.code)}
+                      className={`px-2 py-1 rounded-lg border text-[11px] font-mono font-bold transition ${
+                        editNozzleNewName.toUpperCase() === f.code
+                          ? 'bg-orange-500 text-slate-950 border-orange-500'
+                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      {f.code}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingNozzle || !editNozzleNewName.trim()}
+                className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
+              >
+                {savingNozzle ? 'Renaming Fuel…' : 'Save Fuel Name on Nozzle'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Add Nozzle to Pump */}
+      {addingNozzlePump && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Plus className="w-4 h-4 text-orange-400" />
+                <h3 className="text-sm font-extrabold text-white">Add Nozzle to {addingNozzlePump.name}</h3>
+              </div>
+              <button onClick={() => setAddingNozzlePump(null)} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleSaveAddNozzle} className="flex flex-col gap-3 text-xs">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">Fuel Grade / Name</label>
+                <input
+                  value={newNozzleFuelName}
+                  onChange={e => setNewNozzleFuelName(e.target.value)}
+                  placeholder="e.g. PMS, AGO, V-Power, RON95"
+                  className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2 text-xs text-white focus:border-orange-500 outline-none uppercase font-bold"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                  Available Fuel Products
+                </label>
+                <div className="grid grid-cols-2 gap-2 max-h-36 overflow-y-auto">
+                  {fuelOptions.map(f => {
+                    const alreadyOnPump = addingNozzlePump.fuels.includes(f.code)
+                    const isSelected = newNozzleFuelName.toUpperCase() === f.code
+                    return (
+                      <button
+                        key={f.code}
+                        type="button"
+                        onClick={() => setNewNozzleFuelName(f.code)}
+                        className={`p-2 rounded-xl border text-left flex items-center justify-between transition ${
+                          isSelected
+                            ? 'bg-orange-500/10 border-orange-500 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full" style={{ backgroundColor: f.color }} />
+                          <span className="font-bold text-xs">{f.code}</span>
+                        </div>
+                        {alreadyOnPump && (
+                          <span className="text-[9px] text-slate-500">(Active)</span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={savingNewNozzle || !newNozzleFuelName.trim()}
+                className="w-full rounded-xl bg-gradient-to-r from-orange-600 to-amber-500 text-white py-2.5 text-xs font-bold transition mt-2 disabled:opacity-40"
+              >
+                {savingNewNozzle ? 'Adding Nozzle…' : 'Add Nozzle to Dispenser'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* MODAL: Add Pump */}
       {isAddOpen && (
@@ -417,14 +715,14 @@ export const PumpsManagementView: React.FC<Props> = ({
         </div>
       )}
 
-      {/* MODAL: Edit Pump */}
+      {/* MODAL: Configure Pump (Name, Bulk fuels, Status) */}
       {editingPump && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="max-w-md w-full rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl flex flex-col gap-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-800">
               <div className="flex items-center gap-2">
                 <Edit2 className="w-4 h-4 text-orange-400" />
-                <h3 className="text-sm font-extrabold text-white">Configure Pump & Nozzles</h3>
+                <h3 className="text-sm font-extrabold text-white">Configure Pump</h3>
               </div>
               <button onClick={() => setEditingPump(null)} className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white">✕</button>
             </div>

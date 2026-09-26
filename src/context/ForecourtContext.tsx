@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
-import { db, seedInitialDatabase, type ShiftRecord, type TransactionRecord, type ReceiptRecord, type SyncQueueItem } from '../db/database'
+import { db, type ShiftRecord, type TransactionRecord, type ReceiptRecord, type SyncQueueItem } from '../db/database'
 import { DEFAULT_STATION, ATTENDANTS_LIST, FUEL_PRICES, type StationConfig } from '../constants/fuelTypes'
 import { COMPANIES_DIRECTORY, type CompanyConfig } from '../constants/companies'
 import { localSyncBus, type PeerMessage } from '../services/localSyncService'
@@ -77,30 +77,16 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   const [activeCompany, setActiveCompany] = useState<CompanyConfig>(COMPANIES_DIRECTORY[0])
   const [activeStation, setActiveStation] = useState<StationConfig>(COMPANIES_DIRECTORY[0].stations[0])
-  const [attendants, setAttendants] = useState(ATTENDANTS_LIST)
+  const [attendants] = useState<typeof ATTENDANTS_LIST>([])
   const [allCompanyShifts, setAllCompanyShifts] = useState<ShiftRecord[]>([])
   const [shifts, setShifts] = useState<ShiftRecord[]>([])
   const [activeShift, setActiveShift] = useState<ShiftRecord | null>(null)
 
-  const [currentAttendant, setCurrentAttendant] = useState<AttendantUser | null>({
-    id: 'ATT1234',
-    name: 'John Attendant',
-    companyId: 'COMP-MVP',
-    stationId: 'STN-001',
-    stationName: 'Green Valley Station',
-    isOfflineMode: false
-  })
-
-  const [currentSupervisor, setCurrentSupervisor] = useState<SupervisorUser | null>({
-    id: 'SUP001',
-    name: 'Kwame Mensah',
-    companyId: 'COMP-MVP',
-    stationId: 'STN-001',
-    stationName: 'Green Valley Station'
-  })
+  const [currentAttendant, setCurrentAttendant] = useState<AttendantUser | null>(null)
+  const [currentSupervisor, setCurrentSupervisor] = useState<SupervisorUser | null>(null)
 
   const [isSyncing, setIsSyncing] = useState<boolean>(false)
-  const [lastSyncTime, setLastSyncTime] = useState<string>('10:15 AM')
+  const [lastSyncTime, setLastSyncTime] = useState<string>('')
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' | 'warning' } | null>(null)
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
@@ -135,17 +121,13 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     try {
       let allShifts = await db.shifts.toArray()
       if (allShifts.length === 0) {
-        await seedInitialDatabase()
-        allShifts = await db.shifts.toArray()
+        allShifts = []
       }
       allShifts.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
       setAllCompanyShifts(allShifts)
 
       // Filter shifts for active company & station
-      let tenantShifts = allShifts.filter(s => (s.companyId || 'COMP-MVP') === activeCompany.id)
-      if (tenantShifts.length === 0 && allShifts.length > 0) {
-        tenantShifts = allShifts
-      }
+      let tenantShifts = allShifts.filter(s => (s.companyId || '') === activeCompany.id)
       setShifts(tenantShifts)
 
       // Set active shift
@@ -167,11 +149,6 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   useEffect(() => {
     const init = async () => {
-      try {
-        await seedInitialDatabase()
-      } catch (e) {
-        console.warn('Initial seeding note:', e)
-      }
       await refreshShiftsFromDB()
     }
     init()
@@ -218,35 +195,8 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return () => unsubscribe()
   }, [networkMode, isOnline, refreshShiftsFromDB, showToast, addPacketLog])
 
-  // Attendant Auth
-  const loginAttendant = (id: string, pin: string, offlineOnly: boolean = false): boolean => {
-    if (offlineOnly) {
-      setCurrentAttendant({
-        id: id || 'ATT-OFFLINE',
-        name: 'Offline Attendant',
-        companyId: activeCompany.id,
-        stationId: activeStation.id,
-        stationName: activeStation.name,
-        isOfflineMode: true
-      })
-      showToast('Logged in in Offline Mode. Working completely off local database.', 'warning')
-      return true
-    }
-
-    const found = attendants.find(a => a.id.toUpperCase() === id.trim().toUpperCase())
-    if (found && (pin === found.pin || pin === '1234')) {
-      setCurrentAttendant({
-        id: found.id,
-        name: found.name,
-        companyId: activeCompany.id,
-        stationId: activeStation.id,
-        stationName: activeStation.name,
-        isOfflineMode: false
-      })
-      showToast(`Welcome back, ${found.name}!`, 'success')
-      return true
-    }
-    showToast('Invalid Attendant ID or PIN. Use ID: ATT1234 and PIN: 1234', 'error')
+  const loginAttendant = (): boolean => {
+    showToast('Use the unified gateway to sign in.', 'error')
     return false
   }
 
@@ -256,20 +206,8 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     showToast('Logged out of attendant session', 'info')
   }
 
-  // Supervisor Auth
-  const loginSupervisor = (id: string, pin: string): boolean => {
-    if ((id.toUpperCase() === 'SUP001' || id.toUpperCase() === 'SUPERVISOR') && (pin === '123456' || pin === '1234')) {
-      setCurrentSupervisor({
-        id: 'SUP001',
-        name: 'Kwame Mensah',
-        companyId: activeCompany.id,
-        stationId: activeStation.id,
-        stationName: activeStation.name
-      })
-      showToast('Supervisor authenticated successfully.', 'success')
-      return true
-    }
-    showToast('Invalid Supervisor credentials. Use ID: SUP001, PIN: 123456', 'error')
+  const loginSupervisor = (): boolean => {
+    showToast('Use the unified gateway to sign in.', 'error')
     return false
   }
 
@@ -280,6 +218,7 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
   // Start Shift
   const startNewShift = async (params: { pumpId: string; nozzleAssignment: string; openingMeters: Record<string, number> }): Promise<ShiftRecord> => {
+    if (!currentAttendant) throw new Error('An authenticated attendant is required.')
     const shiftCount = shifts.length + 120
     const shiftNumber = `${activeCompany.shortCode}-SHIFT-${String(shiftCount + 1).padStart(5, '0')}`
     const now = new Date()
@@ -291,8 +230,8 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       companyId: activeCompany.id,
       companyName: activeCompany.name,
       shiftNumber,
-      attendantId: currentAttendant?.id || 'ATT1234',
-      attendantName: currentAttendant?.name || 'John Attendant',
+      attendantId: currentAttendant.id,
+      attendantName: currentAttendant.name,
       stationId: activeStation.id,
       stationName: activeStation.name,
       pumpId: params.pumpId || 'Pump 1',
@@ -490,7 +429,7 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     if (isOnline || isLocalWifi) {
       localSyncBus.send({
         type: 'SHIFT_SYNC_PUSH',
-        senderId: currentAttendant?.id || 'ATT1234',
+        senderId: currentAttendant?.id || '',
         senderRole: 'attendant',
         payload: endedShift,
         timestamp: new Date().toISOString()
@@ -532,7 +471,7 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     localSyncBus.send({
       type: 'SHIFT_STATUS_CHANGED',
-      senderId: currentSupervisor?.id || 'SUP001',
+      senderId: currentSupervisor?.id || '',
       senderRole: 'supervisor',
       payload: { shiftId, status, supervisorNotes: notes },
       timestamp: new Date().toISOString()
@@ -581,18 +520,8 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     return { success: true, message: 'Shift successfully imported via QR Code', shift }
   }
 
-  const addNewAttendant = (attendant: { name: string; id: string; pin: string; pumpAssigned: string }) => {
-    const initials = attendant.name.split(' ').map(n => n[0]).join('').toUpperCase() || 'AT'
-    const newAtt = {
-      id: attendant.id.toUpperCase(),
-      name: attendant.name,
-      pin: attendant.pin,
-      status: 'Active',
-      pumpAssigned: attendant.pumpAssigned,
-      avatar: initials
-    }
-    setAttendants(prev => [...prev, newAtt])
-    showToast(`Attendant ${attendant.name} (${attendant.id}) registered!`, 'success')
+  const addNewAttendant = (): void => {
+    showToast('Use the approved self-registration gateway to add staff.', 'info')
   }
 
   const syncSingleShift = async (shiftId: string, channel: 'wifi' | 'cloud' | 'qr'): Promise<boolean> => {
@@ -619,7 +548,7 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     } else if (channel === 'wifi' && (isLocalWifi || isOnline)) {
       localSyncBus.send({
         type: 'SHIFT_SYNC_PUSH',
-        senderId: currentAttendant?.id || 'ATT1234',
+        senderId: currentAttendant?.id || '',
         senderRole: 'attendant',
         payload: shift,
         timestamp: new Date().toISOString()
@@ -658,7 +587,7 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       } else if (isLocalWifi || forcedChannel === 'wifi') {
         localSyncBus.send({
           type: 'SHIFT_SYNC_PUSH',
-          senderId: currentAttendant?.id || 'ATT1234',
+          senderId: currentAttendant?.id || '',
           senderRole: 'attendant',
           payload: shift,
           timestamp: new Date().toISOString()
@@ -699,9 +628,8 @@ export const ForecourtProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     await db.transactions.clear()
     await db.receipts.clear()
     await db.syncQueue.clear()
-    await seedInitialDatabase()
     await refreshShiftsFromDB()
-    showToast('Database reset to initial demo seeds!', 'info')
+    showToast('Local demo records cleared.', 'info')
   }
 
   const pendingCount = shifts.filter(s => s.syncStatus === 'pending' || s.syncStatus === 'saved_local').length

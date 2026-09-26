@@ -65,7 +65,7 @@ export const SuperAdminDashboard: React.FC<{
   const [createModal, setCreateModal] = useState(false)
   const [omcName, setOmcName] = useState('')
   const [omcCode, setOmcCode] = useState('')
-  const [omcPin, setOmcPin] = useState('9999')
+  const [omcPin, setOmcPin] = useState('')
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
 
@@ -132,7 +132,7 @@ export const SuperAdminDashboard: React.FC<{
       setCreateModal(false)
       setOmcName('')
       setOmcCode('')
-      setOmcPin('9999')
+      setOmcPin('')
       setRefreshKey(k => k + 1)
     } catch (e) {
       setCreateError(e instanceof Error ? e.message : 'Error creating company')

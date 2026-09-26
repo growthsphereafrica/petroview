@@ -59,14 +59,16 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const { listAttendants } = await import('../../core/infra/repositories')
-      const [s, a] = await Promise.all([supervisorService.listShifts(), listAttendants()])
+      const [s, a] = await Promise.all([
+        supervisorService.listShifts(),
+        supervisorService.listAttendants(session.stationId),
+      ])
       setShifts(s)
       setAttendants(a)
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [session.stationId])
 
   useEffect(() => {
     void refresh()
@@ -564,7 +566,7 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
     setError(null)
     try {
       await supervisorService.registerAttendant(
-        { employeeCode: newCode, fullName: newName, pin: newPin },
+        { employeeCode: newCode, fullName: newName, pin: newPin, stationId: session.stationId },
         { id: session.employeeCode, name: session.fullName, code: session.employeeCode },
       )
       setRegisterOpen(false)

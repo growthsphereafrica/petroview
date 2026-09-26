@@ -95,8 +95,8 @@ export const SupervisorAttendantsScreen: React.FC<{
   } | null>(null)
   const [editBusy, setEditBusy] = useState(false)
 
-  const stationId = supervisor?.stationId || 'STN-GV-042'
-  const stationName = supervisor ? getStationName(supervisor.stationId) : 'Station Forecourt'
+  const stationId = supervisor?.stationId || ''
+  const stationName = supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Forecourt'
 
   // Fetch summary data & expenses for this station
   const loadStationSummary = useMemo(
@@ -162,6 +162,7 @@ export const SupervisorAttendantsScreen: React.FC<{
         employeeCode: regEmployeeCode,
         pin: regPin,
         pumpId: regPumpId,
+        stationId,
       })
       onToast(`Attendant ${regEmployeeCode.toUpperCase()} registered at ${stationName}.`, 'success')
       setRegFullName('')
@@ -298,9 +299,10 @@ export const SupervisorAttendantsScreen: React.FC<{
   // Filtered list of attendants
   const filteredRoster = attendants.filter(
     a =>
-      !searchQuery.trim() ||
-      a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      a.employeeCode.toLowerCase().includes(searchQuery.toLowerCase()),
+      (!stationId || a.stationId === stationId) &&
+      (!searchQuery.trim() ||
+        a.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        a.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())),
   )
 
   const filteredSummaries = (summaryData?.attendants || []).filter(

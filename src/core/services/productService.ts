@@ -10,9 +10,10 @@
  */
 
 import { liveSyncBus } from './liveSyncBus'
+import { getBackendUrl } from '../../services/backendApiService'
 import type { Product, ProductCategory } from '../domain/types'
 
-const API_BASE = (import.meta.env.VITE_API_URL as string | undefined) ?? ''
+const API_BASE = getBackendUrl()
 const CACHE_KEY = 'pv_products_cache'
 const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -53,7 +54,7 @@ function invalidateCache(): void {
 function getAuthHeader(): Record<string, string> {
   // The session token is saved to localStorage by the unified login screen.
   try {
-    const raw = localStorage.getItem('mvp_unified_session')
+    const raw = localStorage.getItem('mvp_active_session')
     if (raw) {
       const session = JSON.parse(raw) as { token?: string }
       if (session?.token) return { Authorization: `Bearer ${session.token}` }

@@ -8,11 +8,13 @@ import { mobileAuth, type MobileRole } from '../core/services/authService'
 
 export interface MobileSession {
   role: MobileRole
+  userId: string
   fullName: string
   employeeCode: string
-  stationId?: string | null
+  stationId: string
   stationName?: string
-  companyShortCode?: string | null
+  companyId: string
+  companyShortCode: string | null
 }
 
 export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void }> = ({ onAuthenticated }) => {
@@ -26,22 +28,16 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     setError(null)
     setSigningIn(true)
     try {
-      const { role, attendant, supervisor, cloudSession } = await mobileAuth.authenticate(employeeCode, pin)
-      if (role === 'superadmin' || role === 'headoffice') {
-        throw new Error('This mobile app is exclusively for Forecourt Attendants and Station Supervisors. OMC HQ Admin and Super Admin portals must be accessed via desktop browser.')
-      }
-      const fullName =
-        cloudSession?.fullName ||
-        supervisor?.fullName ||
-        attendant?.fullName ||
-        (role === 'supervisor' ? 'Station Supervisor' : 'Pump Attendant')
+      const { role, session } = await mobileAuth.authenticate(employeeCode, pin)
       onAuthenticated({
         role,
-        fullName,
-        employeeCode: employeeCode.toUpperCase(),
-        stationId: cloudSession?.stationId ?? null,
-        stationName: cloudSession?.stationName,
-        companyShortCode: cloudSession?.companyShortCode ?? null,
+        userId: session.userId,
+        fullName: session.fullName,
+        employeeCode: session.employeeCode,
+        stationId: session.stationId,
+        stationName: session.stationName,
+        companyId: session.companyId,
+        companyShortCode: session.companyShortCode,
       })
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)

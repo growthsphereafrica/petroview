@@ -21,11 +21,29 @@ export function emptyPayments(): PaymentsBreakdown {
 }
 
 export function roundMoney(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  return roundTo(value, 2)
 }
 
 export function roundLitres(value: number): number {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  return roundTo(value, 2)
+}
+
+/**
+ * Half-up rounding to a fixed number of decimal places, symmetric about zero.
+ *
+ * Number.EPSILON corrects binary representation error (1.005 is really
+ * 1.00499999...), but it can only be added to a positive value. Added
+ * unconditionally it biases negatives toward zero, so -14.805 rounded to -14.80
+ * while 14.805 rounded to 14.81. Variance is a signed money value, so the two
+ * sides have to agree.
+ */
+function roundTo(value: number, decimals: number): number {
+  if (!Number.isFinite(value)) return value
+  const factor = 10 ** decimals
+  const magnitude = Math.abs(value)
+  const rounded = Math.round((magnitude + Number.EPSILON) * factor) / factor
+  if (rounded === 0) return 0
+  return value < 0 ? -rounded : rounded
 }
 
 export function sumPayments(payments: PaymentsBreakdown): number {
@@ -38,6 +56,38 @@ export function sumSales(sales: FuelSale[]): number {
 
 export function saleAmount(litres: number, unitPrice: number): number {
   return roundMoney(litres * unitPrice)
+}
+
+/**
+ * Last-resort price list, used only when a device has no product catalogue
+ * loaded. Mirrors the server's seeded products so an offline terminal still
+ * charges the company price.
+ */
+export const FALLBACK_UNIT_PRICES: Record<string, number> = {
+  PMS: 14.8,
+  AGO: 15.2,
+  DPK: 13.9,
+  KERO: 13.5,
+  RON95: 15.9,
+  'AGO-PREM': 15.8,
+  LPG: 16.5,
+  PREMIX: 11.2,
+}
+
+/**
+ * The single source of truth for "what does this fuel cost right now".
+ *
+ * This deliberately lives in one place. The screen previously carried three
+ * separate fallback chains — one two-way and two four-way — so with no product
+ * list loaded the edit preview showed 14.80 while the save wrote 13.90 for DPK
+ * and 13.50 for KERO. A preview that disagrees with the persisted value is
+ * worse than no preview, so both now call this.
+ */
+export function resolveUnitPrice(products: Array<{ code: string; unitPrice: number }>, fuelCode: string): number {
+  const match = products.find(product => product.code === fuelCode)
+  const price = match?.unitPrice
+  if (typeof price === 'number' && Number.isFinite(price) && price > 0) return price
+  return FALLBACK_UNIT_PRICES[fuelCode] ?? FALLBACK_UNIT_PRICES.PMS
 }
 
 /**

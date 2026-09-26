@@ -5,7 +5,6 @@
  */
 
 import { prodDb } from '../infra/db'
-import { hashPin } from '../infra/password'
 import { liveSyncBus } from './liveSyncBus'
 import { auditLogRepo } from '../infra/repositories'
 import type { Company, CompanyStation, Supervisor } from '../domain/types'
@@ -101,7 +100,6 @@ export class CompanyService {
     const trimmedShortCode = input.shortCode.trim().toUpperCase()
     const now = new Date().toISOString()
     const adminCode = `${trimmedShortCode}-HQ01`
-    const { salt, hash } = await hashPin(input.adminPin)
 
     const initialStationsToPass = input.initialStations?.length
       ? input.initialStations.map((st, idx) => ({
@@ -116,22 +114,19 @@ export class CompanyService {
     let companyId = `comp-${trimmedShortCode.toLowerCase()}`
 
     // Call backend API to create company & auto-provision HQ admin on live server
-    try {
-      const backendRes = await backendCreateCompany({
-        name: input.name.trim(),
-        shortCode: trimmedShortCode,
-        tagline: input.tagline,
-        phone: input.phone,
-        adminFullName: input.adminName.trim(),
-        adminPin: input.adminPin,
-        initialStations: initialStationsToPass,
-      })
-      if (backendRes.company?.id) {
-        companyId = backendRes.company.id
-      }
-    } catch (backendErr: any) {
-      console.warn('[companyService] Backend sync warning:', backendErr)
+    const backendRes = await backendCreateCompany({
+      name: input.name.trim(),
+      shortCode: trimmedShortCode,
+      tagline: input.tagline,
+      phone: input.phone,
+      adminFullName: input.adminName.trim(),
+      adminPin: input.adminPin,
+      initialStations: initialStationsToPass,
+    })
+    if (!backendRes?.company?.id) {
+      throw new Error('Failed to create company on backend server.')
     }
+    companyId = backendRes.company.id
 
     const company: Company = {
       id: companyId,
@@ -178,8 +173,8 @@ export class CompanyService {
       id: `sup-${adminCode.toLowerCase()}`,
       employeeCode: adminCode,
       fullName: input.adminName.trim(),
-      pinSalt: salt,
-      pinHash: hash,
+      pinSalt: 'synced_session',
+      pinHash: 'synced_session',
       stationId: primaryStationId,
       companyId,
       companyShortCode: trimmedShortCode,
@@ -254,17 +249,13 @@ export class CompanyService {
     const stId = `stn-${shortCode.toLowerCase()}-${stationCode.toLowerCase()}`
 
     // Sync to backend API
-    try {
-      await backendCreateStation(companyId, {
-        name: station.name.trim(),
-        code: stationCode,
-        location: station.location.trim(),
-        region: station.region.trim(),
-        pumpsCount: station.pumpsCount || 4,
-      })
-    } catch (err) {
-      console.warn('[companyService] Backend create station warning:', err)
-    }
+    await backendCreateStation(companyId, {
+      name: station.name.trim(),
+      code: stationCode,
+      location: station.location.trim(),
+      region: station.region.trim(),
+      pumpsCount: station.pumpsCount || 4,
+    })
 
     const stObj: CompanyStation = {
       id: stId,
@@ -325,33 +316,25 @@ export class CompanyService {
     }
 
     // Sync to backend (global)
-    try {
-      await backendUpdateCompany(companyId, {
-        name: updated.name,
-        tagline: updated.tagline,
-        phone: updated.phone,
-        primaryColor: updated.primaryColor,
-      })
-    } catch (backendErr) {
-      console.warn('[companyService] Backend updateCompany warning:', backendErr)
-    }
+    await backendUpdateCompany(companyId, {
+      name: updated.name,
+      tagline: updated.tagline,
+      phone: updated.phone,
+      primaryColor: updated.primaryColor,
+    })
 
     await prodDb.companies.put(updated)
 
-    // If admin PIN is being updated, update the supervisor account
+    // If admin PIN is being updated, sync to backend and update the supervisor account
     if (updates.adminPin && updates.adminPin.length === 4) {
-      const { salt, hash } = await hashPin(updates.adminPin)
       const hqSupervisor = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(company.adminCode).first()
       if (hqSupervisor) {
+        await backendResetPin({ userId: hqSupervisor.id, employeeCode: company.adminCode, role: 'supervisor', newPin: updates.adminPin })
         await prodDb.supervisors.update(hqSupervisor.id, {
           fullName: updated.adminName,
-          pinSalt: salt,
-          pinHash: hash,
+          pinSalt: 'synced_session',
+          pinHash: 'synced_session',
         })
-        // Sync PIN reset to backend
-        try {
-          await backendResetPin({ userId: hqSupervisor.id, employeeCode: company.adminCode, role: 'supervisor', newPin: updates.adminPin })
-        } catch { /* best effort */ }
       }
     }
 
@@ -376,11 +359,7 @@ export class CompanyService {
     const shortCode = company?.shortCode
 
     // 1. Delete on live backend server first
-    try {
-      await backendDeleteCompany(companyId)
-    } catch (err) {
-      console.warn('[companyService] Backend delete company warning:', err)
-    }
+    await backendDeleteCompany(companyId)
 
     // 2. Cascade delete in local Dexie DB
     await prodDb.companies.delete(companyId)
@@ -442,17 +421,13 @@ export class CompanyService {
     }
 
     // Sync to backend (global)
-    try {
-      await backendUpdateStation(station.companyId, stationId, {
-        name: updated.name,
-        code: updated.code,
-        location: updated.location,
-        region: updated.region,
-        pumpsCount: updated.pumpsCount,
-      })
-    } catch (backendErr) {
-      console.warn('[companyService] Backend updateStation warning:', backendErr)
-    }
+    await backendUpdateStation(station.companyId, stationId, {
+      name: updated.name,
+      code: updated.code,
+      location: updated.location,
+      region: updated.region,
+      pumpsCount: updated.pumpsCount,
+    })
 
     await prodDb.companyStations.put(updated)
     return updated
@@ -462,11 +437,7 @@ export class CompanyService {
   async deleteStation(stationId: string): Promise<void> {
     const station = await prodDb.companyStations.get(stationId)
     if (station) {
-      try {
-        await backendDeleteStation(station.companyId, stationId)
-      } catch (err) {
-        console.warn('[companyService] Backend delete station warning:', err)
-      }
+      await backendDeleteStation(station.companyId, stationId)
     }
     await prodDb.companyStations.delete(stationId)
   }

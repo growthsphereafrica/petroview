@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db'
-import { authenticate, requireRole, type AuthRequest } from '../middleware'
 import { newToken } from '../auth'
+import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 
 export const productsRouter = Router()
 
@@ -19,217 +19,196 @@ interface ProductRow {
   updatedAt: string
 }
 
-function rowToProduct(r: ProductRow) {
-  return { ...r, active: r.active === 1 }
+function sessionOf(req: AuthRequest): SessionClaims {
+  return req.session!
 }
 
-// ── GET /api/products ─────────────────────────────────────────────────────────
-// Returns global products + optional company-specific products.
-// ?companyId=  filter to a specific OMC (also returns global products merged)
-// ?all=1       return every product regardless of companyId (super admin view)
-productsRouter.get('/', (req, res) => {
-  const companyId = req.query.companyId ? String(req.query.companyId) : null
-  const showAll   = req.query.all === '1'
+function rowToProduct(row: ProductRow) {
+  return { ...row, active: Number(row.active) === 1 }
+}
 
-  let rows: ProductRow[]
-
-  if (showAll) {
-    rows = db.prepare('SELECT * FROM products ORDER BY name ASC').all() as ProductRow[]
-  } else if (companyId && companyId !== 'ALL') {
-    // Global products that are not overridden by this company + company-specific products
-    rows = db.prepare(`
-      SELECT * FROM products
-      WHERE (companyId IS NULL OR companyId = ?)
-      ORDER BY CASE WHEN companyId IS NULL THEN 1 ELSE 0 END, name ASC
-    `).all(companyId) as ProductRow[]
-  } else {
-    // Default: global catalog only
-    rows = db.prepare(`
-      SELECT * FROM products
-      WHERE companyId IS NULL
-      ORDER BY name ASC
-    `).all() as ProductRow[]
+function requestedCompany(session: SessionClaims, value: unknown): string | null {
+  if (session.role === 'superadmin') {
+    const companyId = typeof value === 'string' ? value.trim() : ''
+    return companyId && companyId !== 'ALL' ? companyId : null
   }
+  return session.companyId
+}
 
-  res.json(rows.map(rowToProduct))
-})
+function canManageProduct(session: SessionClaims, product: Pick<ProductRow, 'companyId'>): boolean {
+  if (session.role === 'superadmin') return true
+  return !!session.companyId && product.companyId === session.companyId
+}
 
-// ── GET /api/products/active ──────────────────────────────────────────────────
-// Returns only active products for forecourt use (attendants, supervisors).
-// Merges global + company-specific, with company version taking precedence.
-productsRouter.get('/active', (req, res) => {
-  const companyId = req.query.companyId ? String(req.query.companyId) : null
+function productCode(value: unknown): string {
+  const code = typeof value === 'string' ? value.trim().toUpperCase() : ''
+  if (!/^[A-Z0-9][A-Z0-9_-]{1,30}$/.test(code)) throw new Error('Invalid product code.')
+  return code
+}
 
-  if (companyId && companyId !== 'GLOBAL') {
-    // Company-specific products override global ones with the same code
-    const companyProds = db.prepare(`
-      SELECT * FROM products WHERE companyId = ? AND active = 1
-    `).all(companyId) as ProductRow[]
+function productName(value: unknown): string {
+  const name = typeof value === 'string' ? value.trim() : ''
+  if (!name || name.length > 120) throw new Error('Invalid product name.')
+  return name
+}
 
-    const companyCodes = new Set(companyProds.map(p => p.code))
+function priceValue(value: unknown): number {
+  const price = Number(value)
+  if (!Number.isFinite(price) || price <= 0 || price > 1_000_000_000) throw new Error('unitPrice must be a positive finite number.')
+  return Math.round(price * 100) / 100
+}
 
-    const globalProds = db.prepare(`
-      SELECT * FROM products WHERE companyId IS NULL AND active = 1
-    `).all() as ProductRow[]
-
-    const merged = [
-      ...companyProds,
-      ...globalProds.filter(g => !companyCodes.has(g.code)),
-    ].sort((a, b) => a.name.localeCompare(b.name))
-
-    res.json(merged.map(rowToProduct))
-    return
-  }
-
-  const rows = db.prepare(`
-    SELECT * FROM products WHERE companyId IS NULL AND active = 1 ORDER BY name ASC
-  `).all() as ProductRow[]
-
-  res.json(rows.map(rowToProduct))
-})
-
-// ── POST /api/products ────────────────────────────────────────────────────────
-// Create a new product (superadmin or headoffice).
-productsRouter.post('/', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const { companyId, code, name, category, unitPrice, unit, color, active } = req.body ?? {}
-
-  if (!code?.trim() || !name?.trim()) {
-    res.status(400).json({ error: 'BAD_REQUEST', message: 'code and name are required.' })
-    return
-  }
-  const price = Number(unitPrice)
-  if (isNaN(price) || price <= 0) {
-    res.status(400).json({ error: 'BAD_REQUEST', message: 'unitPrice must be a positive number.' })
-    return
-  }
-
-  const now = new Date().toISOString()
-  const id = `prod-${newToken().slice(0, 12)}`
-  const cleanCode = String(code).trim().toUpperCase()
-  const cleanCompanyId = companyId?.trim() || null
-
-  db.prepare(`
-    INSERT INTO products (id, companyId, code, name, category, unitPrice, unit, color, active, createdAt, updatedAt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    cleanCompanyId,
-    cleanCode,
-    String(name).trim(),
-    String(category || 'FUEL'),
-    Math.round(price * 100) / 100,
-    String(unit || 'Litre').trim(),
-    String(color || '#F97316').trim(),
-    active === false ? 0 : 1,
-    now,
-    now,
+function audit(req: AuthRequest, action: string, product: ProductRow, notes: string | null, now: string): void {
+  const session = sessionOf(req)
+  db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
+    newToken(), action, session.userId, session.fullName, session.role.toUpperCase(), product.id, `Product ${product.code} (${product.name})`, notes, now, JSON.stringify({ companyId: product.companyId, price: product.unitPrice }),
   )
+}
 
-  // Audit
-  db.prepare(
-    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(newToken(), 'PRODUCT_CREATED', req.session?.userId ?? '', req.session?.fullName ?? 'Admin', req.session?.role?.toUpperCase() ?? 'SUPERADMIN', id, `Created product ${cleanCode} (${name})`, null, now, JSON.stringify({ companyId: cleanCompanyId, price }))
+productsRouter.get('/', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const requested = typeof req.query.companyId === 'string' ? req.query.companyId : null
+  const companyId = requestedCompany(session, requested)
+  const showAll = req.query.all === '1'
+  if (showAll && session.role !== 'superadmin') {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'Only Super Admin can list all products.' })
+    return
+  }
+  let rows: ProductRow[]
+  if (showAll || !companyId) {
+    rows = db.prepare('SELECT * FROM products ORDER BY name ASC LIMIT 5000').all() as ProductRow[]
+  } else {
+    rows = db.prepare('SELECT * FROM products WHERE companyId IS NULL OR companyId = ? ORDER BY CASE WHEN companyId IS NULL THEN 1 ELSE 0 END, name ASC LIMIT 5000').all(companyId) as ProductRow[]
+  }
+  res.json(rows.map(rowToProduct))
+})
 
+productsRouter.get('/active', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const companyId = requestedCompany(session, typeof req.query.companyId === 'string' ? req.query.companyId : null)
+  let rows: ProductRow[]
+  if (companyId) {
+    rows = db.prepare('SELECT * FROM products WHERE active = 1 AND (companyId IS NULL OR companyId = ?) ORDER BY CASE WHEN companyId IS NULL THEN 1 ELSE 0 END, name ASC LIMIT 5000').all(companyId) as ProductRow[]
+  } else {
+    rows = db.prepare('SELECT * FROM products WHERE active = 1 AND companyId IS NULL ORDER BY name ASC LIMIT 5000').all() as ProductRow[]
+  }
+  res.json(rows.map(rowToProduct))
+})
+
+productsRouter.post('/', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const body = (req.body ?? {}) as Record<string, unknown>
+  let code: string
+  let name: string
+  let price: number
+  try {
+    code = productCode(body.code)
+    name = productName(body.name)
+    price = priceValue(body.unitPrice)
+  } catch (error) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid product data.' })
+    return
+  }
+  const requestedCompany = typeof body.companyId === 'string' && body.companyId.trim() ? body.companyId.trim() : null
+  const companyId = session.role === 'superadmin' ? requestedCompany : session.companyId
+  if (session.role !== 'superadmin' && (!companyId || requestedCompany !== companyId)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You can only create products for your company.' })
+    return
+  }
+  if (db.prepare('SELECT 1 FROM products WHERE companyId IS ? AND code = ? COLLATE NOCASE').get(companyId, code)) {
+    res.status(409).json({ error: 'CONFLICT', message: 'A product with that code already exists for this company.' })
+    return
+  }
+  const id = `prod-${newToken()}`
+  const now = new Date().toISOString()
+  const row = {
+    id,
+    companyId,
+    code,
+    name,
+    category: typeof body.category === 'string' && body.category.trim() ? body.category.trim().slice(0, 40) : 'FUEL',
+    unitPrice: price,
+    unit: typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim().slice(0, 30) : 'Litre',
+    color: typeof body.color === 'string' && body.color.trim() ? body.color.trim().slice(0, 20) : '#F97316',
+    active: body.active === false ? 0 : 1,
+  }
+  try {
+    db.prepare('INSERT INTO products (id, companyId, code, name, category, unitPrice, unit, color, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?)').run(row.id, row.companyId, row.code, row.name, row.category, row.unitPrice, row.unit, row.color, row.active, now, now)
+  } catch {
+    res.status(409).json({ error: 'CONFLICT', message: 'A product with that code already exists for this company.' })
+    return
+  }
   const created = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as ProductRow
+  audit(req, 'PRODUCT_CREATED', created, null, now)
   res.status(201).json(rowToProduct(created))
 })
 
-// ── PUT /api/products/:id ─────────────────────────────────────────────────────
-// Update a product's name, price, unit, color, or active status.
 productsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const { id } = req.params
-  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as ProductRow | undefined
-
+  const session = sessionOf(req)
+  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as ProductRow | undefined
   if (!existing) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Product not found.' })
     return
   }
-
-  const { name, unitPrice, category, unit, color, active } = req.body ?? {}
-  const now = new Date().toISOString()
-
-  const newPrice = unitPrice !== undefined ? Number(unitPrice) : existing.unitPrice
-  if (isNaN(newPrice) || newPrice <= 0) {
-    res.status(400).json({ error: 'BAD_REQUEST', message: 'unitPrice must be a positive number.' })
+  if (!canManageProduct(session, existing)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot modify this product.' })
     return
   }
-
-  db.prepare(`
-    UPDATE products SET
-      name = ?,
-      unitPrice = ?,
-      category = ?,
-      unit = ?,
-      color = ?,
-      active = ?,
-      updatedAt = ?
-    WHERE id = ?
-  `).run(
-    name !== undefined ? String(name).trim() : existing.name,
-    Math.round(newPrice * 100) / 100,
-    category !== undefined ? String(category) : existing.category,
-    unit !== undefined ? String(unit).trim() : existing.unit,
-    color !== undefined ? String(color).trim() : existing.color,
-    active !== undefined ? (active ? 1 : 0) : existing.active,
+  const body = (req.body ?? {}) as Record<string, unknown>
+  let name: string
+  let price: number
+  try {
+    name = body.name === undefined ? existing.name : productName(body.name)
+    price = body.unitPrice === undefined ? existing.unitPrice : priceValue(body.unitPrice)
+  } catch (error) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: error instanceof Error ? error.message : 'Invalid product data.' })
+    return
+  }
+  const now = new Date().toISOString()
+  const updated = db.prepare(`UPDATE products SET name = ?, unitPrice = ?, category = ?, unit = ?, color = ?, active = ?, updatedAt = ? WHERE id = ?`).run(
+    name,
+    price,
+    body.category !== undefined ? String(body.category).trim().slice(0, 40) : existing.category,
+    body.unit !== undefined ? String(body.unit).trim().slice(0, 30) : existing.unit,
+    body.color !== undefined ? String(body.color).trim().slice(0, 20) : existing.color,
+    body.active !== undefined ? (body.active ? 1 : 0) : existing.active,
     now,
-    id,
+    existing.id,
   )
-
-  // Audit
-  db.prepare(
-    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(newToken(), 'PRODUCT_UPDATED', req.session?.userId ?? '', req.session?.fullName ?? 'Admin', req.session?.role?.toUpperCase() ?? 'SUPERADMIN', id, `Updated product ${existing.code} — price: GHS ${newPrice.toFixed(2)}`, null, now, null)
-
-  const updated = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as ProductRow
-  res.json(rowToProduct(updated))
+  if (updated.changes !== 1) {
+    res.status(409).json({ error: 'CONFLICT', message: 'Product was not updated.' })
+    return
+  }
+  const result = db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id) as ProductRow
+  audit(req, 'PRODUCT_UPDATED', result, null, now)
+  res.json(rowToProduct(result))
 })
 
-// ── DELETE /api/products/:id ──────────────────────────────────────────────────
-// Permanently deletes a product. Deleted products are NEVER auto-restored.
 productsRouter.delete('/:id', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const { id } = req.params
-  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(id) as ProductRow | undefined
-
+  const session = sessionOf(req)
+  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as ProductRow | undefined
   if (!existing) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Product not found.' })
     return
   }
-
-  db.prepare('DELETE FROM products WHERE id = ?').run(id)
-
-  // Audit
-  const now = new Date().toISOString()
-  db.prepare(
-    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(newToken(), 'PRODUCT_DELETED', req.session?.userId ?? '', req.session?.fullName ?? 'Admin', req.session?.role?.toUpperCase() ?? 'SUPERADMIN', id, `Deleted product ${existing.code} (${existing.name})`, null, now, null)
-
-  res.json({ success: true, id, code: existing.code, name: existing.name })
+  if (!canManageProduct(session, existing)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot delete this product.' })
+    return
+  }
+  db.prepare('UPDATE products SET active = 0, updatedAt = ? WHERE id = ?').run(new Date().toISOString(), existing.id)
+  audit(req, 'PRODUCT_DELETED', existing, 'Product deactivated', new Date().toISOString())
+  res.json({ success: true, id: existing.id, code: existing.code, name: existing.name })
 })
 
-// ── GET /api/products/price-map ───────────────────────────────────────────────
-// Returns { CODE: price } map for shift calculations. Used by attendants.
-productsRouter.get('/price-map', (req, res) => {
-  const companyId = req.query.companyId ? String(req.query.companyId) : null
-
-  let rows: ProductRow[]
-  if (companyId && companyId !== 'GLOBAL') {
-    const companyProds = db.prepare('SELECT * FROM products WHERE companyId = ? AND active = 1').all(companyId) as ProductRow[]
-    const companyCodes = new Set(companyProds.map(p => p.code))
-    const globalProds = db.prepare('SELECT * FROM products WHERE companyId IS NULL AND active = 1').all() as ProductRow[]
-    rows = [...companyProds, ...globalProds.filter(g => !companyCodes.has(g.code))]
-  } else {
-    rows = db.prepare('SELECT * FROM products WHERE companyId IS NULL AND active = 1').all() as ProductRow[]
-  }
-
+productsRouter.get('/price-map', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const companyId = requestedCompany(session, typeof req.query.companyId === 'string' ? req.query.companyId : null)
+  const rows = companyId
+    ? db.prepare('SELECT code, unitPrice FROM products WHERE active = 1 AND (companyId IS NULL OR companyId = ?)').all(companyId) as Array<{ code: string; unitPrice: number }>
+    : db.prepare('SELECT code, unitPrice FROM products WHERE active = 1 AND companyId IS NULL').all() as Array<{ code: string; unitPrice: number }>
   const map: Record<string, number> = {}
-  for (const r of rows) {
-    map[r.code] = r.unitPrice
+  for (const row of rows) {
+    if (Number.isFinite(row.unitPrice) && row.unitPrice > 0) map[row.code.toUpperCase()] = row.unitPrice
   }
-  // Safety fallbacks if core fuels were deleted
-  if (!map.PMS)  map.PMS  = 14.8
-  if (!map.AGO)  map.AGO  = 15.2
-  if (!map.DPK)  map.DPK  = 13.9
-  if (!map.KERO) map.KERO = 13.5
-
   res.json(map)
 })

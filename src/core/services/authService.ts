@@ -7,7 +7,7 @@
  */
 
 import { DomainError } from '../domain/errors'
-import { LOCKOUT_MS, MAX_PIN_ATTEMPTS, PIN_LENGTH, SESSION_TTL_MS } from '../domain/config'
+import { isPinShape, LOCKOUT_MS, MAX_PIN_ATTEMPTS, SESSION_TTL_MS } from '../domain/config'
 import { verifyPin } from '../infra/password'
 import { attendantRepo, sessionRepo } from '../infra/repositories'
 import type { Attendant, AttendantSession } from '../domain/types'
@@ -18,8 +18,8 @@ export interface AuthenticatedAttendant {
 }
 
 function assertPinShape(pin: string): void {
-  if (!/^\d{4}$/.test(pin)) {
-    throw new DomainError('AUTH_INVALID_CREDENTIALS', `PIN must be ${PIN_LENGTH} digits.`)
+  if (!isPinShape(pin)) {
+    throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 to 32 digits.')
   }
 }
 
@@ -34,10 +34,12 @@ export class AuthService {
     }
 
     if (attendant.approvalStatus === 'PENDING' || !attendant.active) {
-      // Auto-activate & approve self-registered attendants so they can log in immediately
-      await attendantRepo.approve(attendant.id, 'System Auto-Approval')
-      attendant.approvalStatus = 'APPROVED'
-      attendant.active = true
+      throw new DomainError(
+        'AUTH_ACCOUNT_PENDING',
+        `Registration for ${attendant.employeeCode} is pending approval.`,
+        undefined,
+        { attendantId: attendant.id, approvalStatus: 'PENDING' }
+      )
     }
 
     if (attendant.approvalStatus === 'REJECTED') {
@@ -47,6 +49,10 @@ export class AuthService {
         undefined,
         { attendantId: attendant.id, approvalStatus: 'REJECTED' }
       )
+    }
+
+    if (!attendant.pinSalt || !attendant.pinHash || attendant.pinSalt === 'synced_session' || attendant.pinHash === 'synced_session') {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Direct local authentication is disabled for cloud-synced accounts. Sign in through the unified portal.')
     }
 
     if (attendant.lockoutUntil && new Date(attendant.lockoutUntil).getTime() > Date.now()) {

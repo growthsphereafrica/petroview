@@ -8,16 +8,12 @@ import { ArrowLeft, Flame, KeyRound, ShieldAlert, ShieldCheck, Sparkles, UserChe
 import { useAttendantSession } from '../providers'
 import { describeError } from '../../../core/domain/errors'
 import { MVPLogo } from '../../../components/common/MVPLogo'
-import { supervisorRepo, attendantRepo } from '../../../core/infra/repositories'
-import { supervisorService } from '../../../core/services/supervisorService'
-import { companyService } from '../../../core/services/companyService'
+import { backendLogin } from '../../../services/backendApiService'
 import { getStationName } from '../../../core/domain/config'
-import { seedProductionData } from '../../../core/infra/db'
 import { clearUnifiedSession, saveUnifiedSession } from '../../unified/UnifiedLoginScreen'
-import type { UnifiedRole } from '../../../core/domain/types'
 
 export const LoginScreen: React.FC = () => {
-  const { signIn, signingIn } = useAttendantSession()
+  const { signingIn } = useAttendantSession()
   const [employeeCode, setEmployeeCode] = useState('')
   const [pin, setPin] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -34,73 +30,31 @@ export const LoginScreen: React.FC = () => {
     setError(null)
     setIsSubmitting(true)
     try {
-      await seedProductionData()
       const rawCode = employeeCode.trim()
       const rawPin = pin.trim()
 
       if (!rawCode) throw new Error('Please enter your Staff / Admin Code.')
-      if (rawPin.length !== 4) throw new Error('PIN must be 4 digits.')
+      if (!/^\d{4}$/.test(rawPin)) throw new Error('PIN must be 4 digits.')
 
       const code =
         rawCode.toUpperCase() === 'SUPERADMIN' || rawCode.toUpperCase() === 'SUPER ADMIN'
           ? 'SUPER-ADMIN'
           : rawCode.toUpperCase()
+      const result = await backendLogin(code, rawPin)
 
-      // 1. Check if user is in Supervisors / Super-Admin / HQ table
-      const supervisorMatch = await supervisorRepo.findByEmployeeCode(code)
-      if (supervisorMatch) {
-        const { supervisor, session } = await supervisorService.authenticate(supervisorMatch.employeeCode, rawPin)
-        localStorage.setItem('mvp_prod_supervisor_token', session.token)
-
-        const isSuperAdmin =
-          supervisor.isSuperAdmin ||
-          supervisor.employeeCode === 'SUPER-ADMIN' ||
-          supervisor.employeeCode === 'PETRO-MASTER'
-        const isHQ =
-          isSuperAdmin ||
-          supervisor.isHeadOffice ||
-          supervisor.employeeCode.includes('HQ') ||
-          supervisor.employeeCode === 'HQ-ADMIN'
-
-        const finalRole: UnifiedRole = isSuperAdmin
-          ? 'superadmin'
-          : isHQ
-          ? 'headoffice'
-          : 'supervisor'
-
-        const comp = supervisor.companyId ? await companyService.getCompany(supervisor.companyId) : null
-
-        saveUnifiedSession({
-          role: finalRole,
-          fullName: supervisor.fullName || (isSuperAdmin ? 'Super Admin' : 'Supervisor'),
-          employeeCode: supervisor.employeeCode,
-          stationId: supervisor.stationId,
-          stationName: supervisor.stationId ? getStationName(supervisor.stationId) : 'Global Enterprise Network',
-          companyId: supervisor.companyId || comp?.id,
-          companyName: comp?.name || (isSuperAdmin ? 'PetroView Platform Owner' : 'PetroView Downstream'),
-          companyShortCode: supervisor.companyShortCode || comp?.shortCode,
-        })
-
-        window.location.reload()
-        return
-      }
-
-      // 2. Otherwise authenticate as Attendant
-      await signIn(code, rawPin)
-      const attendantMatch = await attendantRepo.findByEmployeeCode(code)
-      if (attendantMatch) {
-        const comp = attendantMatch.companyId ? await companyService.getCompany(attendantMatch.companyId) : null
-        saveUnifiedSession({
-          role: 'attendant',
-          fullName: attendantMatch.fullName,
-          employeeCode: attendantMatch.employeeCode,
-          stationId: attendantMatch.stationId,
-          stationName: getStationName(attendantMatch.stationId),
-          companyId: attendantMatch.companyId || comp?.id,
-          companyName: comp?.name || 'PetroView Downstream',
-          companyShortCode: attendantMatch.companyShortCode || comp?.shortCode,
-        })
-      }
+      saveUnifiedSession({
+        token: result.token,
+        expiresAt: result.expiresAt,
+        role: result.role,
+        fullName: result.fullName,
+        employeeCode: result.employeeCode,
+        stationId: result.stationId ?? undefined,
+        stationName: result.stationId ? getStationName(result.stationId) : 'Global Enterprise Network',
+        companyId: result.companyId ?? undefined,
+        companyName: result.companyShortCode || 'PetroView',
+        companyShortCode: result.companyShortCode ?? undefined,
+      })
+      window.location.reload()
     } catch (err) {
       setError(describeError(err))
       setPin('')

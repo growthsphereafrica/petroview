@@ -2,14 +2,61 @@
  * Supervisor settings — device info, demo reset and sign out.
  */
 
-import React from 'react'
-import { Database, LogOut, RotateCcw } from 'lucide-react'
+import React, { useState } from 'react'
+import { Database, LogOut, RotateCcw, ShieldAlert } from 'lucide-react'
 import { useSupervisorSession } from '../providers'
 import { resetProductionData } from '../../../core/infra/db'
+import { syncQueueRepo } from '../../../core/infra/repositories'
 import { Card, ScreenHeader, StatusBar, TappableRow } from '../../shared/ui'
 
 export const SupervisorSettingsScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
   const { supervisor, signOut } = useSupervisorSession()
+  const [resetting, setResetting] = useState(false)
+  const [resetError, setResetError] = useState<string | null>(null)
+
+  const handleReset = async () => {
+    setResetError(null)
+
+    // Count what is about to be destroyed. On an offline terminal the local
+    // database is the only copy of unsynced sales, so this must never be a
+    // single unconfirmed tap.
+    const [pending, deadLettered, shifts, transactions] = await Promise.all([
+      syncQueueRepo.getCount(),
+      syncQueueRepo.getDeadLettered(),
+      prodDbShiftCount(),
+      prodDbTransactionCount(),
+    ])
+
+    const confirmed = window.confirm(
+      'This permanently erases local forecourt data from this device.\n\n' +
+      `  ${shifts} shift(s)\n` +
+      `  ${transactions} sale(s)\n` +
+      `  ${pending} record(s) still waiting to upload\n` +
+      (deadLettered.length > 0 ? `  ${deadLettered.length} stuck record(s)\n` : '') +
+      '\n' +
+      'The audit log is deleted too — it is not append-only on this device.\n\n' +
+      (pending > 0 || deadLettered.length > 0
+        ? 'WARNING: anything not yet uploaded exists ONLY here. Confirm the station is online, or export first.\n\n'
+        : '') +
+      'This cannot be undone. Continue?',
+    )
+    if (!confirmed) return
+
+    // A second gate, because the consequence is unrecoverable data loss.
+    const typed = window.prompt('Type RESET to confirm erasing local forecourt data:')
+    if (typed !== 'RESET') return
+
+    setResetting(true)
+    try {
+      await resetProductionData()
+      window.location.reload()
+    } catch (err) {
+      // Previously there was no .catch() at all, so a failed reset silently
+      // reloaded the page and left the operator thinking it had worked.
+      setResetting(false)
+      setResetError(err instanceof Error ? err.message : 'Reset failed. Local data was not cleared.')
+    }
+  }
 
   return (
     <div className="h-full flex flex-col bg-[#090d16] overflow-y-auto">
@@ -25,6 +72,13 @@ export const SupervisorSettingsScreen: React.FC<{ onBack: () => void }> = ({ onB
           </div>
         </Card>
 
+        {resetError && (
+          <div role="alert" className="rounded-xl border border-rose-500/40 bg-rose-950/40 px-3 py-2.5 flex items-start gap-2">
+            <ShieldAlert className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-rose-200">{resetError}</p>
+          </div>
+        )}
+
         <Card className="divide-y divide-slate-800/70 overflow-hidden">
           <TappableRow
             icon={<Database className="w-4 h-4" />}
@@ -35,11 +89,9 @@ export const SupervisorSettingsScreen: React.FC<{ onBack: () => void }> = ({ onB
           />
           <TappableRow
             icon={<RotateCcw className="w-4 h-4" />}
-            title="Reset demo data"
-            subtitle="Clear production DB and re-seed"
-            onClick={() => {
-              void resetProductionData().then(() => window.location.reload())
-            }}
+            title={resetting ? 'Clearing…' : 'Erase local forecourt data'}
+            subtitle="Destroys shifts, sales, audit log and unsynced records on this device"
+            onClick={() => void handleReset()}
             accent="#f59e0b"
           />
           <TappableRow
@@ -58,4 +110,14 @@ export const SupervisorSettingsScreen: React.FC<{ onBack: () => void }> = ({ onB
       </div>
     </div>
   )
+}
+
+async function prodDbShiftCount(): Promise<number> {
+  const { prodDb } = await import('../../../core/infra/db')
+  return prodDb.shifts.count()
+}
+
+async function prodDbTransactionCount(): Promise<number> {
+  const { prodDb } = await import('../../../core/infra/db')
+  return prodDb.transactions.count()
 }

@@ -5,9 +5,9 @@
 
 import React, { useMemo, useState } from 'react'
 import { ClipboardCheck } from 'lucide-react'
-import { useSupervisorData } from '../providers'
+import { useSupervisorData, useSupervisorSession } from '../providers'
 import { Card, ScreenHeader, StatusBar, TappableRow } from '../../shared/ui'
-import { PRODUCTION_STATIONS, getStationById } from '../../../core/domain/config'
+import { PRODUCTION_STATIONS, getStationById, getStationName } from '../../../core/domain/config'
 import { formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
 import type { ShiftStatus } from '../../../core/domain/types'
 
@@ -27,19 +27,26 @@ export const SupervisorShiftsScreen: React.FC<{
   onOpenShift: (shiftId: string) => void
 }> = ({ onBack, onOpenShift }) => {
   const { shifts, loading, refresh } = useSupervisorData()
+  const { supervisor } = useSupervisorSession()
+  const isHQ = !!supervisor?.isHeadOffice
+  const stationId = supervisor?.stationId
+  const stationName = stationId ? getStationName(stationId) : 'Station Forecourt'
+
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('ALL')
-  const [stationFilter, setStationFilter] = useState<StationFilter>('ALL')
+  const [stationFilter, setStationFilter] = useState<StationFilter>(isHQ ? 'ALL' : stationId || 'ALL')
 
   const filtered = useMemo(() => {
-    const rows = shifts.filter(
-      s =>
-        (statusFilter === 'ALL' || s.status === statusFilter) &&
-        (stationFilter === 'ALL' || s.stationId === stationFilter),
-    )
+    const rows = shifts.filter(s => {
+      const matchStatus = statusFilter === 'ALL' || s.status === statusFilter
+      const matchStation = isHQ
+        ? stationFilter === 'ALL' || s.stationId === stationFilter
+        : !stationId || s.stationId === stationId
+      return matchStatus && matchStation
+    })
     return [...rows].sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
-  }, [shifts, statusFilter, stationFilter])
+  }, [shifts, statusFilter, stationFilter, isHQ, stationId])
 
-  const pendingCount = useMemo(() => shifts.filter(s => s.status === 'CLOSED').length, [shifts])
+  const pendingCount = useMemo(() => filtered.filter(s => s.status === 'CLOSED').length, [filtered])
 
   const chipClass = (active: boolean) =>
     active
@@ -51,7 +58,7 @@ export const SupervisorShiftsScreen: React.FC<{
       <StatusBar online />
       <ScreenHeader
         title="Shift Register"
-        subtitle={`${pendingCount} awaiting review · all stations`}
+        subtitle={`${pendingCount} awaiting review · ${isHQ ? 'all stations' : stationName}`}
         onBack={onBack}
         right={
           <button
@@ -78,24 +85,26 @@ export const SupervisorShiftsScreen: React.FC<{
         ))}
       </div>
 
-      {/* Station filter */}
-      <div className="shrink-0 px-4 pt-2 pb-2.5 flex gap-2 overflow-x-auto">
-        <button
-          onClick={() => setStationFilter('ALL')}
-          className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${chipClass(stationFilter === 'ALL')}`}
-        >
-          All stations
-        </button>
-        {PRODUCTION_STATIONS.map(st => (
+      {/* Station filter (Only for Head Office with multi-station fleet access) */}
+      {isHQ && (
+        <div className="shrink-0 px-4 pt-2 pb-2.5 flex gap-2 overflow-x-auto">
           <button
-            key={st.id}
-            onClick={() => setStationFilter(stationFilter === st.id ? 'ALL' : st.id)}
-            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${chipClass(stationFilter === st.id)}`}
+            onClick={() => setStationFilter('ALL')}
+            className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${chipClass(stationFilter === 'ALL')}`}
           >
-            {st.name}
+            All stations
           </button>
-        ))}
-      </div>
+          {PRODUCTION_STATIONS.map(st => (
+            <button
+              key={st.id}
+              onClick={() => setStationFilter(stationFilter === st.id ? 'ALL' : st.id)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${chipClass(stationFilter === st.id)}`}
+            >
+              {st.name}
+            </button>
+          ))}
+        </div>
+      )}
 
       <div className="flex-1 px-4 py-3 max-w-4xl w-full mx-auto">
         {loading ? (

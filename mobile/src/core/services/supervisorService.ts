@@ -6,14 +6,19 @@
 import { DomainError } from '../domain/errors'
 import { uid } from '../domain/config'
 import { hashPin } from '../infra/password'
-import { cloudResetPin } from '../infra/cloudApi'
-import type { AuditEntry, Shift } from '../domain/types'
+import {
+  cloudResetPin,
+  cloudListAttendants,
+  cloudCreateAttendant,
+  cloudDeactivateAttendant,
+} from '../infra/cloudApi'
+import type { AuditEntry, Shift, Attendant } from '../domain/types'
 import {
   listShifts,
   saveShift,
   listSyncQueue,
   updateSyncItem,
-  listAttendants,
+  listAttendants as listLocalAttendants,
   upsertAttendant,
   findAttendantByCode,
   addAudit,
@@ -72,49 +77,78 @@ export class SupervisorService {
     return reviewed
   }
 
+  async listAttendants(stationId?: string | null): Promise<Attendant[]> {
+    try {
+      const cloudAtts = await cloudListAttendants(stationId)
+      const mapped: Attendant[] = cloudAtts.map(a => ({
+        id: a.id,
+        employeeCode: a.employeeCode,
+        fullName: a.fullName,
+        pinSalt: '',
+        pinHash: '',
+        pumpId: a.pumpId,
+        stationId: a.stationId,
+        companyId: a.companyId,
+        companyShortCode: a.companyShortCode,
+        phone: a.phone,
+        approvalStatus: a.approvalStatus,
+        active: a.active,
+        failedAttempts: 0,
+        lockoutUntil: null,
+        createdAt: a.createdAt,
+      }))
+      for (const att of mapped) {
+        await upsertAttendant(att)
+      }
+      return mapped
+    } catch {
+      return listLocalAttendants()
+    }
+  }
+
   async resetAttendantPin(employeeCode: string, newPin: string, reviewer: Reviewer): Promise<void> {
     if (!/^\d{4}$/.test(newPin)) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
     const attendant = await findAttendantByCode(employeeCode)
-    if (!attendant) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Attendant not found.')
-    const { salt, hash } = await hashPin(newPin)
-    await upsertAttendant({ ...attendant, pinSalt: salt, pinHash: hash, failedAttempts: 0, lockoutUntil: null })
-    await addAudit({
-      id: uid('audit'),
-      action: 'PIN_RESET',
-      actorId: reviewer.id,
-      actorRole: 'SUPERVISOR',
-      targetId: attendant.id,
-      notes: `PIN reset for ${attendant.employeeCode} (${attendant.fullName})`,
-      timestamp: new Date().toISOString(),
-    })
-    // Push PIN reset to backend API
-    try {
-      await cloudResetPin(employeeCode, newPin)
-    } catch {
-      // Offline fallback
+    await cloudResetPin(employeeCode, newPin)
+    if (attendant) {
+      const { salt, hash } = await hashPin(newPin)
+      await upsertAttendant({ ...attendant, pinSalt: salt, pinHash: hash, failedAttempts: 0, lockoutUntil: null })
+      await addAudit({
+        id: uid('audit'),
+        action: 'PIN_RESET',
+        actorId: reviewer.id,
+        actorRole: 'SUPERVISOR',
+        targetId: attendant.id,
+        notes: `PIN reset for ${attendant.employeeCode} (${attendant.fullName})`,
+        timestamp: new Date().toISOString(),
+      })
     }
   }
 
   async registerAttendant(input: { employeeCode: string; fullName: string; pin: string; pumpId?: string; stationId?: string }, actor: Reviewer): Promise<void> {
     const code = input.employeeCode.trim().toUpperCase()
-    if (!/^ATT\d{4}$/.test(code)) {
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Code must be ATT followed by 4 digits (e.g. ATT1005).')
-    }
     if (!input.fullName.trim()) throw new DomainError('UNKNOWN', 'Full name is required.')
     if (!/^\d{4}$/.test(input.pin)) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
-    if (await findAttendantByCode(code)) {
-      throw new DomainError('ATTENDANT_CODE_EXISTS', 'An attendant with this employee code is already registered.')
-    }
+
+    const created = await cloudCreateAttendant({
+      employeeCode: code,
+      fullName: input.fullName.trim(),
+      pin: input.pin,
+      pumpId: input.pumpId,
+      stationId: input.stationId,
+    })
+
     const { salt, hash } = await hashPin(input.pin)
     await upsertAttendant({
-      id: uid('att'),
+      id: created.id || uid('att'),
       employeeCode: code,
       fullName: input.fullName.trim(),
       pinSalt: salt,
       pinHash: hash,
-      pumpId: input.pumpId ?? 'pump-1',
-      stationId: input.stationId ?? 'STN-GV-042',
+      pumpId: input.pumpId ?? null,
+      stationId: input.stationId ?? created.stationId,
       active: true,
+      approvalStatus: (created.approvalStatus as any) || 'APPROVED',
       failedAttempts: 0,
       lockoutUntil: null,
       createdAt: new Date().toISOString(),
@@ -133,6 +167,7 @@ export class SupervisorService {
   async deactivateAttendant(employeeCode: string, actor: Reviewer): Promise<void> {
     const attendant = await findAttendantByCode(employeeCode)
     if (!attendant) throw new DomainError('AUTH_INVALID_CREDENTIALS', 'Attendant not found.')
+    await cloudDeactivateAttendant(attendant.id)
     await upsertAttendant({ ...attendant, active: false })
     await addAudit({
       id: uid('audit'),

@@ -309,6 +309,14 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
     ),
   )
 
+  // Continuous background auto-sync & refresh for Head Office (every 12 seconds)
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadData()
+    }, 12_000)
+    return () => window.clearInterval(timer)
+  }, [loadData])
+
   const topStations = useMemo(() => {
     if (!summary) return []
     return [...summary.stations].sort((a, b) => b.salesToday - a.salesToday)
@@ -1511,6 +1519,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
             companyName={companyName}
             stations={(summary?.stations || []).map(s => ({ id: s.stationId, name: s.name, code: s.code }))}
             availableProducts={products}
+            userRole="headoffice"
           />
         </div>
       )}

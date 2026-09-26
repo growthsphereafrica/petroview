@@ -4,9 +4,8 @@
  * Android/iOS/web. Offline-first: all writes are local and durable.
  */
 
-import { keys, sGet, sSet, sDel } from '../store/storage'
-import { randomSaltHex, hashPin as seal } from '../infra/password'
-import type { Attendant, AttendantSession, AuditEntry, Shift, Supervisor, SupervisorSession, SyncQueueItem } from '../domain/types'
+import { keys, sGet, sSet } from '../store/storage'
+import type { Attendant, AuditEntry, Shift, SyncQueueItem } from '../domain/types'
 
 // ---- Attendants -----------------------------------------------------------
 
@@ -14,36 +13,11 @@ export async function listAttendants(): Promise<Attendant[]> {
   return (await sGet<Attendant[]>(keys.attendants)) ?? []
 }
 
-function cleanCode(code: string): string {
-  return (code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '')
-}
-
 export async function findAttendantByCode(employeeCode: string): Promise<Attendant | null> {
-  const raw = employeeCode.trim()
+  const raw = employeeCode.trim().toUpperCase()
   if (!raw) return null
-  const clean = cleanCode(raw)
   const all = await listAttendants()
-
-  const exact = all.find(a => a.employeeCode.toUpperCase() === raw.toUpperCase())
-  if (exact) return exact
-
-  const cleanedMatch = all.find(a => cleanCode(a.employeeCode) === clean)
-  if (cleanedMatch) return cleanedMatch
-
-  if (clean === 'PV001A' || clean === 'PVA01' || clean === 'PVACC001A' || clean === 'PV01A') {
-    return all.find(a => cleanCode(a.employeeCode).includes('PV') && cleanCode(a.employeeCode).endsWith('A')) ?? null
-  }
-  if (clean === 'GOIL001A' || clean === 'GOILA01' || clean === 'GOILACC001A' || clean === 'GOIL01A') {
-    return all.find(a => cleanCode(a.employeeCode).includes('GOIL') && cleanCode(a.employeeCode).endsWith('A')) ?? null
-  }
-  if (clean === 'TOT001A' || clean === 'TOTAL001A' || clean === 'TOTA01' || clean === 'TOTALACC001A') {
-    return all.find(a => cleanCode(a.employeeCode).includes('TOT') && cleanCode(a.employeeCode).endsWith('A')) ?? null
-  }
-  if (clean === 'SHELL001A' || clean === 'SHELLA01' || clean === 'SHELLACC001A') {
-    return all.find(a => cleanCode(a.employeeCode).includes('SHELL') && cleanCode(a.employeeCode).endsWith('A')) ?? null
-  }
-
-  return null
+  return all.find(a => a.employeeCode.toUpperCase() === raw) ?? null
 }
 
 export async function getAttendant(id: string): Promise<Attendant | null> {
@@ -63,103 +37,6 @@ export async function updateAttendantAttempts(attendant: Attendant): Promise<voi
   await upsertAttendant(attendant)
 }
 
-// ---- Supervisors ----------------------------------------------------------
-
-export async function listSupervisors(): Promise<Supervisor[]> {
-  return (await sGet<Supervisor[]>(keys.supervisors)) ?? []
-}
-
-export async function findSupervisorByCode(employeeCode: string): Promise<Supervisor | null> {
-  const raw = employeeCode.trim()
-  if (!raw) return null
-  const clean = cleanCode(raw)
-
-  const isSuperAdminAlias =
-    clean === 'SUPERADMIN' ||
-    clean === 'SUPERADMINISTRATOR' ||
-    clean === 'ADMIN' ||
-    clean === 'SUPER' ||
-    clean === 'MASTER' ||
-    clean === 'ROOT' ||
-    clean === 'PETROMASTER'
-
-  const all = await listSupervisors()
-
-  if (isSuperAdminAlias) {
-    return all.find(s => s.employeeCode.toUpperCase() === 'SUPER-ADMIN' || s.isSuperAdmin === true) ?? null
-  }
-
-  const exact = all.find(s => s.employeeCode.toUpperCase() === raw.toUpperCase())
-  if (exact) return exact
-
-  const cleanedMatch = all.find(s => cleanCode(s.employeeCode) === clean)
-  if (cleanedMatch) return cleanedMatch
-
-  if (clean === 'PVHQ01' || clean === 'PVHQ' || clean === 'PVADMIN' || clean === 'PV') {
-    return all.find(s => cleanCode(s.employeeCode) === 'PVHQ01') ?? null
-  }
-  if (clean === 'GOILHQ01' || clean === 'GOILHQ' || clean === 'GOILADMIN' || clean === 'GOIL') {
-    return all.find(s => cleanCode(s.employeeCode) === 'GOILHQ01') ?? null
-  }
-  if (clean === 'TOTALHQ01' || clean === 'TOTALHQ' || clean === 'TOTHQ01' || clean === 'TOTHQ' || clean === 'TOTAL') {
-    return all.find(s => cleanCode(s.employeeCode) === 'TOTALHQ01') ?? null
-  }
-  if (clean === 'SHELLHQ01' || clean === 'SHELLHQ' || clean === 'SHELLADMIN' || clean === 'SHELL') {
-    return all.find(s => cleanCode(s.employeeCode) === 'SHELLHQ01') ?? null
-  }
-
-  if (clean === 'PV001M' || clean === 'PVM01' || clean === 'PVACC001M' || clean === 'PVM') {
-    return all.find(s => cleanCode(s.employeeCode).includes('PV') && cleanCode(s.employeeCode).endsWith('M')) ?? null
-  }
-  if (clean === 'GOIL001M' || clean === 'GOILM01' || clean === 'GOILACC001M' || clean === 'GOILM') {
-    return all.find(s => cleanCode(s.employeeCode).includes('GOIL') && cleanCode(s.employeeCode).endsWith('M')) ?? null
-  }
-  if (clean === 'TOT001M' || clean === 'TOTAL001M' || clean === 'TOTM01' || clean === 'TOTM' || clean === 'TOTALACC001M') {
-    return all.find(s => cleanCode(s.employeeCode).includes('TOT') && cleanCode(s.employeeCode).endsWith('M')) ?? null
-  }
-  if (clean === 'SHELL001M' || clean === 'SHELLM01' || clean === 'SHELLACC001M' || clean === 'SHELLM') {
-    return all.find(s => cleanCode(s.employeeCode).includes('SHELL') && cleanCode(s.employeeCode).endsWith('M')) ?? null
-  }
-
-  return null
-}
-
-export async function getSupervisor(id: string): Promise<Supervisor | null> {
-  const all = await listSupervisors()
-  return all.find(s => s.id === id) ?? null
-}
-
-export async function upsertSupervisor(supervisor: Supervisor): Promise<void> {
-  const all = await listSupervisors()
-  const idx = all.findIndex(s => s.id === supervisor.id)
-  if (idx >= 0) all[idx] = supervisor
-  else all.push(supervisor)
-  await sSet(keys.supervisors, all)
-}
-
-// ---- Sessions -------------------------------------------------------------
-
-export async function createSession(session: AttendantSession | SupervisorSession): Promise<void> {
-  const all = await sGet<Array<AttendantSession | SupervisorSession>>(keys.sessions)
-  const list = all ?? []
-  const ttl = session.expiresAt
-  const filtered = list.filter(s => (s as { expiresAt?: string }).expiresAt ? (s as { expiresAt: string }).expiresAt > new Date().toISOString() : true)
-  filtered.push(session)
-  await sSet(keys.sessions, filtered)
-  void ttl
-}
-
-export async function findSessionByToken(token: string): Promise<(AttendantSession | SupervisorSession) | null> {
-  const all = await sGet<Array<AttendantSession | SupervisorSession>>(keys.sessions)
-  if (!all) return null
-  return all.find(s => s.token === token) ?? null
-}
-
-export async function deleteSession(token: string): Promise<void> {
-  const all = await sGet<Array<AttendantSession | SupervisorSession>>(keys.sessions)
-  if (!all) return
-  await sSet(keys.sessions, all.filter(s => s.token !== token))
-}
 
 // ---- Shifts ---------------------------------------------------------------
 
@@ -222,51 +99,4 @@ export async function listAudit(): Promise<AuditEntry[]> {
   return (await sGet<AuditEntry[]>(keys.auditLog)) ?? []
 }
 
-// ---- Seeds ----------------------------------------------------------------
 
-const SCHEMA_VERSION = 'clean-slate-5'
-
-let seeded = false
-
-export async function seedProductionData(): Promise<void> {
-  if (seeded) return
-  seeded = true
-
-  const current = (await sGet<string>(keys.schemaVersion)) ?? 'none'
-  if (current !== SCHEMA_VERSION) {
-    await Promise.all([
-      sDel(keys.attendants),
-      sDel(keys.supervisors),
-      sDel(keys.sessions),
-      sDel(keys.shifts),
-      sDel(keys.syncQueue),
-      sDel(keys.auditLog),
-      sDel(keys.sessionToken),
-      sDel(keys.cloudToken),
-    ])
-    await sSet(keys.schemaVersion, SCHEMA_VERSION)
-  }
-
-  const now = new Date().toISOString()
-
-  // 1. Seed SUPER-ADMIN only (all other accounts must be provisioned by Super Admin/OMC admin)
-  const supervisors = await listSupervisors()
-  const existingSA = supervisors.find(s => s.employeeCode.toUpperCase() === 'SUPER-ADMIN')
-  const saSalt = randomSaltHex()
-  const { hash: saHash } = await seal('7256', saSalt)
-
-  await upsertSupervisor({
-    id: existingSA?.id || 'sup-super-admin',
-    employeeCode: 'SUPER-ADMIN',
-    fullName: 'PetroView Platform Master Admin',
-    pinSalt: saSalt,
-    pinHash: saHash,
-    role: 'SUPERVISOR',
-    isSuperAdmin: true,
-    isHeadOffice: true,
-    active: true,
-    createdAt: existingSA?.createdAt || now,
-  })
-}
-
-// hash/verify re-exported here to avoid a circular import of password directly.

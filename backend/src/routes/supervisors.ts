@@ -1,41 +1,127 @@
 import { Router } from 'express'
 import { db } from '../db'
 import { newToken } from '../auth'
-import { authenticate, requireRole, type AuthRequest } from '../middleware'
-
+import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 export const supervisorsRouter = Router()
+
+function sessionOf(req: AuthRequest): SessionClaims {
+  return req.session!
+}
+
+interface SupervisorTarget {
+  id: string
+  employeeCode: string
+  fullName: string
+  companyId: string | null
+  stationId: string | null
+  isSuperAdmin: number
+}
+
+function canManageSupervisor(session: SessionClaims, target: SupervisorTarget): boolean {
+  if (session.role === 'superadmin') return true
+  if (target.isSuperAdmin || target.employeeCode.toUpperCase() === 'SUPER-ADMIN') return false
+  if (session.role === 'headoffice') return Boolean(session.companyId && target.companyId === session.companyId)
+  return Boolean(session.stationId && target.stationId === session.stationId)
+}
+
 
 // --- Update supervisor profile (name, phone, station, active) ---
 supervisorsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const { fullName, phone, stationId, active } = (req.body ?? {}) as {
-    fullName?: string
-    phone?: string
-    stationId?: string
-    active?: boolean
+  const body = (req.body ?? {}) as Record<string, unknown>
+  // Validate shape and length before touching .trim(). The previous code called
+  // .trim() on whatever arrived, so `{"fullName": 123}` threw a TypeError that
+  // surfaced as a 500 and leaked "fullName.trim is not a function" to the caller.
+  const nameInput = body.fullName
+  const phoneInput = body.phone
+  if (nameInput !== undefined && typeof nameInput !== 'string') {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'fullName must be a string.' })
+    return
   }
-  const row = db.prepare('SELECT * FROM supervisors WHERE id = ?').get(req.params.id) as Record<string, unknown> | undefined
+  if (phoneInput !== undefined && phoneInput !== null && typeof phoneInput !== 'string') {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'phone must be a string.' })
+    return
+  }
+  if (body.stationId !== undefined && body.stationId !== null && typeof body.stationId !== 'string') {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'stationId must be a string.' })
+    return
+  }
+  if (body.active !== undefined && typeof body.active !== 'boolean') {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'active must be a boolean.' })
+    return
+  }
+  const fullName = nameInput as string | undefined
+  const phone = phoneInput as string | undefined
+  const stationId = body.stationId as string | null | undefined
+  const active = body.active as boolean | undefined
+  if (fullName !== undefined && fullName.trim().length > 120) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'Full name is too long.' })
+    return
+  }
+  if (phone !== undefined && phone.trim().length > 40) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'Phone number is too long.' })
+    return
+  }
+  const row = db.prepare('SELECT id, employeeCode, fullName, companyId, stationId, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as SupervisorTarget | undefined
   if (!row) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Supervisor not found.' })
     return
   }
-
-  // Prevent editing the Super Admin via this route
-  if (row.isSuperAdmin || String(row.employeeCode).toUpperCase() === 'SUPER-ADMIN') {
-    res.status(403).json({ error: 'FORBIDDEN', message: 'Cannot modify Super Admin via this route.' })
+  if (!canManageSupervisor(sessionOf(req), row)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot modify this supervisor.' })
     return
+  }
+  if (active !== undefined && sessionOf(req).role === 'supervisor') {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'Only Head Office can activate or deactivate supervisors.' })
+    return
+  }
+  if (fullName !== undefined && !fullName.trim()) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'Full name cannot be empty.' })
+    return
+  }
+  if (stationId !== undefined && stationId) {
+    const stationCompany = db.prepare('SELECT companyId FROM companyStations WHERE id = ? AND active = 1').get(stationId) as { companyId: string } | undefined
+    const allowedStation = sessionOf(req).role === 'superadmin'
+      ? Boolean(stationCompany)
+      : sessionOf(req).role === 'headoffice'
+        ? Boolean(stationCompany && stationCompany.companyId === sessionOf(req).companyId)
+        : stationId === sessionOf(req).stationId
+    if (!allowedStation) {
+      res.status(403).json({ error: 'FORBIDDEN', message: 'The selected station is outside your scope.' })
+      return
+    }
   }
 
   const updates: string[] = []
   const params: unknown[] = []
   if (fullName !== undefined) { updates.push('fullName = ?'); params.push(fullName.trim()) }
   if (phone !== undefined) { updates.push('phone = ?'); params.push(phone.trim() || null) }
-  if (stationId !== undefined) { updates.push('stationId = ?'); params.push(stationId || null) }
+  if (stationId !== undefined) {
+    updates.push('stationId = ?')
+    params.push(stationId || null)
+    if (stationId) {
+      // Moving a supervisor to another station must move their company too.
+      // Leaving companyId pointing at the old tenant left the row internally
+      // inconsistent, and getUsableAccountScope then silently locked the
+      // account out entirely.
+      const targetStation = db.prepare('SELECT companyId FROM companyStations WHERE id = ? AND active = 1').get(stationId) as { companyId: string }
+      const targetCompany = db.prepare('SELECT id, shortCode FROM companies WHERE id = ? AND active = 1').get(targetStation.companyId) as { id: string; shortCode: string } | undefined
+      if (!targetCompany) {
+        res.status(400).json({ error: 'BAD_REQUEST', message: 'The selected station has no active company.' })
+        return
+      }
+      updates.push('companyId = ?', 'companyShortCode = ?')
+      params.push(targetCompany.id, targetCompany.shortCode)
+      // The old session carries the previous company scope, so it must not
+      // survive a tenant change.
+      db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
+    } else {
+      updates.push('companyId = NULL', 'companyShortCode = NULL')
+    }
+  }
   if (active !== undefined) {
     updates.push('active = ?')
     params.push(active ? 1 : 0)
-    if (!active) {
-      db.prepare('DELETE FROM supervisorSessions WHERE supervisorId = ?').run(req.params.id)
-    }
+    if (!active) db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
   }
   if (updates.length === 0) {
     res.status(400).json({ error: 'BAD_REQUEST', message: 'No fields to update.' })
@@ -48,8 +134,8 @@ supervisorsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffic
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
   ).run(
     newToken(), 'SUPERVISOR_UPDATED',
-    req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'ADMIN',
-    req.params.id, `Updated profile for ${row.employeeCode as string}`, null, now, null,
+    sessionOf(req).userId, sessionOf(req).fullName, sessionOf(req).role.toUpperCase(),
+    req.params.id, `Updated profile for ${row.employeeCode}`, null, now, null,
   )
   const updated = db.prepare('SELECT * FROM supervisors WHERE id = ?').get(req.params.id) as Record<string, unknown>
   res.json({
@@ -65,25 +151,23 @@ supervisorsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffic
 
 // --- Delete supervisor permanently ---
 supervisorsRouter.delete('/:id', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const row = db.prepare('SELECT employeeCode, fullName, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as
-    | { employeeCode: string; fullName: string; isSuperAdmin: number }
-    | undefined
+  const row = db.prepare('SELECT id, employeeCode, fullName, companyId, stationId, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as SupervisorTarget | undefined
   if (!row) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Supervisor not found.' })
     return
   }
-  if (row.isSuperAdmin || String(row.employeeCode).toUpperCase() === 'SUPER-ADMIN') {
-    res.status(403).json({ error: 'FORBIDDEN', message: 'Cannot delete the Super Admin.' })
+  if (!canManageSupervisor(sessionOf(req), row)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot delete this supervisor.' })
     return
   }
-  db.prepare('DELETE FROM supervisorSessions WHERE supervisorId = ?').run(req.params.id)
+  db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
   db.prepare('DELETE FROM supervisors WHERE id = ?').run(req.params.id)
   const now = new Date().toISOString()
   db.prepare(
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
   ).run(
     newToken(), 'SUPERVISOR_DELETED',
-    req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'ADMIN',
+    sessionOf(req).userId, sessionOf(req).fullName, sessionOf(req).role.toUpperCase(),
     req.params.id, `Deleted supervisor ${row.employeeCode} (${row.fullName})`, null, now, null,
   )
   res.json({ success: true, id: req.params.id, employeeCode: row.employeeCode })
@@ -91,25 +175,23 @@ supervisorsRouter.delete('/:id', authenticate, requireRole('headoffice', 'supera
 
 // --- Deactivate supervisor ---
 supervisorsRouter.post('/:id/deactivate', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const row = db.prepare('SELECT employeeCode, fullName, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as
-    | { employeeCode: string; fullName: string; isSuperAdmin: number }
-    | undefined
+  const row = db.prepare('SELECT id, employeeCode, fullName, companyId, stationId, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as SupervisorTarget | undefined
   if (!row) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Supervisor not found.' })
     return
   }
-  if (row.isSuperAdmin) {
-    res.status(403).json({ error: 'FORBIDDEN', message: 'Cannot deactivate Super Admin.' })
+  if (!canManageSupervisor(sessionOf(req), row)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot deactivate this supervisor.' })
     return
   }
   db.prepare('UPDATE supervisors SET active = 0 WHERE id = ?').run(req.params.id)
-  db.prepare('DELETE FROM supervisorSessions WHERE supervisorId = ?').run(req.params.id)
+  db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
   const now = new Date().toISOString()
   db.prepare(
     'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
   ).run(
     newToken(), 'SUPERVISOR_DEACTIVATED',
-    req.session?.userId ?? '', req.session?.fullName ?? '', req.session?.role?.toUpperCase() ?? 'ADMIN',
+    sessionOf(req).userId, sessionOf(req).fullName, sessionOf(req).role.toUpperCase(),
     req.params.id, `Deactivated supervisor ${row.employeeCode} (${row.fullName})`, null, now, null,
   )
   res.json({ id: req.params.id, active: false })

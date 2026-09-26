@@ -10,7 +10,10 @@ import {
   computeFuelSales,
   emptyPayments,
   finalizeClosedShift,
+  roundLitres,
+  roundMoney,
   saleAmount,
+  sumPayments,
   sumSales,
   validateMeterReading,
   validateReadingsSet,
@@ -159,7 +162,7 @@ export class ShiftService {
       shiftId: input.shift.id,
       attendantId: input.shift.attendantId,
       fuelCode: input.fuelCode,
-      litres: Math.round(input.litres * 100) / 100,
+      litres: roundLitres(input.litres),
       amount,
       unitPrice: price,
       method: input.method,
@@ -236,13 +239,13 @@ export class ShiftService {
       nextUnitPrice = prices[nextFuelCode] || 14.8
     }
 
-    const nextAmount = Math.round(nextLitres * nextUnitPrice * 100) / 100
+    const nextAmount = saleAmount(roundLitres(nextLitres), nextUnitPrice)
     const nextMethod = updates.method || tx.method
 
     const updatedTx: ShiftTransaction = {
       ...tx,
       fuelCode: nextFuelCode,
-      litres: Math.round(nextLitres * 100) / 100,
+      litres: roundLitres(nextLitres),
       unitPrice: nextUnitPrice,
       amount: nextAmount,
       method: nextMethod,
@@ -339,13 +342,11 @@ export class ShiftService {
 
     for (const tx of txs) {
       if (tx.method in payments) {
-        payments[tx.method] = Math.round((payments[tx.method] + tx.amount) * 100) / 100
+        payments[tx.method] = roundMoney(payments[tx.method] + tx.amount)
       }
     }
 
-    const actualTotal = Math.round(
-      (payments.CASH + payments.MOMO + payments.VOUCHER + payments.CREDIT) * 100,
-    ) / 100
+    const actualTotal = sumPayments(payments)
 
     const updated: Shift = {
       ...shift,
@@ -353,7 +354,7 @@ export class ShiftService {
       expectedTotal,
       payments,
       actualTotal,
-      variance: Math.round((actualTotal - expectedTotal) * 100) / 100,
+      variance: roundMoney(actualTotal - expectedTotal),
       updatedAt: new Date().toISOString(),
     }
 
@@ -367,8 +368,8 @@ export class ShiftService {
     for (const tx of txs) {
       const existing = map.get(tx.fuelCode)
       if (existing) {
-        existing.litres = Math.round((existing.litres + tx.litres) * 100) / 100
-        existing.amount = Math.round((existing.amount + tx.amount) * 100) / 100
+        existing.litres = roundLitres(existing.litres + tx.litres)
+        existing.amount = roundMoney(existing.amount + tx.amount)
       } else {
         map.set(tx.fuelCode, {
           fuelCode: tx.fuelCode,

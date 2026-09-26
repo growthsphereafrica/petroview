@@ -52,47 +52,29 @@ export interface BackendPendingApproval {
 }
 
 async function apiCall<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const primaryBase = getBackendUrl()
+  const base = getBackendUrl()
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...((options.headers as Record<string, string>) ?? {}) }
   const token = getStoredCloudToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  // Candidate base URLs to try in order
-  const basesToTry = [primaryBase]
-  if (!basesToTry.includes('http://localhost:4000')) {
-    basesToTry.push('http://localhost:4000')
-  }
-  if (!basesToTry.includes('http://127.0.0.1:4000')) {
-    basesToTry.push('http://127.0.0.1:4000')
+  let resp: Response
+  try {
+    resp = await fetch(`${base}${path}`, { ...options, headers })
+  } catch {
+    throw new Error('BACKEND_UNREACHABLE')
   }
 
-  let lastError: Error | null = null
-
-  for (const base of basesToTry) {
-    try {
-      const resp = await fetch(`${base}${path}`, { ...options, headers })
-      // If we got a 502/503/504 Bad Gateway from a remote upstream proxy, try the next candidate
-      if (resp.status >= 502 && resp.status <= 504 && (base.includes('growthsphere') || !base.includes('4000'))) {
-        continue
-      }
-      const json = await resp.json().catch(() => ({}))
-      if (!resp.ok) {
-        const msg = (json as { message?: string; error?: string }).message ?? (json as { error?: string }).error ?? `HTTP ${resp.status}`
-        throw new Error(msg)
-      }
-      activeWorkingBase = base
-      return json as T
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      // If it's a domain/validation error rejected by the API (like Invalid PIN or Pending Approval), rethrow immediately!
-      if (msg !== 'BACKEND_UNREACHABLE' && !msg.startsWith('HTTP 502') && !msg.startsWith('HTTP 503') && !msg.startsWith('HTTP 504') && !(err instanceof TypeError)) {
-        throw err
-      }
-      lastError = new Error('BACKEND_UNREACHABLE')
+  const json = await resp.json().catch(() => ({}))
+  if (!resp.ok) {
+    if (resp.status === 401) {
+      clearCloudToken()
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('petroview:unauthorized'))
     }
+    const msg = (json as { message?: string; error?: string }).message ?? (json as { error?: string }).error ?? `HTTP ${resp.status}`
+    throw new Error(msg)
   }
-
-  throw lastError ?? new Error('BACKEND_UNREACHABLE')
+  activeWorkingBase = base
+  return json as T
 }
 
 export function getStoredCloudToken(): string | null {
@@ -114,8 +96,27 @@ export async function backendLogin(employeeCode: string, pin: string): Promise<B
     method: 'POST',
     body: JSON.stringify({ employeeCode, pin }),
   })
+  if (!result.token || !result.expiresAt || new Date(result.expiresAt).getTime() <= Date.now()) {
+    throw new Error('Backend returned an invalid session')
+  }
   storeCloudToken(result.token)
   return result
+}
+
+export interface BackendMeResponse {
+  userId: string
+  role: BackendLoginResponse['role']
+  fullName: string
+  employeeCode: string
+  stationId: string | null
+  companyId: string | null
+  companyShortCode: string | null
+  isSuperAdmin: boolean
+  isHeadOffice: boolean
+}
+
+export async function backendGetMe(): Promise<BackendMeResponse> {
+  return apiCall<BackendMeResponse>('/api/auth/me')
 }
 
 export async function backendRegister(input: {
@@ -126,6 +127,7 @@ export async function backendRegister(input: {
   stationId?: string
   companyId?: string
   companyShortCode?: string
+  pumpId?: string
 }): Promise<BackendRegisterResponse> {
   return apiCall<BackendRegisterResponse>('/api/auth/register', {
     method: 'POST',
@@ -255,6 +257,20 @@ export interface BackendCompanyStation {
   companyShortCode?: string
 }
 
+/**
+ * Pre-login tenant directory for the staff-registration form. Uses the narrow
+ * public endpoint rather than /api/companies, which now requires a session.
+ */
+export async function backendGetRegisterOmcs(): Promise<Array<{ id: string; name: string; shortCode: string }>> {
+  const data = await apiCall<any>('/api/companies/directory/omcs')
+  return Array.isArray(data) ? data : []
+}
+
+export async function backendGetRegisterStations(companyId: string): Promise<Array<{ id: string; name: string; location: string | null; region: string | null }>> {
+  const data = await apiCall<any>(`/api/companies/directory/omcs/${encodeURIComponent(companyId)}/stations`)
+  return Array.isArray(data) ? data : []
+}
+
 export async function backendGetCompanies(): Promise<{ count: number; companies: BackendCompany[] }> {
   const data = await apiCall<any>('/api/companies')
   if (Array.isArray(data)) {
@@ -351,10 +367,15 @@ export async function backendGetShifts(status?: string, station?: string): Promi
   return apiCall(`/api/shifts${qs ? '?' + qs : ''}`)
 }
 
-export async function backendReviewShift(shiftId: string, verdict: 'APPROVED' | 'REJECTED', notes?: string): Promise<{ id: string; status: string }> {
+export async function backendReviewShift(
+  shiftId: string,
+  verdict: 'APPROVED' | 'REJECTED',
+  notes?: string,
+  shift?: any,
+): Promise<{ id: string; status: string }> {
   return apiCall(`/api/sync/shifts/${shiftId}/review`, {
     method: 'POST',
-    body: JSON.stringify({ verdict, notes }),
+    body: JSON.stringify({ verdict, notes, shift }),
   })
 }
 
@@ -548,11 +569,24 @@ export async function backendCreatePump(data: {
 
 export async function backendUpdatePump(
   id: string,
-  updates: { name?: string; fuels?: string[]; active?: boolean },
+  updates: {
+    name?: string
+    fuels?: string[]
+    active?: boolean
+    renameNozzle?: { oldName: string; newName: string }
+    deleteNozzle?: string
+    addNozzle?: string
+  },
 ): Promise<{ success: boolean; pump: BackendPump }> {
   return apiCall(`/api/pumps/${id}`, {
     method: 'PUT',
     body: JSON.stringify(updates),
+  })
+}
+
+export async function backendDeleteNozzle(pumpId: string, fuelCode: string): Promise<{ success: boolean; pumpId: string; fuels: string[] }> {
+  return apiCall(`/api/pumps/${pumpId}/nozzles/${encodeURIComponent(fuelCode)}`, {
+    method: 'DELETE',
   })
 }
 

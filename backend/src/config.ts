@@ -1,9 +1,33 @@
+const isProduction = process.env.NODE_ENV === 'production'
+const configuredCorsOrigins = (process.env.CORS_ORIGINS ?? '')
+  .split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean)
+
 export const ENV = {
   PORT: parseInt(process.env.PORT ?? '4000', 10),
   DB_PATH: process.env.DB_PATH ?? './data/masterview.sqlite',
   TOKEN_TTL_MS: 12 * 60 * 60 * 1000,
   MAX_PIN_ATTEMPTS: 5,
   LOCKOUT_MS: 5 * 60 * 1000,
+  PIN_KDF_ITERATIONS: Number.isFinite(Number(process.env.PIN_KDF_ITERATIONS))
+    ? Math.max(100_000, Number(process.env.PIN_KDF_ITERATIONS))
+    : 310_000,
+  PRICE_TOLERANCE_GHS: Number.isFinite(Number(process.env.PRICE_TOLERANCE_GHS))
+    ? Math.abs(Number(process.env.PRICE_TOLERANCE_GHS))
+    : 0.01,
+  IS_PRODUCTION: isProduction,
+  SEED_DEMO_DATA: process.env.SEED_DEMO_DATA === 'true' || (!isProduction && process.env.SEED_DEMO_DATA !== 'false'),
+  ENABLE_DESTRUCTIVE_OPERATIONS: process.env.ENABLE_DESTRUCTIVE_OPERATIONS === 'true',
+  // Fails closed in principle, but an empty allowlist with no override would
+  // reject the web app's own origin and take the dashboard down. Default to the
+  // documented production origin and log a loud warning, rather than shipping a
+  // wildcard or silently breaking the product.
+  CORS_ORIGINS: configuredCorsOrigins.length > 0
+    ? configuredCorsOrigins
+    : isProduction
+      ? ['https://petroview.growthspheregh.com']
+      : ['http://localhost:5173', 'http://127.0.0.1:5173'],
 }
 
 export const FUEL_PRICES: Record<string, number> = {
@@ -21,7 +45,9 @@ export const SUPER_ADMIN = {
   id: 'sup-super-admin',
   employeeCode: 'SUPER-ADMIN',
   fullName: 'PetroView Platform Master Admin',
-  pin: '7256',
+  // No fallback. A shipped default here is a published platform-admin
+  // credential, and this account can reach every tenant.
+  pin: process.env.SUPER_ADMIN_PIN?.trim() ?? '',
   isSuperAdmin: true,
   isHeadOffice: false,
   stationId: null as string | null,

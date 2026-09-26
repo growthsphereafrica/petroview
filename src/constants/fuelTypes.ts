@@ -80,9 +80,13 @@ export const DEFAULT_STATION: StationConfig = {
   ]
 }
 
-export const ATTENDANTS_LIST = [
-  { id: 'ATT1234', name: 'John Attendant', pin: '1234', status: 'Active', pumpAssigned: 'Pump 1', avatar: 'JA' },
-  { id: 'ATT1235', name: 'Mary Attendant', pin: '1234', status: 'Active', pumpAssigned: 'Pump 2', avatar: 'MA' },
-  { id: 'ATT1236', name: 'Peter Attendant', pin: '1234', status: 'Active', pumpAssigned: 'Pump 3', avatar: 'PA' },
-  { id: 'ATT1237', name: 'James Attendant', pin: '1234', status: 'Active', pumpAssigned: 'Pump 4', avatar: 'JA' },
-]
+export interface AttendantConfig {
+  id: string
+  name: string
+  status: string
+  pumpAssigned?: string
+  avatar?: string
+}
+
+export const ATTENDANTS_LIST: AttendantConfig[] = []
+

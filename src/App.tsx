@@ -13,6 +13,7 @@ import {
   clearUnifiedSession,
   type UnifiedSession,
 } from './features/unified/UnifiedLoginScreen'
+import { backendGetMe, backendLogout } from './services/backendApiService'
 import {
   Smartphone,
   Building2,
@@ -45,6 +46,7 @@ const SuperSuperAdminDashboard = lazy(() =>
 
 const MainAppLayout: React.FC = () => {
   const [session, setSession] = useState<UnifiedSession | null>(() => loadUnifiedSession())
+  const [sessionChecked, setSessionChecked] = useState(false)
   const [isCompanyModalOpen, setIsCompanyModalOpen] = useState(false)
   const [desktopFrameMode, setDesktopFrameMode] = useState<boolean>(false)
   const { activeCompany, activeStation, notification, setNotification } = useForecourt()
@@ -63,6 +65,58 @@ const MainAppLayout: React.FC = () => {
     window.addEventListener('resize', handleResize)
     return () => window.removeEventListener('resize', handleResize)
   }, [])
+
+  useEffect(() => {
+    let cancelled = false
+    setSessionChecked(false)
+
+    const validateSession = async () => {
+      if (!session) {
+        if (!cancelled) setSessionChecked(true)
+        return
+      }
+      try {
+        const identity = await backendGetMe()
+        const matches =
+          identity.role === session.role &&
+          identity.employeeCode === session.employeeCode &&
+          (!identity.stationId || !session.stationId || identity.stationId === session.stationId) &&
+          (!identity.companyId || !session.companyId || identity.companyId === session.companyId)
+        if (!matches) throw new Error('Session identity mismatch')
+        if (cancelled) return
+        const refreshed = { ...session, stationId: identity.stationId ?? session.stationId, companyId: identity.companyId ?? session.companyId }
+        saveUnifiedSession(refreshed)
+        setSession(current => current && current.stationId === refreshed.stationId && current.companyId === refreshed.companyId ? current : refreshed)
+      } catch {
+        if (cancelled) return
+        clearUnifiedSession()
+        setSession(null)
+      } finally {
+        if (!cancelled) setSessionChecked(true)
+      }
+    }
+
+    const handleUnauthorized = () => {
+      clearUnifiedSession()
+      setSession(null)
+      setSessionChecked(true)
+    }
+
+    window.addEventListener('petroview:unauthorized', handleUnauthorized)
+    void validateSession()
+    return () => {
+      cancelled = true
+      window.removeEventListener('petroview:unauthorized', handleUnauthorized)
+    }
+  }, [session])
+
+  if (!sessionChecked) {
+    return (
+      <div className={`min-h-screen flex items-center justify-center ${theme === 'light' ? 'bg-slate-100 text-slate-900' : 'bg-[#080c14] text-slate-100'}`}>
+        <span className="w-10 h-10 border-4 border-slate-300 border-t-orange-500 rounded-full animate-spin" />
+      </div>
+    )
+  }
 
   if (!session) {
     return (
@@ -200,8 +254,11 @@ const MainAppLayout: React.FC = () => {
             {/* Sign Out Button */}
             <button
               onClick={() => {
-                clearUnifiedSession()
-                setSession(null)
+                void backendLogout().finally(() => {
+                  clearUnifiedSession()
+                  setSession(null)
+                  setSessionChecked(true)
+                })
               }}
               className={`ml-1 p-1.5 rounded-lg border text-rose-500 hover:bg-rose-500/15 hover:border-rose-500/40 transition flex items-center gap-1 ${
                 theme === 'light' ? 'bg-white border-slate-200' : 'bg-slate-950 border-slate-800'

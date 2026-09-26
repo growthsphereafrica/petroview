@@ -13,6 +13,7 @@ import type {
   ShiftTransaction,
   Supervisor,
   SupervisorSession,
+  SyncEntityType,
   SyncQueueItem,
   StationExpense,
 } from '../domain/types'
@@ -333,15 +334,59 @@ export const syncQueueRepo = {
     await prodDb.syncQueue.add(item)
   },
   async getPending(): Promise<SyncQueueItem[]> {
-    return prodDb.syncQueue
-      .filter(q => q.status === 'PENDING' && (q.nextRetryAt === null || new Date(q.nextRetryAt).getTime() <= Date.now()))
+    // DEAD_LETTER is excluded: it is terminal and must not be retried.
+    const rows = await prodDb.syncQueue
+      .filter(q => (q.status === 'PENDING' || q.status === 'FAILED') && (q.nextRetryAt === null || new Date(q.nextRetryAt).getTime() <= Date.now()))
       .toArray()
+    const priority = (item: SyncQueueItem) => item.entityType === 'SHIFT' ? 0 : 1
+    return rows.sort((a, b) => {
+      const created = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      if (created !== 0) return created
+      return priority(a) - priority(b) || a.id.localeCompare(b.id)
+    })
   },
   async getAll(): Promise<SyncQueueItem[]> {
     return prodDb.syncQueue.toArray()
   },
   async getCount(): Promise<number> {
-    return prodDb.syncQueue.where('status').equals('PENDING').count()
+    return prodDb.syncQueue.filter(q => q.status === 'PENDING' || q.status === 'FAILED').count()
+  },
+  /** Records that exhausted their retry budget and need operator attention. */
+  async getDeadLettered(): Promise<SyncQueueItem[]> {
+    const rows = await prodDb.syncQueue.filter(q => q.status === 'DEAD_LETTER').toArray()
+    return rows.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+  },
+  async getByEntity(entityType: SyncEntityType, entityId: string): Promise<SyncQueueItem | undefined> {
+    return prodDb.syncQueue.filter(q => q.entityType === entityType && q.entityId === entityId).first()
+  },
+  /** Returns a dead-lettered record to the retry queue. */
+  async revive(id: string): Promise<void> {
+    const item = await prodDb.syncQueue.get(id)
+    if (!item) return
+    await prodDb.syncQueue.put({
+      ...item,
+      status: 'PENDING',
+      attempts: 0,
+      nextRetryAt: null,
+      updatedAt: new Date().toISOString(),
+    })
+  },
+  /**
+   * Discards a dead-lettered record from the queue. The underlying entity stays
+   * in its own table, so this discards only the upload, not the sale — the
+   * operator has already inspected the rejection reason.
+   */
+  async discard(id: string): Promise<void> {
+    await prodDb.syncQueue.delete(id)
+  },
+  /** Trims SYNCED rows so the queue table does not grow for the life of the install. */
+  async pruneSynced(keep = 500): Promise<number> {
+    const synced = await prodDb.syncQueue.filter(q => q.status === 'SYNCED').toArray()
+    if (synced.length <= keep) return 0
+    const ordered = synced.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    const doomed = ordered.slice(keep).map(q => q.id)
+    await prodDb.syncQueue.bulkDelete(doomed)
+    return doomed.length
   },
   async update(item: SyncQueueItem): Promise<void> {
     await prodDb.syncQueue.put(item)

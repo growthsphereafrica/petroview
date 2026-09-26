@@ -9,14 +9,19 @@
     "ios": "expo start --ios",
     "web": "expo start --web",
     "dev": "vite",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
     "build": "tsc && vite build",
     "build:android": "eas build -p android",
     "build:ios": "eas build -p ios",
     "preview": "vite preview"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.5",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "vitest": "^5.0.2"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^3.1.1",
@@ -49,6 +54,6 @@
     "react-native-svg": "^15.15.5",
     "react-native-web": "^0.21.2",
     "tailwindcss": "^4.3.3",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   }
 }

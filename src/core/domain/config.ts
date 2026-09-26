@@ -158,4 +158,25 @@ export const MAX_METER_READING = 1_000_000
 export const SESSION_TTL_MS = 12 * 60 * 60 * 1000
 export const MAX_PIN_ATTEMPTS = 5
 export const LOCKOUT_MS = 5 * 60 * 1000
-export const PIN_LENGTH = 4
+
+/**
+ * Minimum length for a PIN that is being *set*. A 4-digit PIN is a
+ * 10,000-entry space, so a stolen device or database yields every credential
+ * quickly regardless of KDF cost. Verification still accepts anything the
+ * server issued, so credentials set before this policy keep working.
+ *
+ * Must stay in step with MIN_SECRET_LENGTH in backend/src/auth.ts.
+ */
+export const MIN_PIN_LENGTH = 6
+export const MAX_PIN_LENGTH = 32
+
+export function isPinShape(value: string): boolean {
+  return /^\d{4,32}$/.test(value)
+}
+
+export function validateNewPin(value: string): string {
+  if (!/^\d+$/.test(value)) throw new Error('PIN must contain digits only.')
+  if (value.length < MIN_PIN_LENGTH) throw new Error(`PIN must be at least ${MIN_PIN_LENGTH} digits.`)
+  if (value.length > MAX_PIN_LENGTH) throw new Error(`PIN must be at most ${MAX_PIN_LENGTH} digits.`)
+  return value
+}

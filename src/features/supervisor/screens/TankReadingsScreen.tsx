@@ -13,7 +13,7 @@ import { backendGetTankReadings, backendRecordTankReadings } from '../../../serv
 import { prodDb } from '../../../core/infra/db'
 import { syncQueueRepo } from '../../../core/infra/repositories'
 import { syncService } from '../../../core/services/syncService'
-import type { TankReadingRecord } from '../../../core/domain/types'
+import type { SyncStatus, TankReadingRecord } from '../../../core/domain/types'
 
 interface TankReadingEntry {
   tankId: string
@@ -35,7 +35,7 @@ interface ReadingRow {
   recordedAt: string
   notes: string | null
   createdAt: string
-  syncStatus?: 'PENDING' | 'SYNCED' | 'FAILED'
+  syncStatus?: SyncStatus
 }
 
 const TANK_ID_PREFIX = /^[A-Z]{3}(\d)?$/

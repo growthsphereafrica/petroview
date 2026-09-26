@@ -25,7 +25,13 @@ export type PaymentMethod = 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'
 
 export type ShiftStatus = 'OPEN' | 'CLOSED' | 'REVIEWED' | 'APPROVED' | 'REJECTED'
 
-export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED'
+/**
+ * DEAD_LETTER is terminal: the record exhausted its retry budget and will not
+ * be retried automatically. It is deliberately distinct from FAILED, which is
+ * transient and still scheduled, so the sync badge can distinguish "will
+ * probably work" from "needs a human".
+ */
+export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED' | 'DEAD_LETTER'
 
 export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT' | 'EXPENSE' | 'TANK_READING'
 

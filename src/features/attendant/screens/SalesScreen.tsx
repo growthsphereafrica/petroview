@@ -23,7 +23,7 @@ import {
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, ScreenHeader } from '../ui'
 import { FUEL_META, PAYMENT_META, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
-import { saleAmount } from '../../../core/domain/rules'
+import { FALLBACK_UNIT_PRICES, resolveUnitPrice, saleAmount } from '../../../core/domain/rules'
 import { transactionRepo } from '../../../core/infra/repositories'
 import { productService } from '../../../core/services/productService'
 import { formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
@@ -62,6 +62,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   const [editMethod, setEditMethod] = useState<PaymentMethod>('CASH')
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
+  const [recordError, setRecordError] = useState<string | null>(null)
 
   // Load products for the attendant's company
   useEffect(() => {
@@ -113,7 +114,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
 
   // Determine current unit price for selected fuelCode
   const matchedProduct = activeProducts.find(p => p.code === fuelCode)
-  const unitPrice = matchedProduct?.unitPrice ?? (fuelCode === 'AGO' ? 15.2 : fuelCode === 'DPK' ? 13.9 : fuelCode === 'KERO' ? 13.5 : 14.8)
+  const unitPrice = resolveUnitPrice(activeProducts, fuelCode)
 
   const litresNum = Number(litres) || 0
   const amount = saleAmount(litresNum, unitPrice)
@@ -123,11 +124,15 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   const record = async () => {
     if (litresNum <= 0) return
     setSaving(true)
+    setRecordError(null)
     try {
       await recordSale({ fuelCode, litres: litresNum, method, unitPrice })
       setLitres('')
-      setSaving(false)
-    } catch {
+    } catch (err) {
+      // Never clear the input on failure — the attendant must be able to retry
+      // the same sale rather than re-keying it and losing the volume.
+      setRecordError(err instanceof Error ? err.message : 'Sale could not be recorded.')
+    } finally {
       setSaving(false)
     }
   }
@@ -149,8 +154,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
       return
     }
 
-    const editProd = activeProducts.find(p => p.code === editFuelCode)
-    const editPrice = editProd?.unitPrice ?? (editFuelCode === 'AGO' ? 15.2 : editFuelCode === 'DPK' ? 13.9 : editFuelCode === 'KERO' ? 13.5 : 14.8)
+    const editPrice = resolveUnitPrice(activeProducts, editFuelCode)
 
     setEditSaving(true)
     setEditError(null)
@@ -228,7 +232,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
               : pump.fuels.map(f => ({
                   code: f,
                   name: f,
-                  unitPrice: f === 'AGO' ? 15.2 : 14.8,
+                  unitPrice: FALLBACK_UNIT_PRICES[f] ?? FALLBACK_UNIT_PRICES.PMS,
                   color: FUEL_META[f]?.color || '#22c55e',
                 }))
             ).map(p => {
@@ -352,6 +356,19 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
           )}
           Record {formatGHS(amount)} {method}
         </button>
+
+        {recordError && (
+          <div
+            role="alert"
+            className="mt-2 rounded-xl border border-red-500/40 bg-red-950/40 px-3 py-2.5 flex items-start gap-2"
+          >
+            <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-[11px] font-bold text-red-300">Sale not saved — do not dispense again</p>
+              <p className="text-[11px] text-red-200/80 mt-0.5 break-words">{recordError}</p>
+            </div>
+          </div>
+        )}
 
         {/* Inline Recent Transactions snippet */}
         <div className="mt-2">
@@ -641,7 +658,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
                     : pump.fuels.map(f => ({
                         code: f,
                         name: f,
-                        unitPrice: f === 'AGO' ? 15.2 : 14.8,
+                        unitPrice: FALLBACK_UNIT_PRICES[f] ?? FALLBACK_UNIT_PRICES.PMS,
                         color: FUEL_META[f]?.color || '#22c55e',
                       }))
                   ).map(p => {
@@ -713,11 +730,11 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
                 </div>
               </div>
 
-              {/* Recomputed Amount Preview */}
+              {/* Recomputed Amount Preview — uses the exact same price and
+                  rounding as the save path, so what is shown is what is stored. */}
               {(() => {
-                const ep = activeProducts.find(p => p.code === editFuelCode)
-                const price = ep?.unitPrice ?? (editFuelCode === 'AGO' ? 15.2 : 14.8)
-                const recomputed = (Number(editLitres) || 0) * price
+                const price = resolveUnitPrice(activeProducts, editFuelCode)
+                const recomputed = saleAmount(Number(editLitres) || 0, price)
                 return (
                   <div className={`p-3 rounded-xl border flex items-center justify-between ${
                     isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-100 border-slate-200'

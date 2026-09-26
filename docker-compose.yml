@@ -2,14 +2,31 @@ services:
   backend:
     build: ./backend
     container_name: masterview-backend
-    ports:
-      - "4000:4000"
     environment:
+      - NODE_ENV=production
       - PORT=4000
       - DB_PATH=/app/data/masterview.sqlite
+      # No default: the server refuses to boot without a platform-admin PIN.
+      # Provide it via a .env file next to this compose file, or a secret store.
+      - SUPER_ADMIN_PIN=${SUPER_ADMIN_PIN:?SUPER_ADMIN_PIN must be set}
+      - SEED_DEMO_DATA=false
+      - ENABLE_DESTRUCTIVE_OPERATIONS=false
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - PRICE_TOLERANCE_GHS=${PRICE_TOLERANCE_GHS:-0.01}
+    # Bound to loopback. This container has no TLS of its own, so publishing
+    # 4000 on all interfaces would expose PINs over plaintext and bypass the
+    # reverse proxy. Put a TLS terminator in front, or forward to it explicitly.
+    ports:
+      - "127.0.0.1:4000:4000"
     volumes:
       - masterview-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 volumes:
   masterview-data:

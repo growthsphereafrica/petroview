@@ -7,7 +7,7 @@
  */
 
 import { DomainError } from '../domain/errors'
-import { LOCKOUT_MS, MAX_PIN_ATTEMPTS, PIN_LENGTH, SESSION_TTL_MS } from '../domain/config'
+import { isPinShape, LOCKOUT_MS, MAX_PIN_ATTEMPTS, SESSION_TTL_MS, validateNewPin } from '../domain/config'
 import { verifyPin, hashPin } from '../infra/password'
 import { prodDb } from '../infra/db'
 import { attendantRepo, auditLogRepo, shiftRepo, supervisorRepo, supervisorSessionRepo, syncQueueRepo } from '../infra/repositories'
@@ -35,8 +35,8 @@ interface AuthSupervisor {
 }
 
 function assertPinShape(pin: string): void {
-  if (!/^\d{4}$/.test(pin)) {
-    throw new DomainError('AUTH_INVALID_CREDENTIALS', `PIN must be ${PIN_LENGTH} digits.`)
+  if (!isPinShape(pin)) {
+    throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 to 32 digits.')
   }
 }
 
@@ -128,12 +128,18 @@ export class SupervisorService {
   }
 
   /** All shifts across stations, merged from backend and local IndexedDB, newest first. */
-  async listAllShifts(stationId?: string, companyId?: string): Promise<Shift[]> {
+  async listAllShifts(stationId?: string, companyId?: string, isHeadOffice?: boolean): Promise<Shift[]> {
     try {
       const { backendGetShiftsByCompany, backendGetShifts } = await import('../../services/backendApiService')
       let remoteShifts: any[] = []
-      if (companyId) {
+      if (isHeadOffice && companyId) {
         const res = await backendGetShiftsByCompany(companyId, stationId ? { station: stationId } : undefined)
+        remoteShifts = res.shifts || []
+      } else if (stationId) {
+        const res = await backendGetShifts(undefined, stationId)
+        remoteShifts = res.shifts || []
+      } else if (companyId && isHeadOffice) {
+        const res = await backendGetShiftsByCompany(companyId)
         remoteShifts = res.shifts || []
       } else {
         const res = await backendGetShifts(undefined, stationId)
@@ -182,10 +188,11 @@ export class SupervisorService {
     if (stationId) {
       return localRows.filter(s => s.stationId === stationId)
     }
-    if (companyId) {
+    // Only Head Office / Fleet governance can view shifts across all stations
+    if (isHeadOffice && companyId) {
       return localRows.filter(s => (s as any).companyId === companyId || (s as any).companyShortCode === companyId)
     }
-    return localRows
+    return isHeadOffice ? localRows : []
   }
 
   async listByStatus(status: ShiftStatus): Promise<Shift[]> {
@@ -237,7 +244,11 @@ export class SupervisorService {
     // 2. Direct push to backend for real-time reflection across HQ & Super Admin
     try {
       const { backendReviewShift } = await import('../../services/backendApiService')
-      await backendReviewShift(shiftId, verdict, notes.trim())
+      const { uploadEntityToCloud } = await import('../../services/cloudApiService')
+      await backendReviewShift(shiftId, verdict, notes.trim(), updated)
+      try {
+        await uploadEntityToCloud('SHIFT', shiftId)
+      } catch { /* will retry in queue */ }
       await prodDb.shifts.update(shiftId, { syncStatus: 'SYNCED' })
     } catch (pushErr) {
       console.warn('[supervisorService] Immediate shift review upload warning, queued in background:', pushErr)
@@ -295,22 +306,34 @@ export class SupervisorService {
     }
   }
 
-  async dashboardStats(stationId?: string, companyId?: string): Promise<SupervisorStats> {
-    const all = await this.listAllShifts(stationId, companyId)
+  async dashboardStats(stationId?: string, companyId?: string, isHeadOffice?: boolean): Promise<SupervisorStats> {
+    const all = await this.listAllShifts(stationId, companyId, isHeadOffice)
     const today = new Date().toISOString().slice(0, 10)
-    const todayShifts = all.filter(s => (s.openedAt || '').slice(0, 10) === today)
-    const closed = all.filter(s => s.closedAt)
-    const todayClosed = closed.filter(s => (s.closedAt || '').slice(0, 10) === today)
-    const attendants = await attendantRepo.listActive()
-    const todayClosedIds = todayClosed.map(s => s.id)
-    const carsServedToday = todayClosedIds.length > 0
-      ? await prodDb.transactions.where('shiftId').anyOf(todayClosedIds).count()
+    const todayShifts = all.filter(s => ((s.openedAt || s.closedAt) || '').slice(0, 10) === today)
+    const closed = all.filter(s => s.closedAt || s.status === 'APPROVED' || s.status === 'CLOSED')
+    const attendants = await this.listAttendants(stationId, companyId)
+    const todayShiftIds = todayShifts.map(s => s.id)
+    const carsServedToday = todayShiftIds.length > 0
+      ? await prodDb.transactions.where('shiftId').anyOf(todayShiftIds).count()
       : 0
+
+    const salesToday = Math.round(
+      todayShifts.reduce((a, s) => {
+        const val = s.actualTotal && s.actualTotal > 0
+          ? s.actualTotal
+          : s.expectedTotal && s.expectedTotal > 0
+          ? s.expectedTotal
+          : s.sales ? s.sales.reduce((x, y) => x + (y.amount || (y.litres || 0) * (y.unitPrice || 0)), 0) : 0
+        return a + val
+      }, 0),
+    )
+
+    const litresToday = todayShifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + (y.litres || 0), 0) : 0), 0)
 
     return {
       shiftsToday: todayShifts.length,
-      salesToday: Math.round(todayClosed.reduce((a, s) => a + s.actualTotal, 0)),
-      litresToday: todayClosed.reduce((a, s) => a + s.sales.reduce((x, y) => x + y.litres, 0), 0),
+      salesToday,
+      litresToday,
       carsServedToday,
       pendingReviews: all.filter(s => s.status === 'CLOSED').length,
       activeAttendants: attendants.length,
@@ -319,12 +342,17 @@ export class SupervisorService {
     }
   }
 
-  async listAttendants(): Promise<Attendant[]> {
-    const all = await attendantRepo.listActive()
+  async listAttendants(stationId?: string, companyId?: string): Promise<Attendant[]> {
+    let all = await attendantRepo.listActive()
+    if (stationId) {
+      all = all.filter(a => a.stationId === stationId)
+    } else if (companyId) {
+      all = all.filter(a => a.companyId === companyId || a.companyShortCode === companyId)
+    }
     return all.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode))
   }
 
-  async registerAttendant(input: { fullName: string; employeeCode: string; pin: string; pumpId: string; stationId?: string }, registrar?: Pick<Supervisor, 'id' | 'fullName'>): Promise<Attendant> {
+  async registerAttendant(input: { fullName: string; employeeCode: string; pin: string; pumpId: string; stationId?: string }, registrar?: Pick<Supervisor, 'id' | 'fullName' | 'stationId'>): Promise<Attendant> {
     const trimmed = input.employeeCode.trim().toUpperCase()
     let code = trimmed
     if (/^\d{4,6}$/.test(trimmed)) code = `ATT${trimmed}`
@@ -337,8 +365,9 @@ export class SupervisorService {
     const existing = await attendantRepo.findByEmployeeCode(code)
     if (existing) throw new DomainError('ATTENDANT_CODE_EXISTS', `Employee code ${code} is already in use.`)
 
+    validateNewPin(input.pin)
     const { salt, hash } = await hashPin(input.pin)
-    const stationId = input.stationId ?? 'STN-GV-042'
+    const stationId = input.stationId || registrar?.stationId || 'STN-01'
     const attendant: Attendant = {
       id: `att-${crypto.randomUUID()}`,
       employeeCode: code,
@@ -398,6 +427,7 @@ export class SupervisorService {
 
     const companyPrefix = input.companyShortCode?.trim().toUpperCase() || 'PV'
     const code = input.employeeCode?.trim().toUpperCase() || (await generateNextStaffCode(input.role, companyPrefix))
+    validateNewPin(input.pin)
     const { salt, hash } = await hashPin(input.pin)
     const now = new Date().toISOString()
     const companyId = input.companyId || 'COMP-PV'
@@ -544,20 +574,8 @@ export class SupervisorService {
 
       return { attendants: liveAtts, supervisors: liveSups }
     } catch (err) {
-      console.warn('[supervisorService] Fallback to local DB for pending staff:', err)
-      const [attendants, supervisors] = await Promise.all([
-        attendantRepo.listPending(),
-        supervisorRepo.listPending(),
-      ])
-      return {
-        attendants: companyId
-          ? attendants.filter(a => a.companyId === companyId || a.companyShortCode === companyId)
-          : attendants,
-        supervisors: (companyId
-          ? supervisors.filter(s => s.companyId === companyId || s.companyShortCode === companyId)
-          : supervisors
-        ).filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER'),
-      }
+      console.warn('[supervisorService] Failed to load pending staff from backend:', err)
+      throw err
     }
   }
 
@@ -625,33 +643,8 @@ export class SupervisorService {
         supervisors: liveSups.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
       }
     } catch (err) {
-      console.warn('[supervisorService] Fallback to local DB for all staff:', err)
-      const [attendants, supervisors] = await Promise.all([
-        attendantRepo.listAll(),
-        supervisorRepo.listAll(),
-      ])
-      const filteredAttendants = companyId
-        ? attendants.filter(
-            a =>
-              a.companyId === companyId ||
-              a.companyShortCode === companyId ||
-              a.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()),
-          )
-        : attendants
-      const filteredSupervisors = (companyId
-        ? supervisors.filter(
-            s =>
-              s.companyId === companyId ||
-              s.companyShortCode === companyId ||
-              s.employeeCode.startsWith(companyId.replace('comp-', '').toUpperCase()),
-          )
-        : supervisors
-      ).filter(s => !s.isSuperAdmin && s.employeeCode !== 'SUPER-ADMIN' && s.employeeCode !== 'PETRO-MASTER')
-
-      return {
-        attendants: filteredAttendants.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
-        supervisors: filteredSupervisors.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode)),
-      }
+      console.warn('[supervisorService] Failed to load all staff from backend:', err)
+      throw err
     }
   }
 
@@ -743,9 +736,10 @@ export class SupervisorService {
   async resetAttendantPin(id: string, newPin: string, actor?: Pick<Supervisor, 'id' | 'fullName'>): Promise<Attendant> {
     const attendant = await attendantRepo.getById(id)
     if (!attendant) throw new DomainError('ATTENDANT_NOT_FOUND', 'Attendant not found.')
-    if (!/^\d{4}$/.test(newPin)) {
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
+    if (!isPinShape(newPin)) {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 to 32 digits.')
     }
+    validateNewPin(newPin)
     const { salt, hash } = await hashPin(newPin)
     const updated: Attendant = { ...attendant, pinSalt: salt, pinHash: hash, failedAttempts: 0, lockoutUntil: null }
     await prodDb.attendants.put(updated)
@@ -772,9 +766,10 @@ export class SupervisorService {
     newPin: string,
     actorName = 'Administrator',
   ): Promise<void> {
-    if (!/^\d{4}$/.test(newPin)) {
-      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 digits.')
+    if (!isPinShape(newPin)) {
+      throw new DomainError('AUTH_INVALID_CREDENTIALS', 'PIN must be 4 to 32 digits.')
     }
+    validateNewPin(newPin)
     const { salt, hash } = await hashPin(newPin)
 
     if (role === 'attendant') {

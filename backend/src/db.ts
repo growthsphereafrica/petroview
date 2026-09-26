@@ -2,7 +2,14 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ENV, SUPER_ADMIN } from './config'
-import { hashPin } from './auth'
+import { CURRENT_KDF_VERSION, hashPin, verifyPinDetailed } from './auth'
+
+/**
+ * PINs that have been published in this project's own documentation, example
+ * config, or source history. The server refuses to start if the platform admin
+ * is configured with one of them.
+ */
+const WEAK_SUPER_ADMIN_PINS = new Set(['7256', '1234', '9999', '0000', '1111', '0001'])
 
 export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO' | 'RON95' | 'AGO-PREM' | 'LPG' | 'PREMIX' | string
 export type PaymentMethod = 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'
@@ -25,6 +32,7 @@ export type AuditAction =
   | 'COMPANY_CREATED'
   | 'SHIFT_OPENED'
   | 'SHIFT_CLOSED'
+  | 'SALE_RECORDED'
   | 'TANK_READING_RECORDED'
 
 export interface MeterReading {
@@ -341,46 +349,79 @@ function tableColumns(table: string): string[] {
   return rows.map((r) => r.name)
 }
 
-// Legacy volumes created by earlier deploys have tables without the multi-tenant
-// columns (companyId, approvalStatus, isSuperAdmin, ...). CREATE TABLE IF NOT EXISTS
-// won't alter those tables, so rebuild them in place while preserving any existing rows.
 function migrateLegacyTables(): void {
-  const migrations: Array<{ table: keyof typeof SCHEMA_DDL; required: string[] }> = [
-    { table: 'supervisors', required: ['companyId', 'isSuperAdmin', 'approvalStatus'] },
-    { table: 'attendants', required: ['companyId', 'approvalStatus', 'companyShortCode'] },
-    { table: 'sessions', required: ['companyId', 'companyShortCode'] },
-    { table: 'companyStations', required: ['active'] },
-  ]
-  for (const m of migrations) {
-    const cols = tableColumns(m.table)
-    const isLegacy = m.required.some((c) => !cols.includes(c))
-    if (!isLegacy) continue
-
-    const legacy = `${m.table}_legacy`
-    db.exec(`ALTER TABLE ${m.table} RENAME TO ${legacy}`)
-    db.exec(SCHEMA_DDL[m.table])
-    const common = cols.filter((c) => tableColumns(m.table).includes(c))
-    if (common.length > 0) {
-      const list = common.join(', ')
-      db.prepare(`INSERT OR IGNORE INTO ${m.table} (${list}) SELECT ${list} FROM ${legacy}`).run()
-    }
-    db.exec(`DROP TABLE ${legacy}`)
-    console.log(`[db] Migrated legacy schema for ${m.table}`)
+  const columnDefinitions: Record<string, Record<string, string>> = {
+    supervisors: {
+      companyId: 'TEXT',
+      companyShortCode: 'TEXT',
+      phone: 'TEXT',
+      isHeadOffice: 'INTEGER NOT NULL DEFAULT 0',
+      isSuperAdmin: 'INTEGER NOT NULL DEFAULT 0',
+      approvalStatus: "TEXT NOT NULL DEFAULT 'APPROVED'",
+      approvedAt: 'TEXT',
+      approvedBy: 'TEXT',
+      active: 'INTEGER NOT NULL DEFAULT 1',
+      failedAttempts: 'INTEGER NOT NULL DEFAULT 0',
+      lockoutUntil: 'TEXT',
+    },
+    attendants: {
+      pumpId: 'TEXT',
+      stationId: 'TEXT',
+      companyId: 'TEXT',
+      companyShortCode: 'TEXT',
+      phone: 'TEXT',
+      approvalStatus: "TEXT NOT NULL DEFAULT 'APPROVED'",
+      approvedAt: 'TEXT',
+      approvedBy: 'TEXT',
+      active: 'INTEGER NOT NULL DEFAULT 1',
+      failedAttempts: 'INTEGER NOT NULL DEFAULT 0',
+      lockoutUntil: 'TEXT',
+    },
+    sessions: {
+      companyId: 'TEXT',
+      companyShortCode: 'TEXT',
+    },
+    companyStations: {
+      supervisorName: 'TEXT',
+      active: 'INTEGER NOT NULL DEFAULT 1',
+    },
+    shifts: {
+      companyId: 'TEXT',
+      companyShortCode: 'TEXT',
+    },
   }
 
-  // Non-destructive column additions on shifts
-  try {
-    const shiftCols = tableColumns('shifts')
-    if (!shiftCols.includes('companyId')) {
-      db.exec('ALTER TABLE shifts ADD COLUMN companyId TEXT')
-      console.log('[db] Added companyId column to shifts')
+  for (const [table, definitions] of Object.entries(columnDefinitions)) {
+    const existing = new Set(tableColumns(table))
+    for (const [column, definition] of Object.entries(definitions)) {
+      if (!existing.has(column)) {
+        db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+        console.log(`[db] Added ${table}.${column}`)
+      }
     }
-    if (!shiftCols.includes('companyShortCode')) {
-      db.exec('ALTER TABLE shifts ADD COLUMN companyShortCode TEXT')
-      console.log('[db] Added companyShortCode column to shifts')
-    }
-  } catch (err) {
-    console.warn('[db] Shifts column addition warning:', err)
+  }
+
+  // Backfill shifts.companyId from the station the shift belongs to.
+  //
+  // The column was added by the migration above as a plain nullable TEXT with no
+  // data migration, so every pre-existing shift kept companyId = NULL — and
+  // assertShiftLedger() returns early on a NULL companyId. The transaction
+  // reconciliation therefore switched itself off for the entire legacy
+  // population, silently, based on a data field rather than a policy.
+  const backfilled = db.prepare(`
+    UPDATE shifts
+    SET companyId = (SELECT cs.companyId FROM companyStations cs WHERE cs.id = shifts.stationId)
+    WHERE (companyId IS NULL OR companyId = '')
+      AND stationId IS NOT NULL
+      AND EXISTS (SELECT 1 FROM companyStations cs WHERE cs.id = shifts.stationId)
+  `).run()
+  if (backfilled.changes > 0) {
+    console.log(`[db] Backfilled shifts.companyId for ${backfilled.changes} legacy shift(s)`)
+  }
+
+  const unresolvable = db.prepare('SELECT COUNT(*) AS c FROM shifts WHERE companyId IS NULL OR companyId = ?').get('') as { c: number }
+  if (unresolvable.c > 0) {
+    console.warn(`[db] WARNING: ${unresolvable.c} shift(s) have no resolvable company and will skip ledger verification`)
   }
 }
 
@@ -402,26 +443,78 @@ export function initSchema(): void {
   ensureIndex('idx_supervisors_company', 'CREATE INDEX idx_supervisors_company ON supervisors (companyId)')
   ensureIndex('idx_products_company_code', 'CREATE INDEX idx_products_company_code ON products (companyId, code)')
   ensureIndex('idx_pumps_station', 'CREATE INDEX idx_pumps_station ON pumps (stationId)')
+  ensureIndex('idx_transactions_shiftId', 'CREATE INDEX idx_transactions_shiftId ON transactions (shiftId)')
+  ensureIndex('idx_receipts_shiftId', 'CREATE INDEX idx_receipts_shiftId ON receipts (shiftId)')
+  ensureIndex('idx_expenses_station', 'CREATE INDEX idx_expenses_station ON station_expenses (stationId)')
+  ensureIndex('idx_expenses_company', 'CREATE INDEX idx_expenses_company ON station_expenses (companyId)')
 }
 
 export function seedSuperAdmin(): void {
-  const existing = db.prepare('SELECT id FROM supervisors WHERE employeeCode = ?').get(SUPER_ADMIN.employeeCode) as
-    | { id: string }
+  if (ENV.IS_PRODUCTION && !SUPER_ADMIN.pin) {
+    throw new Error('SUPER_ADMIN_PIN must be set in production.')
+  }
+  if (SUPER_ADMIN.pin && WEAK_SUPER_ADMIN_PINS.has(SUPER_ADMIN.pin)) {
+    throw new Error('SUPER_ADMIN_PIN is a well-known default. Choose a unique PIN before starting the server.')
+  }
+  if (SUPER_ADMIN.pin && !/^\d{4,32}$/.test(SUPER_ADMIN.pin)) {
+    throw new Error('SUPER_ADMIN_PIN must be 4-32 digits.')
+  }
+
+  const existing = db.prepare('SELECT id, pinSalt, pinHash FROM supervisors WHERE employeeCode = ?').get(SUPER_ADMIN.employeeCode) as
+    | { id: string; pinSalt: string | null; pinHash: string | null }
     | undefined
 
   if (existing) {
+    // Distinguish three cases against the *stored* credential, using a
+    // version-tolerant verify:
+    //   - the configured PIN does not match  -> genuine rotation, revoke sessions
+    //   - it matches but on a superseded KDF  -> re-hash only, keep sessions
+    //   - it matches on the current KDF       -> leave the row alone
+    //
+    // The previous code re-hashed unconditionally on every boot, which reset the
+    // lockout counter on each restart. The variant before that compared only the
+    // current scheme, so after the KDF was strengthened it would have judged
+    // every existing account as "changed" and revoked its sessions on boot.
+    let rotate = false
+    let rehashOnly = false
+    if (SUPER_ADMIN.pin && existing.pinSalt && existing.pinHash) {
+      const verification = verifyPinDetailed(SUPER_ADMIN.pin, existing.pinSalt, existing.pinHash)
+      rotate = !verification.valid
+      rehashOnly = verification.valid && verification.version !== CURRENT_KDF_VERSION
+    }
+    const replacement = rotate || rehashOnly ? hashPin(SUPER_ADMIN.pin) : null
+
     db.prepare(
       `UPDATE supervisors
        SET fullName = ?, stationId = NULL, companyId = ?, isHeadOffice = 0, isSuperAdmin = 1,
+           pinSalt = COALESCE(?, pinSalt), pinHash = COALESCE(?, pinHash),
            approvalStatus = 'APPROVED', approvedAt = COALESCE(approvedAt, ?), approvedBy = COALESCE(approvedBy, 'SYSTEM_SEED'),
-           active = 1, lockoutUntil = NULL
+           active = 1
        WHERE id = ?`,
-    ).run(SUPER_ADMIN.fullName, SUPER_ADMIN.companyId, new Date().toISOString(), existing.id)
+    ).run(
+      SUPER_ADMIN.fullName,
+      SUPER_ADMIN.companyId,
+      replacement?.salt ?? null,
+      replacement?.hash ?? null,
+      new Date().toISOString(),
+      existing.id,
+    )
+    if (rotate) {
+      // Every other credential-change path revokes sessions; this one did not,
+      // so rotating the platform admin PIN left old tokens working.
+      db.prepare('DELETE FROM sessions WHERE userId = ?').run(existing.id)
+      console.log('[db] SUPER-ADMIN PIN rotated — existing sessions revoked')
+    } else if (rehashOnly) {
+      console.log(`[db] SUPER-ADMIN credential upgraded to KDF v${CURRENT_KDF_VERSION} (PIN unchanged, sessions preserved)`)
+    }
     console.log(`[db] Ensured SUPER-ADMIN (${SUPER_ADMIN.employeeCode})`)
     return
   }
 
-  const { salt, hash } = hashPin(SUPER_ADMIN.pin)
+  const pin = SUPER_ADMIN.pin ? hashPin(SUPER_ADMIN.pin) : null
+  if (!pin) {
+    throw new Error('A Super Admin PIN is required to seed the account.')
+  }
   const now = new Date().toISOString()
   db.prepare(
     `INSERT INTO supervisors (id, employeeCode, fullName, pinSalt, pinHash, stationId, companyId, companyShortCode,
@@ -431,8 +524,8 @@ export function seedSuperAdmin(): void {
     SUPER_ADMIN.id,
     SUPER_ADMIN.employeeCode,
     SUPER_ADMIN.fullName,
-    salt,
-    hash,
+    pin.salt,
+    pin.hash,
     SUPER_ADMIN.stationId,
     SUPER_ADMIN.companyId,
     null,
@@ -480,6 +573,7 @@ export function seedDefaultProducts(): void {
 }
 
 export function seedDefaultCompanies(): void {
+  if (ENV.IS_PRODUCTION) return
   const count = (db.prepare('SELECT COUNT(*) AS c FROM companies').get() as { c: number }).c
   if (count > 0) return
 
@@ -576,8 +670,13 @@ export function seedDefaultCompanies(): void {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '024 000 0000', 'APPROVED', ?, 'SYSTEM_SEED', 1, 0, NULL, ?)`
   )
 
-  const { salt: hqSalt, hash: hqHash } = hashPin('9999')
-  const { salt: attSalt, hash: attHash } = hashPin('1234')
+  const hqPin = process.env.DEMO_HQ_PIN?.trim() || '999988'
+  const attendantPin = process.env.DEMO_ATTENDANT_PIN?.trim() || '123477'
+  if (!/^\d{4,32}$/.test(hqPin) || !/^\d{4,32}$/.test(attendantPin)) {
+    throw new Error('DEMO_HQ_PIN and DEMO_ATTENDANT_PIN must be 4-32 digit values.')
+  }
+  const { salt: hqSalt, hash: hqHash } = hashPin(hqPin)
+  const { salt: attSalt, hash: attHash } = hashPin(attendantPin)
 
   for (const c of defaultCompanies) {
     insertComp.run(c.id, c.name, c.shortCode, c.tagline, c.shortCode, c.primaryColor, c.primaryDark, c.accentColor, now)
@@ -603,13 +702,13 @@ export function seedDefaultCompanies(): void {
       now
     )
   }
-  console.log('[db] Seeded default OMCs, stations, HQ Admins (PIN 9999), and Attendants (PIN 1234)')
+  console.log('[db] Seeded development OMCs, stations, HQ admins, and attendants')
 }
 
 export function seedAllProductionData(): void {
   seedSuperAdmin()
-  seedDefaultCompanies()
   seedDefaultProducts()
+  if (ENV.SEED_DEMO_DATA) seedDefaultCompanies()
 }
 
 export function deserializeShift(row: ShiftRow): Shift {

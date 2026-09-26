@@ -4,11 +4,11 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { authService } from '../../core/services/authService'
 import { shiftService } from '../../core/services/shiftService'
 import { syncService } from '../../core/services/syncService'
 import { describeError, DomainError } from '../../core/domain/errors'
-import { prodDb, seedProductionData } from '../../core/infra/db'
+import { backendLogout } from '../../services/backendApiService'
+import { prodDb } from '../../core/infra/db'
 import { attendantRepo } from '../../core/infra/repositories'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { formatGHS } from '../../utils/currencyFormatter'
@@ -29,8 +29,6 @@ interface SessionContextValue {
   signOut: () => Promise<void>
 }
 
-const SESSION_STORAGE_KEY = 'mvp_prod_session_token'
-
 const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
 export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; session?: UnifiedSession | null }> = ({
@@ -39,15 +37,14 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
 }) => {
   const [ready, setReady] = useState(false)
   const [attendant, setAttendant] = useState<Attendant | null>(null)
-  const [signingIn, setSigningIn] = useState(false)
+  const signingIn = false
 
-  // Restore session on mount.
   useEffect(() => {
     let cancelled = false
     async function restore() {
-      await seedProductionData()
-      const activeUni = session || loadUnifiedSession()
-      if (activeUni && activeUni.role === 'attendant') {
+      try {
+        const activeUni = session || loadUnifiedSession()
+        if (!activeUni || activeUni.role !== 'attendant') return
         let att = await attendantRepo.findByEmployeeCode(activeUni.employeeCode)
         if (!att) {
           att = {
@@ -56,44 +53,33 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
             fullName: activeUni.fullName,
             pinSalt: 'synced_session',
             pinHash: 'synced_session',
-            stationId: activeUni.stationId || 'stn-01',
-            pumpId: 'pump-01',
+            stationId: activeUni.stationId || '',
+            pumpId: null,
             companyId: activeUni.companyId,
             companyShortCode: activeUni.companyShortCode,
             approvalStatus: 'APPROVED',
-            approvedAt: new Date().toISOString(),
-            approvedBy: 'OMC HQ Admin',
+            approvedAt: activeUni.expiresAt,
+            approvedBy: 'Backend',
             active: true,
             failedAttempts: 0,
             lockoutUntil: null,
             createdAt: new Date().toISOString(),
           }
           await prodDb.attendants.put(att)
+        } else if (activeUni.stationId && att.stationId !== activeUni.stationId) {
+          att.stationId = activeUni.stationId
+          if (activeUni.companyId) att.companyId = activeUni.companyId
+          if (activeUni.companyShortCode) att.companyShortCode = activeUni.companyShortCode
+          await prodDb.attendants.put(att)
         }
-        const token = localStorage.getItem(SESSION_STORAGE_KEY) || `sess_${crypto.randomUUID()}`
-        localStorage.setItem(SESSION_STORAGE_KEY, token)
-        await prodDb.sessions.put({
-          id: `sess-${crypto.randomUUID()}`,
-          token,
-          attendantId: att.id,
-          employeeCode: att.employeeCode,
-          fullName: att.fullName,
-          createdAt: new Date().toISOString(),
-          expiresAt: new Date(Date.now() + 86400000).toISOString(),
-        })
         if (!cancelled) setAttendant(att)
-      } else {
-        const token = localStorage.getItem(SESSION_STORAGE_KEY)
-        if (token) {
-          try {
-            const { attendant } = await authService.verifySession(token)
-            if (!cancelled) setAttendant(attendant)
-          } catch {
-            localStorage.removeItem(SESSION_STORAGE_KEY)
-          }
-        }
+      } catch (err) {
+        // A blocked or corrupt IndexedDB must not present as a silent
+        // logged-out state with no explanation.
+        console.error('[session] restore failed', err)
+      } finally {
+        if (!cancelled) setReady(true)
       }
-      if (!cancelled) setReady(true)
     }
     void restore()
     return () => {
@@ -101,20 +87,12 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
     }
   }, [session])
 
-  const signIn = useCallback(async (employeeCode: string, pin: string) => {
-    setSigningIn(true)
-    try {
-      const { attendant, session } = await authService.authenticate(employeeCode, pin)
-      localStorage.setItem(SESSION_STORAGE_KEY, session.token)
-      setAttendant(attendant)
-    } finally {
-      setSigningIn(false)
-    }
+  const signIn = useCallback(async () => {
+    throw new Error('Use the unified gateway to sign in.')
   }, [])
 
   const signOut = useCallback(async () => {
-    const token = localStorage.getItem(SESSION_STORAGE_KEY)
-    if (token) await authService.logout(token)
+    await backendLogout()
     clearUnifiedSession()
     setAttendant(null)
     window.location.reload()
@@ -172,14 +150,21 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       setLoading(false)
       return
     }
-    const [current, history] = await Promise.all([
-      shiftService.getActiveShift(attendant.id),
-      shiftService.listShifts(attendant.id),
-    ])
-    setActiveShift(current)
-    setShifts(history)
-    setPendingCount(await syncService.pendingCount())
-    setLoading(false)
+    try {
+      const [current, history] = await Promise.all([
+        shiftService.getActiveShift(attendant.id),
+        shiftService.listShifts(attendant.id),
+      ])
+      setActiveShift(current)
+      setShifts(history)
+      setPendingCount(await syncService.pendingCount())
+    } catch (err) {
+      // Never leave `loading` true: a rejected read used to strand the
+      // attendant on a permanent spinner with no way forward.
+      console.error('[shift] refresh failed', err)
+    } finally {
+      setLoading(false)
+    }
   }, [attendant])
 
   useEffect(() => {
@@ -196,7 +181,7 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
   // Background auto-sync: push pending records periodically when online.
   useEffect(() => {
     const timer = window.setInterval(() => {
-      void syncService.runPendingSync()
+      void syncService.runPendingSync().catch(err => console.error('[sync] periodic run failed', err))
     }, AUTO_SYNC_INTERVAL_MS)
     return () => window.clearInterval(timer)
   }, [])
@@ -227,16 +212,23 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
         notify('No open shift. Start a shift first.', 'error')
         throw new DomainError('SHIFT_NOT_OPEN', 'No open shift.')
       }
-      const updated = await shiftService.recordSale({
-        shift: activeShift,
-        fuelCode: input.fuelCode,
-        litres: input.litres,
-        method: input.method,
-        unitPrice: input.unitPrice,
-      })
-      setActiveShift(updated)
-      setShifts(prev => (prev.some(s => s.id === updated.id) ? prev.map(s => (s.id === updated.id ? updated : s)) : [updated, ...prev]))
-      notify(`${input.litres.toFixed(2)}L ${input.fuelCode} — ${formatGHS(updated.actualTotal)} collected so far`, 'success')
+      try {
+        const updated = await shiftService.recordSale({
+          shift: activeShift,
+          fuelCode: input.fuelCode,
+          litres: input.litres,
+          method: input.method,
+          unitPrice: input.unitPrice,
+        })
+        setActiveShift(updated)
+        setShifts(prev => (prev.some(s => s.id === updated.id) ? prev.map(s => (s.id === updated.id ? updated : s)) : [updated, ...prev]))
+        notify(`${input.litres.toFixed(2)}L ${input.fuelCode} — ${formatGHS(updated.actualTotal)} collected so far`, 'success')
+      } catch (err) {
+        // A sale that fails to persist must never look like a sale that
+        // succeeded: the fuel is already dispensed and the cash already taken.
+        notify(`Sale not recorded: ${describeError(err)}`, 'error')
+        throw err
+      }
     },
     [attendant, activeShift, notify],
   )

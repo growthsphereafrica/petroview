@@ -5,43 +5,38 @@
  */
 
 import { syncQueueRepo } from '../infra/repositories'
-import type { SyncQueueItem, SyncStatus } from '../domain/types'
+import { nextRetryDecision } from './syncPolicy'
+import type { SyncQueueItem } from '../domain/types'
 import { liveSyncBus } from './liveSyncBus'
-import { getApiBase, uploadEntityToCloud } from '../../services/cloudApiService'
+import { uploadEntityToCloud } from '../../services/cloudApiService'
 
 export interface SyncResult {
   attempted: number
   succeeded: number
   failed: number
+  deadLettered: number
 }
 
 export interface SyncProgressEvent {
   pendingCount: number
   syncedCount: number
+  deadLetteredCount: number
   result?: SyncResult
 }
 
 type SyncListener = (event: SyncProgressEvent) => void
 
-/**
- * Backend uploader. When a real API base URL is configured (VITE_API_URL)
- * the entity is POSTed to the gateway and failures are retried with
- * exponential backoff. Without a configured backend the device runs in
- * simulated-sync demo mode (any queued entity is treated as accepted).
- */
 async function uploadEntity(item: SyncQueueItem): Promise<void> {
-  if (getApiBase()) {
-    await uploadEntityToCloud(item.entityType, item.entityId)
-    return
-  }
-  await new Promise(resolve => setTimeout(resolve, 350))
+  await uploadEntityToCloud(item.entityType, item.entityId)
 }
 
-const BACKOFF_BASE_MS = 1_000
+export { MAX_SYNC_ATTEMPTS, nextRetryDecision, toSyncStatusLabel } from './syncPolicy'
+
 
 export class SyncService {
   private listeners: SyncListener[] = []
   private running = false
+  private rerunRequested = false
   private debounceTimer: number | null = null
   private autoSyncInterval: number | null = null
 
@@ -55,18 +50,18 @@ export class SyncService {
     // Immediately trigger upload when connection returns
     window.addEventListener('online', () => {
       console.log('[SyncService] Device is ONLINE. Triggering immediate background sync pass.')
-      void this.runPendingSync()
+      void this.runPendingSync().catch(err => console.error('[SyncService] sync pass failed', err))
     })
 
     // Trigger sync when tab becomes active again
     window.addEventListener('focus', () => {
-      void this.runPendingSync()
+      void this.runPendingSync().catch(err => console.error('[SyncService] sync pass failed', err))
     })
 
     // Continuous background sync loop (checks every 12 seconds)
     this.autoSyncInterval = window.setInterval(() => {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return
-      void this.runPendingSync()
+      void this.runPendingSync().catch(err => console.error('[SyncService] periodic pass failed', err))
     }, 12_000)
   }
 
@@ -80,7 +75,7 @@ export class SyncService {
     if (this.debounceTimer) window.clearTimeout(this.debounceTimer)
     this.debounceTimer = window.setTimeout(() => {
       this.debounceTimer = null
-      void this.runPendingSync()
+      void this.runPendingSync().catch(err => console.error('[SyncService] debounced pass failed', err))
     }, delayMs)
   }
 
@@ -102,31 +97,44 @@ export class SyncService {
   }
 
   private async getStats(): Promise<SyncProgressEvent> {
-    const pending = await syncQueueRepo.getCount()
-    const all = await syncQueueRepo.getAll()
+    const [pending, all, deadLettered] = await Promise.all([
+      syncQueueRepo.getCount(),
+      syncQueueRepo.getAll(),
+      syncQueueRepo.getDeadLettered(),
+    ])
     const synced = all.filter(q => q.status === 'SYNCED').length
-    return { pendingCount: pending, syncedCount: synced }
+    return { pendingCount: pending, syncedCount: synced, deadLetteredCount: deadLettered.length }
   }
 
   /**
-   * Triggers a sync pass for all due items. Safe to call while another
-   * pass is already running — concurrent runs are coalesced.
+   * Triggers a sync pass for all due items.
+   *
+   * A pass that arrives while another is running is deferred rather than
+   * dropped: the running pass records that a rerun is needed and performs it on
+   * exit. Previously a sale made during a sync pass was simply not uploaded
+   * until the next 12-second tick, and the colliding pass was discarded
+   * silently.
    */
   async runPendingSync(): Promise<SyncResult> {
-    if (this.running) return { attempted: 0, succeeded: 0, failed: 0 }
+    const empty: SyncResult = { attempted: 0, succeeded: 0, failed: 0, deadLettered: 0 }
+    if (this.running) {
+      this.rerunRequested = true
+      return empty
+    }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      return { attempted: 0, succeeded: 0, failed: 0 }
+      return empty
     }
     this.running = true
     try {
       const due = await syncQueueRepo.getPending()
-      const result: SyncResult = { attempted: due.length, succeeded: 0, failed: 0 }
+      const result: SyncResult = { attempted: due.length, succeeded: 0, failed: 0, deadLettered: 0 }
 
       for (const item of due) {
         try {
           await uploadEntity(item)
           item.status = 'SYNCED'
-          item.attempts += 1
+          // `attempts` counts failed tries, not total operations. Incrementing it
+          // on success too made the number the UI shows meaningless.
           item.lastError = null
           item.nextRetryAt = null
           item.updatedAt = new Date().toISOString()
@@ -134,37 +142,69 @@ export class SyncService {
           result.succeeded += 1
           liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'UPDATE', key: item.id })
         } catch (err) {
-          item.status = 'PENDING'
           item.attempts += 1
           item.lastError = err instanceof Error ? err.message : 'upload failed'
-          item.nextRetryAt = new Date(Date.now() + Math.min(BACKOFF_BASE_MS * 2 ** Math.min(item.attempts, 6), 60_000)).toISOString()
           item.updatedAt = new Date().toISOString()
+          const decision = nextRetryDecision(item.attempts)
+          item.status = decision.status
+          item.nextRetryAt = decision.nextRetryAt
+          if (decision.status === 'DEAD_LETTER') {
+            result.deadLettered += 1
+            console.error(
+              `[SyncService] ${item.entityType}:${item.entityId} gave up after ${item.attempts} attempts.`,
+              item.lastError,
+            )
+          } else {
+            result.failed += 1
+          }
           await syncQueueRepo.update(item)
-          result.failed += 1
         }
       }
 
+      // Bound the queue table. Without this it grew for the life of the install
+      // and getAll() loaded every historical row on every pass.
+      await syncQueueRepo.pruneSynced()
+
       this.emit({ ...(await this.getStats()), result })
       return result
+    } catch (err) {
+      // getPending/getStats can throw. Swallowing here keeps a transient storage
+      // fault from becoming an unhandled rejection at every call site.
+      console.error('[SyncService] sync pass aborted', err)
+      this.emit({ ...(await this.getStats().catch(() => ({ pendingCount: 0, syncedCount: 0, deadLetteredCount: 0 }))) })
+      return empty
     } finally {
       this.running = false
+      if (this.rerunRequested) {
+        this.rerunRequested = false
+        void this.runPendingSync().catch(err => console.error('[SyncService] deferred pass failed', err))
+      }
     }
   }
 
   async pendingCount(): Promise<number> {
     return syncQueueRepo.getCount()
   }
+
+  /** Records that need a human decision, most recent first. */
+  async deadLettered(): Promise<SyncQueueItem[]> {
+    return syncQueueRepo.getDeadLettered()
+  }
+
+  /** Re-queues a dead-lettered record after the cause was corrected. */
+  async retryDeadLettered(id: string): Promise<void> {
+    await syncQueueRepo.revive(id)
+    liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'UPDATE', key: id })
+    this.emit({ ...(await this.getStats()) })
+    void this.runPendingSync().catch(err => console.error('[SyncService] retry pass failed', err))
+  }
+
+  /** Discards a dead-lettered record's upload. The sale itself is untouched. */
+  async discardDeadLettered(id: string): Promise<void> {
+    await syncQueueRepo.discard(id)
+    liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'DELETE', key: id })
+    this.emit({ ...(await this.getStats()) })
+  }
 }
 
 export const syncService = new SyncService()
-
-export function toSyncStatusLabel(status: SyncStatus): string {
-  switch (status) {
-    case 'SYNCED':
-      return 'Synced'
-    case 'FAILED':
-      return 'Failed'
-    default:
-      return 'Pending'
-  }
-}

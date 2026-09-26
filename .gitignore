@@ -12,6 +12,21 @@ dist
 dist-ssr
 *.local
 
+# Environment files. The .example templates stay tracked so the required
+# variables are documented; the real files must never be committed, or the next
+# person to add a secret to .env leaks it silently.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Local SQLite ledgers and generated databases
+backend/data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.db
+
 # Build artifacts
 *.apk
 *.ipa

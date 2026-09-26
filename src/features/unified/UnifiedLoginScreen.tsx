@@ -30,13 +30,14 @@ import {
   Zap,
 } from 'lucide-react'
 import { MVPLogo } from '../../components/common/MVPLogo'
-import { PRODUCTION_PUMPS, PRODUCTION_STATIONS, getStationName, getStationPumps, registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
-import { backendLogin, backendRegister, backendGetCompanies, backendGetCompanyStations, backendGetNextStaffCode, type BackendLoginResponse } from '../../services/backendApiService'
-import { generateNextStaffCode } from '../../core/services/staffCodeService'
+import { getStationName, registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
+import { backendLogin, backendRegister, backendGetRegisterOmcs, backendGetRegisterStations, backendGetNextStaffCode, type BackendLoginResponse } from '../../services/backendApiService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
 
 export interface UnifiedSession {
+  token: string
+  expiresAt: string
   role: UnifiedRole
   fullName: string
   employeeCode: string
@@ -48,18 +49,46 @@ export interface UnifiedSession {
 }
 
 export const SESSION_KEY = 'mvp_active_session'
+const LEGACY_SESSION_KEY = 'mvp_unified_session'
+const CLOUD_TOKEN_KEY = 'petroview_cloud_token'
+const SESSION_ROLES: UnifiedRole[] = ['attendant', 'supervisor', 'headoffice', 'superadmin']
 
 export function saveUnifiedSession(session: UnifiedSession): void {
+  if (!session.token || !session.expiresAt || !SESSION_ROLES.includes(session.role)) {
+    throw new Error('Invalid authenticated session')
+  }
+  if (new Date(session.expiresAt).getTime() <= Date.now()) {
+    throw new Error('Session has expired')
+  }
+  localStorage.setItem(CLOUD_TOKEN_KEY, session.token)
   localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+  localStorage.removeItem(LEGACY_SESSION_KEY)
 }
 
 export function loadUnifiedSession(): UnifiedSession | null {
   try {
-    const raw = localStorage.getItem(SESSION_KEY)
+    const raw = localStorage.getItem(SESSION_KEY) || localStorage.getItem(LEGACY_SESSION_KEY)
     if (!raw) return null
     const parsed = JSON.parse(raw) as Partial<UnifiedSession>
-    if (!parsed.role || !parsed.fullName || !parsed.employeeCode) return null
-    return parsed as UnifiedSession
+    const token = typeof parsed.token === 'string' ? parsed.token : ''
+    const expiresAt = typeof parsed.expiresAt === 'string' ? parsed.expiresAt : ''
+    if (
+      !token ||
+      !expiresAt ||
+      !parsed.role ||
+      !SESSION_ROLES.includes(parsed.role) ||
+      typeof parsed.fullName !== 'string' ||
+      typeof parsed.employeeCode !== 'string' ||
+      !Number.isFinite(new Date(expiresAt).getTime()) ||
+      new Date(expiresAt).getTime() <= Date.now() ||
+      localStorage.getItem(CLOUD_TOKEN_KEY) !== token
+    ) return null
+    const session = parsed as UnifiedSession
+    if (localStorage.getItem(LEGACY_SESSION_KEY)) {
+      localStorage.setItem(SESSION_KEY, JSON.stringify(session))
+      localStorage.removeItem(LEGACY_SESSION_KEY)
+    }
+    return session
   } catch {
     return null
   }
@@ -67,6 +96,8 @@ export function loadUnifiedSession(): UnifiedSession | null {
 
 export function clearUnifiedSession(): void {
   localStorage.removeItem(SESSION_KEY)
+  localStorage.removeItem(LEGACY_SESSION_KEY)
+  localStorage.removeItem(CLOUD_TOKEN_KEY)
   localStorage.removeItem('mvp_prod_session_token')
   localStorage.removeItem('mvp_prod_supervisor_token')
 }
@@ -108,15 +139,13 @@ export const UnifiedLoginScreen: React.FC<{
     fullName: string
     role: 'attendant' | 'supervisor'
     companyName: string
-    pin: string
   } | null>(null)
 
   // Load companies on mount & when switching to register tab
   const fetchCompanies = async () => {
     try {
-      const result = await backendGetCompanies()
-      const list = result.companies || []
-      let mapped: Company[] = list.map(c => ({
+      const list = await backendGetRegisterOmcs()
+      const mapped: Company[] = list.map(c => ({
         id: c.id,
         name: c.name,
         shortCode: c.shortCode,
@@ -132,54 +161,13 @@ export const UnifiedLoginScreen: React.FC<{
         createdAt: new Date().toISOString(),
       }))
 
-      if (mapped.length === 0) {
-        const { COMPANIES_DIRECTORY } = await import('../../constants/companies')
-        mapped = COMPANIES_DIRECTORY.map(c => ({
-          id: c.id,
-          name: c.name,
-          shortCode: c.shortCode,
-          tagline: c.tagline,
-          logoText: c.logoText,
-          primaryColor: c.primaryColor,
-          primaryDark: c.primaryDark,
-          accentColor: c.accentColor,
-          currency: c.currency,
-          adminCode: `${c.shortCode}-HQ01`,
-          adminName: `${c.name} HQ Admin`,
-          active: true,
-          createdAt: new Date().toISOString(),
-        }))
-      }
-
       setCompanies(mapped)
       if (mapped.length > 0 && (!regCompanyId || !mapped.some(m => m.id === regCompanyId))) {
         setRegCompanyId(mapped[0].id)
       }
     } catch {
-      try {
-        const { COMPANIES_DIRECTORY } = await import('../../constants/companies')
-        const fallbackMapped: Company[] = COMPANIES_DIRECTORY.map(c => ({
-          id: c.id,
-          name: c.name,
-          shortCode: c.shortCode,
-          tagline: c.tagline,
-          logoText: c.logoText,
-          primaryColor: c.primaryColor,
-          primaryDark: c.primaryDark,
-          accentColor: c.accentColor,
-          currency: c.currency,
-          adminCode: `${c.shortCode}-HQ01`,
-          adminName: `${c.name} HQ Admin`,
-          active: true,
-          createdAt: new Date().toISOString(),
-        }))
-        setCompanies(fallbackMapped)
-        if (fallbackMapped.length > 0 && (!regCompanyId || !fallbackMapped.some(m => m.id === regCompanyId))) {
-          setRegCompanyId(fallbackMapped[0].id)
-        }
-      } catch {
-        setCompanies([])
-      }
+      setCompanies([])
+      setRegCompanyId('')
     }
   }
 
@@ -201,15 +189,15 @@ export const UnifiedLoginScreen: React.FC<{
 
     void (async () => {
       try {
-        const stations = await backendGetCompanyStations(activeCompId)
+        const stations = await backendGetRegisterStations(activeCompId)
         const mappedStations: CompanyStation[] = stations.map(s => ({
           id: s.id,
-          companyId: s.companyId,
+          companyId: activeCompId,
           name: s.name,
-          code: s.code,
-          location: s.location,
-          region: s.region,
-          pumpsCount: s.pumpsCount,
+          code: '',
+          location: s.location ?? '',
+          region: s.region ?? '',
+          pumpsCount: 0,
           active: true,
           createdAt: new Date().toISOString(),
         }))
@@ -224,19 +212,12 @@ export const UnifiedLoginScreen: React.FC<{
         setRegStationId('')
       }
 
-      // Generate next code based on role and company prefix (backend-first with local fallback)
       const prefix = shortCode
       try {
         const next = await backendGetNextStaffCode(activeCompId, regRole, prefix)
-        if (next?.nextCode) {
-          setRegGeneratedCode(next.nextCode)
-        } else {
-          const fallback = await generateNextStaffCode(regRole, prefix)
-          setRegGeneratedCode(fallback)
-        }
+        setRegGeneratedCode(next.nextCode || '')
       } catch {
-        const fallback = await generateNextStaffCode(regRole, prefix)
-        setRegGeneratedCode(fallback)
+        setRegGeneratedCode('')
       }
     })()
   }, [regCompanyId, regRole, companies])
@@ -244,8 +225,8 @@ export const UnifiedLoginScreen: React.FC<{
   // Load dynamic station pumps whenever regStationId changes
   useEffect(() => {
     if (!regStationId) {
-      setStationPumps(PRODUCTION_PUMPS)
-      setRegPumpId(PRODUCTION_PUMPS[0].id)
+      setStationPumps([])
+      setRegPumpId('')
       return
     }
     let cancelled = false
@@ -266,12 +247,9 @@ export const UnifiedLoginScreen: React.FC<{
         }
       } catch (err) {
         console.warn('Failed to load server pumps for registration:', err)
-      }
-      if (!cancelled) {
-        const local = getStationPumps(regStationId)
-        setStationPumps(local)
-        if (local.length > 0) {
-          setRegPumpId(prev => (local.some(p => p.id === prev) ? prev : local[0].id))
+        if (!cancelled) {
+          setStationPumps([])
+          setRegPumpId('')
         }
       }
     }
@@ -283,7 +261,6 @@ export const UnifiedLoginScreen: React.FC<{
 
   const selectedCompany = companies.find(c => c.id === regCompanyId) || companies[0]
 
-  // Handle Login Submit — Backend-first auth with Local-First offline fallback
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoginError(null)
@@ -294,123 +271,19 @@ export const UnifiedLoginScreen: React.FC<{
       const pin = loginPin.trim()
 
       if (!rawCode) throw new Error('Please enter your Staff / Admin Code.')
-      if (pin.length !== 4) throw new Error('PIN must be 4 digits.')
+      if (!/^\d{4}$/.test(pin)) throw new Error('PIN must be 4 digits.')
 
       const code =
         rawCode.toUpperCase() === 'SUPERADMIN' || rawCode.toUpperCase() === 'SUPER ADMIN'
           ? 'SUPER-ADMIN'
           : rawCode.toUpperCase()
 
-      // Try backend API first
-      let result: BackendLoginResponse | null = null
-      try {
-        result = await backendLogin(code, pin)
-      } catch (backendErr) {
-        const msg = backendErr instanceof Error ? backendErr.message : String(backendErr)
-        if (msg === 'BACKEND_UNREACHABLE') {
-          // Local-first offline authentication fallback
-          // 1. Super Admin
-          if (code === 'SUPER-ADMIN' && (pin === '7256' || pin === '9999')) {
-            onAuthenticated({
-              role: 'superadmin',
-              fullName: 'PetroView Platform Master Admin',
-              employeeCode: 'SUPER-ADMIN',
-              stationName: 'Global Enterprise Network',
-              companyName: 'PetroView Global',
-            })
-            return
-          }
-
-          // 2. OMC HQ Admin (e.g. PV-HQ01, ALL-HQ01, GOIL-HQ01, STAR-HQ01, TOT-HQ01)
-          if ((code.includes('HQ') || code.endsWith('-HQ01')) && (pin === '9999' || pin === '7256')) {
-            const short = code.replace(/[-_]?HQ\d*$/i, '') || 'OMC'
-            onAuthenticated({
-              role: 'headoffice',
-              fullName: `${short} HQ Admin`,
-              employeeCode: code,
-              stationName: `${short} National Station Network`,
-              companyName: short,
-              companyShortCode: short,
-            })
-            return
-          }
-
-          // 3. Local database (prodDb) lookup
-          try {
-            const { prodDb } = await import('../../core/infra/db')
-            const { verifyPin } = await import('../../core/infra/password')
-
-            // Check supervisor / manager
-            const localSup = await prodDb.supervisors.where('employeeCode').equalsIgnoreCase(code).first()
-            if (localSup && localSup.active) {
-              const matches = localSup.pinSalt && localSup.pinHash ? await verifyPin(pin, localSup.pinSalt, localSup.pinHash) : (pin === '9999' || pin === '1234')
-              if (matches) {
-                const role: UnifiedRole = localSup.isSuperAdmin ? 'superadmin' : localSup.isHeadOffice ? 'headoffice' : 'supervisor'
-                onAuthenticated({
-                  role,
-                  fullName: localSup.fullName,
-                  employeeCode: localSup.employeeCode,
-                  stationId: localSup.stationId ?? undefined,
-                  stationName: localSup.stationId ? getStationName(localSup.stationId) : 'Station Forecourt',
-                  companyId: localSup.companyId ?? undefined,
-                  companyShortCode: localSup.companyShortCode ?? undefined,
-                })
-                return
-              }
-            }
-
-            // Check attendant
-            const localAtt = await prodDb.attendants.where('employeeCode').equalsIgnoreCase(code).first()
-            if (localAtt && localAtt.active) {
-              const matches = localAtt.pinSalt && localAtt.pinHash ? await verifyPin(pin, localAtt.pinSalt, localAtt.pinHash) : (pin === '1234' || pin === '0000')
-              if (matches) {
-                onAuthenticated({
-                  role: 'attendant',
-                  fullName: localAtt.fullName,
-                  employeeCode: localAtt.employeeCode,
-                  stationId: localAtt.stationId ?? undefined,
-                  stationName: localAtt.stationId ? getStationName(localAtt.stationId) : 'Station Forecourt',
-                  companyId: localAtt.companyId ?? undefined,
-                  companyShortCode: localAtt.companyShortCode ?? undefined,
-                })
-                return
-              }
-            }
-          } catch (dbErr) {
-            console.warn('Local offline DB lookup warning:', dbErr)
-          }
-
-          // 4. Default Forecourt attendant credentials (e.g. ALL001A with PIN 1234)
-          if (/^[A-Z]{2,6}\d{3}[AM]$/i.test(code)) {
-            const prefix = code.replace(/\d+[AM]?$/i, '')
-            const isManager = code.endsWith('M')
-            if (pin === '1234' || pin === '0000' || pin === '9999') {
-              onAuthenticated({
-                role: isManager ? 'supervisor' : 'attendant',
-                fullName: `${prefix} Forecourt ${isManager ? 'Station Manager' : 'Attendant'}`,
-                employeeCode: code,
-                stationId: `STN-${prefix}-01`,
-                stationName: `${prefix} Station Forecourt`,
-                companyName: prefix,
-                companyShortCode: prefix,
-              })
-              return
-            }
-          }
-
-          throw new Error('Unable to reach the server. Please ensure the local backend is running (http://localhost:4000) or check your connection.')
-        }
-        // Backend is reachable but rejected — show the error
-        throw backendErr
-      }
-
-      // Map backend role to unified role
-      const finalRole: UnifiedRole = result.role === 'superadmin' ? 'superadmin'
-        : result.role === 'headoffice' ? 'headoffice'
-        : result.role === 'supervisor' ? 'supervisor'
-        : 'attendant'
+      const result: BackendLoginResponse = await backendLogin(code, pin)
+      const finalRole: UnifiedRole = result.role
 
       onAuthenticated({
+        token: result.token,
+        expiresAt: result.expiresAt,
         role: finalRole,
         fullName: result.fullName,
         employeeCode: result.employeeCode,
@@ -433,114 +306,45 @@ export const UnifiedLoginScreen: React.FC<{
     }
   }
 
-  // Handle Self-Registration Submit — Backend-first with local fallback
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setRegError(null)
 
     if (!regFullName.trim()) { setRegError('Please enter your full official name.'); return }
     if (!regPhone.trim()) { setRegError('Please enter your phone number.'); return }
-    if (regPin.length !== 4) { setRegError('PIN must be exactly 4 numeric digits.'); return }
+    if (!/^\d{4}$/.test(regPin)) { setRegError('PIN must be exactly 4 numeric digits.'); return }
     if (regPin !== regConfirmPin) { setRegError('PINs do not match. Please re-enter.'); return }
+    if (!regGeneratedCode) { setRegError('Unable to allocate a staff code. Please try again.'); return }
+    if (regRole === 'attendant' && !regPumpId) { setRegError('Select a registered pump before continuing.'); return }
 
     setRegistering(true)
     try {
       const targetCompany = selectedCompany || companies[0]
+      if (!targetCompany) throw new Error('Select a registered company before continuing.')
 
-      try {
-        const result = await backendRegister({
-          employeeCode: regGeneratedCode,
-          fullName: regFullName.trim(),
-          pin: regPin,
-          phone: regPhone.trim(),
-          stationId: regStationId.trim() || `${targetCompany?.shortCode || 'OMC'} Flagship Station`,
-          companyId: targetCompany?.id,
-          companyShortCode: targetCompany?.shortCode,
-        })
+      const result = await backendRegister({
+        employeeCode: regGeneratedCode,
+        fullName: regFullName.trim(),
+        pin: regPin,
+        phone: regPhone.trim(),
+        stationId: regStationId.trim() || undefined,
+        companyId: targetCompany.id,
+        companyShortCode: targetCompany.shortCode,
+        pumpId: regRole === 'attendant' ? regPumpId : undefined,
+      })
 
-        setRegSuccessData({
-          employeeCode: result.employeeCode,
-          fullName: result.fullName,
-          role: result.role,
-          companyName: targetCompany?.name || 'PetroView',
-          pin: regPin,
-        })
-      } catch (backendErr) {
-        const msg = backendErr instanceof Error ? backendErr.message : String(backendErr)
-        if (msg === 'BACKEND_UNREACHABLE') {
-          // Offline registration fallback: save directly to local IndexedDB
-          const { prodDb } = await import('../../core/infra/db')
-          const { hashPin } = await import('../../core/infra/password')
-          const { salt, hash } = await hashPin(regPin)
-          const now = new Date().toISOString()
+      setRegSuccessData({
+        employeeCode: result.employeeCode,
+        fullName: result.fullName,
+        role: result.role,
+        companyName: targetCompany.name,
+      })
 
-          if (regRole === 'supervisor') {
-            await prodDb.supervisors.put({
-              id: `sup-${regGeneratedCode.toLowerCase()}`,
-              employeeCode: regGeneratedCode,
-              fullName: regFullName.trim(),
-              pinSalt: salt,
-              pinHash: hash,
-              stationId: regStationId || 'STN-001',
-              companyId: targetCompany?.id,
-              companyShortCode: targetCompany?.shortCode,
-              phone: regPhone.trim(),
-              isHeadOffice: false,
-              isSuperAdmin: false,
-              approvalStatus: 'APPROVED',
-              approvedAt: now,
-              approvedBy: 'Offline Forecourt Terminal',
-              active: true,
-              failedAttempts: 0,
-              lockoutUntil: null,
-              createdAt: now,
-            })
-          } else {
-            await prodDb.attendants.put({
-              id: `att-${regGeneratedCode.toLowerCase()}`,
-              employeeCode: regGeneratedCode,
-              fullName: regFullName.trim(),
-              pinSalt: salt,
-              pinHash: hash,
-              pumpId: regPumpId || 'Pump 1',
-              stationId: regStationId || 'STN-001',
-              companyId: targetCompany?.id,
-              companyShortCode: targetCompany?.shortCode,
-              phone: regPhone.trim(),
-              approvalStatus: 'APPROVED',
-              approvedAt: now,
-              approvedBy: 'Offline Forecourt Terminal',
-              active: true,
-              failedAttempts: 0,
-              lockoutUntil: null,
-              createdAt: now,
-            })
-          }
-
-          setRegSuccessData({
-            employeeCode: regGeneratedCode,
-            fullName: regFullName.trim(),
-            role: regRole,
-            companyName: targetCompany?.name || 'PetroView',
-            pin: regPin,
-          })
-        } else {
-          throw backendErr
-        }
-      }
-
-      // Advance to the next sequential code for any subsequent registration
-      const activeCompId = targetCompany?.id
-      const prefix = targetCompany?.shortCode || 'PV'
-      try {
-        const next = await backendGetNextStaffCode(activeCompId, regRole, prefix)
-        if (next?.nextCode) {
-          setRegGeneratedCode(next.nextCode)
-        }
-      } catch { /* best effort */ }
+      const next = await backendGetNextStaffCode(targetCompany.id, regRole, targetCompany.shortCode)
+      setRegGeneratedCode(next.nextCode || '')
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      setRegError(msg)
+      setRegError(msg === 'BACKEND_UNREACHABLE' ? 'Unable to reach the server. Please try again when online.' : msg)
     } finally {
       setRegistering(false)
     }
@@ -912,7 +716,7 @@ export const UnifiedLoginScreen: React.FC<{
                     onChange={e => setRegPumpId(e.target.value)}
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
                   >
-                    {(stationPumps.length > 0 ? stationPumps : PRODUCTION_PUMPS).map(p => (
+                    {stationPumps.map(p => (
                       <option key={p.id} value={p.id}>
                         {p.name} · ({p.fuels.join(', ')})
                       </option>

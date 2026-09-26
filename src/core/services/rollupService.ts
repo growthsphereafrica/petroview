@@ -5,6 +5,7 @@
  */
 
 import { PRODUCTION_STATION, PRODUCTION_STATIONS, getStationName, registerDynamicStations } from '../domain/config'
+import { roundLitres, roundMoney } from '../domain/rules'
 import { shiftRepo, attendantRepo } from '../infra/repositories'
 import { prodDb } from '../infra/db'
 import type { Shift, CompanyStation, Attendant } from '../domain/types'
@@ -195,6 +196,8 @@ export class RollupService {
       ? allShifts.filter(
           s =>
             (s as any).companyId === options.companyId ||
+            (s as any).companyShortCode === options.companyId ||
+            (s as any).companyShortCode?.toLowerCase() === cleanComp ||
             stationIdSet.has(s.stationId) ||
             s.stationId.toLowerCase().includes(cleanComp) ||
             (s.attendantName && s.attendantName.toUpperCase().startsWith(cleanComp.toUpperCase())) ||
@@ -206,32 +209,42 @@ export class RollupService {
       companyShifts = allShifts.filter(s => stationIdSet.has(s.stationId))
     }
 
-    // Filter by Date Range
+    // Filter by Date Range and Station
     let inRangeShifts = companyShifts
+
+    if (options?.stationId && options.stationId !== 'ALL') {
+      inRangeShifts = inRangeShifts.filter(
+        s => s.stationId === options.stationId || (s as any).stationCode === options.stationId,
+      )
+      targetStations = targetStations.filter(st => st.id === options.stationId || st.code === options.stationId)
+    }
 
     if (options?.startDate && options?.endDate) {
       const startIso = options.startDate.includes('T') ? options.startDate : `${options.startDate}T00:00:00.000Z`
       const endIso = options.endDate.includes('T') ? options.endDate : `${options.endDate}T23:59:59.999Z`
-      inRangeShifts = companyShifts.filter(s => {
+      inRangeShifts = inRangeShifts.filter(s => {
         const d = s.closedAt || s.openedAt
         return d >= startIso && d <= endIso
       })
     } else if (options?.days != null) {
       const cutoffDate = new Date(Date.now() - options.days * 86_400_000).toISOString()
-      inRangeShifts = companyShifts.filter(s => (s.closedAt || s.openedAt) >= cutoffDate)
+      inRangeShifts = inRangeShifts.filter(s => (s.closedAt || s.openedAt) >= cutoffDate)
     }
 
-    const closed = inRangeShifts.filter(s => s.closedAt)
-    const closedToday = closed.filter(s => (s.closedAt || '').slice(0, 10) === today)
-    const litresToday = inRangeShifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0)
-    const salesToday = Math.round(inRangeShifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0))
-    const netVariance = Math.round(closed.reduce((a, s) => a + s.variance, 0) * 100) / 100
+    const closed = inRangeShifts.filter(s => s.closedAt || s.status === 'APPROVED' || s.status === 'CLOSED')
+    const closedToday = closed.filter(s => ((s.closedAt || s.openedAt) || '').slice(0, 10) === today)
+    const litresToday = roundLitres(inRangeShifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + (y.litres || 0), 0) : 0), 0))
+    // Money totals must keep their centimes. A bare Math.round here discarded
+    // the .00 component, so the "Sales Today" shown to head office did not
+    // reconcile with the sum of its own shifts.
+    const salesToday = roundMoney(inRangeShifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + (y.amount || (y.litres || 0) * (y.unitPrice || 0)), 0) : 0)), 0))
+    const netVariance = roundMoney(closed.reduce((a, s) => a + (s.variance || 0), 0))
 
     const paymentTotals = {
-      cash: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
-      momo: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
-      credit: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
-      voucher: Math.round(inRangeShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
+      cash: roundMoney(inRangeShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
+      momo: roundMoney(inRangeShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
+      credit: roundMoney(inRangeShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
+      voucher: roundMoney(inRangeShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
     }
 
     const pendingReview = closed.filter(s => s.status === 'CLOSED').length
@@ -262,11 +275,11 @@ export class RollupService {
         region: st.region,
         location: st.location,
         shiftCount: shifts.length,
-        litresToday: shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0),
-        salesToday: Math.round(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0)),
+        litresToday: roundLitres(shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0)),
+        salesToday: roundMoney(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0)),
         carsServedToday: 0,
         carsServedTotal: 0,
-        netVariance: Math.round(siteClosed.reduce((a, s) => a + s.variance, 0) * 100) / 100,
+        netVariance: roundMoney(siteClosed.reduce((a, s) => a + s.variance, 0)),
         pendingReview: siteClosed.filter(s => s.status === 'CLOSED').length,
         pendingSync: shifts.filter(s => s.syncStatus === 'PENDING').length,
         lastSync: lastSyncTimes.length ? lastSyncTimes[lastSyncTimes.length - 1] : null,
@@ -300,9 +313,9 @@ export class RollupService {
       .map(async att => {
         const shifts = inRangeShifts.filter(s => s.attendantId === att.id || s.attendantName?.toLowerCase() === att.fullName?.toLowerCase())
         const closedShifts = shifts.filter(s => s.closedAt)
-        const totalSales = Math.round(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0))
-        const totalLitres = shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0)
-        const totalVar = Math.round(closedShifts.reduce((a, s) => a + s.variance, 0) * 100) / 100
+        const totalSales = roundMoney(shifts.reduce((a, s) => a + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)), 0))
+        const totalLitres = roundLitres(shifts.reduce((a, s) => a + (s.sales ? s.sales.reduce((x, y) => x + y.litres, 0) : 0), 0))
+        const totalVar = roundMoney(closedShifts.reduce((a, s) => a + s.variance, 0))
 
         const stn = targetStations.find(s => s.id === att.stationId)
         const stationName = stn?.name || getStationName(att.stationId)
@@ -321,13 +334,13 @@ export class RollupService {
           variance: totalVar,
           approved: closedShifts.filter(s => s.status === 'APPROVED').length,
           rejected: closedShifts.filter(s => s.status === 'REJECTED').length,
-          avgShiftSales: closedShifts.length > 0 ? Math.round(totalSales / closedShifts.length) : 0,
+          avgShiftSales: closedShifts.length > 0 ? roundMoney(totalSales / closedShifts.length) : 0,
           active: att.active,
           approvalStatus: att.approvalStatus,
-          cashTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
-          momoTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
-          creditTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
-          voucherTotal: Math.round(closedShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
+          cashTotal: roundMoney(closedShifts.reduce((a, s) => a + (s.payments?.CASH || 0), 0)),
+          momoTotal: roundMoney(closedShifts.reduce((a, s) => a + (s.payments?.MOMO || 0), 0)),
+          creditTotal: roundMoney(closedShifts.reduce((a, s) => a + (s.payments?.CREDIT || 0), 0)),
+          voucherTotal: roundMoney(closedShifts.reduce((a, s) => a + (s.payments?.VOUCHER || 0), 0)),
         }
       }))).sort((a, b) => b.sales - a.sales)
 

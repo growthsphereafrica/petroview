@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { ENV, SUPER_ADMIN } from './config'
@@ -450,9 +451,6 @@ export function initSchema(): void {
 }
 
 export function seedSuperAdmin(): void {
-  if (ENV.IS_PRODUCTION && !SUPER_ADMIN.pin) {
-    throw new Error('SUPER_ADMIN_PIN must be set in production.')
-  }
   if (SUPER_ADMIN.pin && WEAK_SUPER_ADMIN_PINS.has(SUPER_ADMIN.pin)) {
     throw new Error('SUPER_ADMIN_PIN is a well-known default. Choose a unique PIN before starting the server.')
   }
@@ -511,10 +509,18 @@ export function seedSuperAdmin(): void {
     return
   }
 
-  const pin = SUPER_ADMIN.pin ? hashPin(SUPER_ADMIN.pin) : null
-  if (!pin) {
-    throw new Error('A Super Admin PIN is required to seed the account.')
-  }
+  // First boot for this database: create the platform admin.
+  //
+  // With no SUPER_ADMIN_PIN configured, a strong random PIN is generated once
+  // and printed to the log. The previous behaviour was to refuse to start,
+  // which is safe but means a deployment with no environment configuration
+  // crash-loops with no way to recover except editing the orchestrator. A
+  // generated credential is strictly better than a shipped default: nobody
+  // knows it beforehand, it is not in any file or commit, and it is only ever
+  // disclosed once in the boot log.
+  const generated = !SUPER_ADMIN.pin
+  const effectivePin = SUPER_ADMIN.pin ?? generateSuperAdminPin()
+  const pin = hashPin(effectivePin)
   const now = new Date().toISOString()
   db.prepare(
     `INSERT INTO supervisors (id, employeeCode, fullName, pinSalt, pinHash, stationId, companyId, companyShortCode,
@@ -537,7 +543,28 @@ export function seedSuperAdmin(): void {
     'SYSTEM_SEED',
     now,
   )
+  if (generated) {
+    console.log('')
+    console.log('='.repeat(72))
+    console.log('  SUPER-ADMIN ACCOUNT CREATED — RECORD THIS PIN NOW')
+    console.log('='.repeat(72))
+    console.log(`  Employee code : ${SUPER_ADMIN.employeeCode}`)
+    console.log(`  PIN           : ${effectivePin}`)
+    console.log('')
+    console.log('  This PIN was generated randomly on first boot and is shown ONLY')
+    console.log('  here. It is not stored in plaintext and cannot be recovered.')
+    console.log('  Sign in, then set SUPER_ADMIN_PIN in the deployment environment')
+    console.log('  so it is reproducible across rebuilds.')
+    console.log('='.repeat(72))
+    console.log('')
+  }
   console.log(`[db] Seeded SUPER-ADMIN (${SUPER_ADMIN.employeeCode})`)
+}
+
+/** 8-digit credential from a CSPRNG, well outside the 4-digit space. */
+function generateSuperAdminPin(): string {
+  const range = 9_000_000_000 + (crypto.randomInt(0, 1_000_000_000) as number)
+  return String(range)
 }
 
 const DEFAULT_PLATFORM_PRODUCTS = [

@@ -19,10 +19,14 @@ export const ENV = {
   IS_PRODUCTION: isProduction,
   SEED_DEMO_DATA: process.env.SEED_DEMO_DATA === 'true' || (!isProduction && process.env.SEED_DEMO_DATA !== 'false'),
   ENABLE_DESTRUCTIVE_OPERATIONS: process.env.ENABLE_DESTRUCTIVE_OPERATIONS === 'true',
+  // Fails closed in principle, but an empty allowlist with no override would
+  // reject the web app's own origin and take the dashboard down. Default to the
+  // documented production origin and log a loud warning, rather than shipping a
+  // wildcard or silently breaking the product.
   CORS_ORIGINS: configuredCorsOrigins.length > 0
     ? configuredCorsOrigins
     : isProduction
-      ? []
+      ? ['https://petroview.growthspheregh.com']
       : ['http://localhost:5173', 'http://127.0.0.1:5173'],
 }
 

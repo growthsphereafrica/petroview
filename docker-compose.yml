@@ -6,13 +6,16 @@ services:
       - NODE_ENV=production
       - PORT=4000
       - DB_PATH=/app/data/masterview.sqlite
-      # No default: the server refuses to boot without a platform-admin PIN.
-      # Provide it via a .env file next to this compose file, or a secret store.
-      - SUPER_ADMIN_PIN=${SUPER_ADMIN_PIN:?SUPER_ADMIN_PIN must be set}
+      # Optional. When set, the value becomes the platform admin credential and
+      # is re-applied on every boot. When unset, an existing account is left
+      # untouched and a first-time deployment generates a strong random PIN and
+      # prints it once to the boot log. Either way no known default ships.
+      - SUPER_ADMIN_PIN=${SUPER_ADMIN_PIN:-}
       - SEED_DEMO_DATA=false
       - ENABLE_DESTRUCTIVE_OPERATIONS=false
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - PRICE_TOLERANCE_GHS=${PRICE_TOLERANCE_GHS:-0.01}
+      - PIN_KDF_ITERATIONS=${PIN_KDF_ITERATIONS:-}
     # Bound to loopback. This container has no TLS of its own, so publishing
     # 4000 on all interfaces would expose PINs over plaintext and bypass the
     # reverse proxy. Put a TLS terminator in front, or forward to it explicitly.

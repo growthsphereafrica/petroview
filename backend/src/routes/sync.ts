@@ -536,6 +536,18 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
             continue
           }
         }
+        // An attendant works one shift at a time. That invariant was enforced
+        // only in the web and mobile clients, which is a soft guard: the sync
+        // endpoint is the one place that can actually hold it. Without it, a
+        // second device or an offline queue replaying in a different order
+        // leaves an attendant holding several open shifts, which is how three
+        // stale pre-cutover shifts accumulated on a single attendant. Enforced
+        // on insert only, so duplicates already in the ledger stay updatable
+        // and can still be closed and reconciled by hand.
+        if (!existing && shift.status === 'OPEN') {
+          const open = db.prepare("SELECT number FROM shifts WHERE attendantId = ? AND status = 'OPEN' AND id <> ? LIMIT 1").get(shift.attendantId, shift.id) as { number: string } | undefined
+          if (open) throw new Error(`Attendant already has an open shift (${open.number}). It must be closed before another is opened.`)
+        }
         db.transaction(() => {
           upsertShift.run(shift)
           queue('SHIFT', String(shift.id), String(shift.createdAt))

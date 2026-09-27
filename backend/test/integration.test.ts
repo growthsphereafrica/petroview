@@ -15,7 +15,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 
 import Database from 'better-sqlite3'
 
@@ -134,6 +134,25 @@ afterAll(() => {
     } catch {
       /* best effort */
     }
+  }
+})
+
+/**
+ * One server and one throwaway database serve the whole file, so a shift left
+ * open by one test is still open for the next. That was invisible until the
+ * sync route started refusing a second concurrent open shift for the same
+ * attendant, at which point every later test failed on its predecessor's
+ * leftover. Clearing the demo attendant's open shifts between tests keeps the
+ * invariant under test instead of the order tests happen to run in.
+ */
+afterEach(() => {
+  try {
+    const attendant = db.prepare('SELECT id FROM attendants WHERE employeeCode = ?').get(DEMO_ATTENDANT_CODE) as { id: string } | undefined
+    if (!attendant) return
+    db.prepare("DELETE FROM transactions WHERE shiftId IN (SELECT id FROM shifts WHERE attendantId = ? AND status = 'OPEN')").run(attendant.id)
+    db.prepare("DELETE FROM shifts WHERE attendantId = ? AND status = 'OPEN'").run(attendant.id)
+  } catch {
+    /* best effort: a failing assertion is the signal, not a cleanup error */
   }
 })
 
@@ -525,5 +544,47 @@ describe('audit trail covers money movement', () => {
     expect(meta.companyId).toBeTruthy()
     expect(meta.stationId).toBeTruthy()
     expect(meta.amount).toBe(296)
+  })
+})
+
+describe('one open shift per attendant', () => {
+  const openShift = (id: string, stationId: string, userId: string, openedAt: string) => ({
+    type: 'SHIFT',
+    data: {
+      id, number: id, stationId, attendantId: userId,
+      pumpId: '', status: 'OPEN', openedAt,
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }], closingReadings: [],
+      sales: [], expectedTotal: 0, payments: {}, actualTotal: 0, variance: 0,
+    },
+  })
+
+  const send = (token: string, entities: unknown[]) => fetch(`${BASE}/api/sync/entities`, {
+    method: 'POST', headers: auth(token), body: JSON.stringify({ entities }),
+  }).then(r => r.json() as Promise<{ accepted: string[]; rejected: Array<{ id: string; reason: string }> }>)
+
+  it('rejects a second concurrent open shift, but still accepts updates to the first', async () => {
+    const session = await login(DEMO_ATTENDANT_CODE, DEMO_ATTENDANT_PIN)
+    const stations = (await (await fetch(`${BASE}/api/companies/directory/omcs/${session.companyId}/stations`)).json()) as Array<{ id: string }>
+    const first = `dup-${Math.random().toString(36).slice(2, 10)}`
+    const second = `dup-${Math.random().toString(36).slice(2, 10)}`
+    // Replayed syncs must carry the original openedAt: shift identity, including
+    // openedAt, is immutable once written, so a changing timestamp would be
+    // rejected for the wrong reason.
+    const openedAt = new Date().toISOString()
+
+    const opened = await send(session.token, [openShift(first, stations[0].id, session.userId, openedAt)])
+    expect(opened.accepted, JSON.stringify(opened.rejected)).toContain(first)
+
+    // A second open shift for the same attendant has to be refused server-side.
+    // The clients already refuse this, so nothing exercised the API path and
+    // any other client, or a replayed offline queue, could still do it.
+    const clash = await send(session.token, [openShift(second, stations[0].id, session.userId, openedAt)])
+    expect(clash.accepted).not.toContain(second)
+    expect(clash.rejected.map(r => r.reason).join(' ')).toMatch(/already has an open shift/i)
+
+    // Re-syncing the shift that legitimately holds the open slot still works,
+    // so an offline queue replaying a known shift is not self-rejected.
+    const replay = await send(session.token, [openShift(first, stations[0].id, session.userId, openedAt)])
+    expect(replay.accepted, JSON.stringify(replay.rejected)).toContain(first)
   })
 })

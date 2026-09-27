@@ -1,0 +1,7 @@
+# The ops scripts are executed by /bin/sh on the host. A CRLF checkout makes
+# sh fail on the shebang line with a confusing "\r: command not found" error, so
+# these paths are pinned to LF regardless of the Windows or macOS checkout.
+ops/* text eol=lf
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.conf text eol=lf

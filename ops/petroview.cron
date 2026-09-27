@@ -1,0 +1,17 @@
+# PetroView production monitoring and backups.
+#
+# The watchdog exists because a Dokploy deployment is recorded as "done" when
+# the image builds, even if the container then fails to start. On 2026-09-26 a
+# failed rollout went unnoticed for four days and the API served an
+# unauthenticated expense ledger the whole time. This catches that class of
+# failure: 11 checks including the auth guards themselves.
+
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin
+
+# Every 15 minutes: verify health, auth guards, rate limiting, image/tag
+# agreement, volume ownership, ledger integrity, TLS and security headers.
+*/15 * * * * root petroview-watchdog >> /var/log/petroview/watchdog.log 2>&1
+
+# 03:17 daily: verified SQLite snapshot, 14 retained.
+17 3 * * * root petroview-backup >> /var/log/petroview/backup.log 2>&1

@@ -1,0 +1,56 @@
+#!/bin/sh
+# Scheduled verified backup of the PetroView SQLite ledger.
+#
+# Uses SQLite's online backup API via a short-lived container attached to the
+# volume, so the snapshot is transactionally consistent even while the 4MB WAL
+# is being written. A plain `cp` of a live WAL database can capture a torn
+# state. Each snapshot is integrity-checked and row counts recorded; anything
+# that fails is deleted rather than kept as a false sense of safety.
+set -eu
+
+BK=/etc/dokploy/backups/petroview
+IMG=app-navigate-haptic-hard-drive-2os2em:latest
+SVC=app-navigate-haptic-hard-drive-2os2em
+VOL=petroview-data
+KEEP=14
+
+mkdir -p $BK
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+NAME=masterview-$STAMP.sqlite
+
+# Snapshot into the volume, then move it out. The container runs as uid 1000,
+# which matches the volume owner.
+docker run --rm -v $VOL:/data $IMG node -e "
+const D=require('better-sqlite3');
+const db=new D('/data/masterview.sqlite',{readonly:true});
+db.backup('/data/$NAME').then(()=>{db.close();}).catch(e=>{console.error(e.message);process.exit(1);});
+"
+
+# Verify before keeping. A backup that has not been proven is not a backup.
+RESULT=$(docker run --rm -v $VOL:/data $IMG node -e "
+const D=require('better-sqlite3');const db=new D('/data/$NAME',{readonly:true});
+const ic=db.pragma('integrity_check',{simple:true});
+const c=t=>db.prepare('SELECT COUNT(*) AS n FROM '+t).get().n;
+const counts=[c('attendants'),c('supervisors'),c('companies'),c('shifts'),c('station_expenses')].join(',');
+db.close();
+process.stdout.write(ic+'|'+counts);")
+
+IC=${RESULT%%|*}
+COUNTS=${RESULT##*|}
+if [ "$IC" != "ok" ]; then
+  echo "BACKUP FAILED integrity=$IC - discarding $NAME"
+  docker run --rm -v $VOL:/data alpine rm -f /data/$NAME
+  exit 1
+fi
+
+docker run --rm -v $VOL:/data:ro -v $BK:/out alpine sh -c "cp /data/$NAME /out/$NAME && chmod 600 /out/$NAME"
+docker run --rm -v $VOL:/data alpine rm -f /data/$NAME
+
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OK $NAME counts=$COUNTS size=$(stat -c%s $BK/$NAME)"
+
+# Retention
+cd $BK
+ls -1t masterview-*.sqlite | tail -n +$((KEEP+1)) | while read old; do
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRUNE $old"
+  rm -f "$old"
+done

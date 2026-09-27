@@ -1,0 +1,84 @@
+#!/bin/sh
+# PetroView production watchdog.
+#
+# Why this exists: on 2026-09-26 Dokploy auto-deployed the hardened backend, the
+# new container died instantly with SQLITE_CANTOPEN (image runs as uid 1000, the
+# petroview-data volume was root-owned), and Dokploy still recorded the
+# deployment as "done" because that status reflects the image build, not the
+# container rollout. The previous build kept serving an unauthenticated API for
+# four days. Nothing alerted. This script is the thing that would have.
+#
+# Exits non-zero on any failed check so cron/monitoring can surface it.
+
+set -u
+API=https://petroviewapi.growthspheregh.com
+WEB=https://petroview.growthspheregh.com
+SVC=app-navigate-haptic-hard-drive-2os2em
+IMG=app-navigate-haptic-hard-drive-2os2em:latest
+VOL=petroview-data
+FAIL=0
+
+pass() { echo "  PASS  $1"; }
+fail() { echo "  FAIL  $1"; FAIL=1; }
+
+echo "== petroview watchdog $(date -u +%Y-%m-%dT%H:%M:%SZ) =="
+
+# 1. API reachable and reporting a live database.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 $API/api/health)
+[ "$code" = "200" ] && pass "api health 200" || fail "api health returned $code"
+
+# 2. Auth guards are live. This is the direct canary for the exposure that went
+#    unnoticed for four days: if any of these return 200 the ledger is public.
+for p in /api/expenses /api/products /api/companies; do
+  code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 $API$p)
+  [ "$code" = "401" ] && pass "$p guarded (401)" || fail "$p returned $code, expected 401"
+done
+
+# 3. Login throttling is active.
+throttle=$(for i in $(seq 1 24); do
+  curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 -X POST \
+    -H 'Content-Type: application/json' -d '{"employeeCode":"__wd__","pin":"0000"}' \
+    $API/api/auth/login
+done | grep -c 429)
+[ "$throttle" -gt 0 ] && pass "login rate limit engages ($throttle/24 throttled)" \
+                      || fail "login rate limit never engaged"
+
+# 4. The running container matches the built tag. Drift means a rollout failed
+#    and the old build is still serving, which is exactly the Sep 26 failure.
+CID=$(docker ps -q --filter name=$SVC | head -1)
+tag_id=$(docker image inspect $IMG --format '{{.Id}}' 2>/dev/null | cut -c8-19)
+run_id=$([ -n "$CID" ] && docker inspect $CID --format '{{.Image}}' | cut -c8-19)
+if [ -n "$tag_id" ] && [ -n "$CID" ] && [ "$tag_id" = "$run_id" ]; then
+  pass "running image matches tag ($tag_id)"
+else
+  fail "image drift: running=${run_id:-none} tagged=$tag_id (rollout failed or pending)"
+fi
+
+# 5. The data volume is writable by the uid the image runs as. This is the
+#    precondition that broke the Sep 26 deploy.
+owner=$(docker run --rm -v $VOL:/d alpine stat -c '%u' /d 2>/dev/null)
+if [ "$owner" = "1000" ]; then
+  pass "volume $VOL owned by uid 1000"
+else
+  fail "volume $VOL owned by uid ${owner:-unknown}, image runs as uid 1000 (deploys will crash)"
+fi
+
+# 6. The SQLite ledger passes an integrity check.
+if [ -n "${CID:-}" ]; then
+  ic=$(docker exec $CID node -e "
+    const D=require('better-sqlite3');const db=new D('/app/data/masterview.sqlite',{readonly:true});
+    process.stdout.write(String(db.pragma('integrity_check',{simple:true})));db.close();" 2>/dev/null)
+  [ "$ic" = "ok" ] && pass "ledger integrity ok" || fail "ledger integrity: ${ic:-check failed}"
+fi
+
+# 7. Web tier serves and TLS is valid.
+code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 $WEB)
+[ "$code" = "200" ] && pass "web 200" || fail "web returned $code"
+
+# 8. Security headers present on the API.
+hdrs=$(curl -s -D - -o /dev/null --max-time 15 $API/api/health)
+echo "$hdrs" | grep -qi 'strict-transport-security' && pass "HSTS present" || fail "HSTS missing"
+echo "$hdrs" | grep -qi 'x-powered-by' && fail "X-Powered-By leaked" || pass "X-Powered-By hidden"
+
+echo "== $([ $FAIL -eq 0 ] && echo ALL CHECKS PASSED || echo FAILURES DETECTED) =="
+exit $FAIL

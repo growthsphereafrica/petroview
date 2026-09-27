@@ -12,6 +12,11 @@ services:
       # prints it once to the boot log. Either way no known default ships.
       - SUPER_ADMIN_PIN=${SUPER_ADMIN_PIN:-}
       - SEED_DEMO_DATA=false
+      # Account removal (staff rows) is a routine administrative action and is
+      # switched on separately. The database wipe stays off by default: it is a
+      # far larger hammer sitting behind the same Super Admin PIN, and wanting
+      # the first must never silently arm the second.
+      - ENABLE_ACCOUNT_REMOVAL=${ENABLE_ACCOUNT_REMOVAL:-false}
       - ENABLE_DESTRUCTIVE_OPERATIONS=false
       - CORS_ORIGINS=${CORS_ORIGINS:-}
       - PRICE_TOLERANCE_GHS=${PRICE_TOLERANCE_GHS:-0.01}

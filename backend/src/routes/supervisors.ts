@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db'
 import { newToken } from '../auth'
-import { destructiveOperationsEnabled, superAdminPinAccepted, supervisorApprovalFootprint } from '../destructive'
+import { accountRemovalEnabled, superAdminPinAccepted, supervisorApprovalFootprint } from '../destructive'
 import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 export const supervisorsRouter = Router()
 
@@ -152,8 +152,8 @@ supervisorsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffic
 
 // --- Delete supervisor permanently ---
 supervisorsRouter.delete('/:id', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
-  if (!destructiveOperationsEnabled()) {
-    res.status(403).json({ error: 'DISABLED', message: 'Destructive operations are disabled on this server.' })
+  if (!accountRemovalEnabled()) {
+    res.status(403).json({ error: 'DISABLED', message: 'Account removal is disabled on this server.' })
     return
   }
   const session = sessionOf(req)

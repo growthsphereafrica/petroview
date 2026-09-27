@@ -27,6 +27,17 @@ export function destructiveOperationsEnabled(): boolean {
 }
 
 /**
+ * Gate for removing an individual account.
+ *
+ * Separate from destructiveOperationsEnabled so that arming account deletion in
+ * production does not also arm the database wipe, which is a far larger
+ * hammer behind the same PIN check.
+ */
+export function accountRemovalEnabled(): boolean {
+  return ENV.ENABLE_ACCOUNT_REMOVAL
+}
+
+/**
  * How much of the ledger still points at this attendant.
  *
  * Removing an attendant that has run shifts would leave sales rows and closed

@@ -110,9 +110,11 @@ beforeAll(async () => {
       DEMO_HQ_PIN,
       DEMO_ATTENDANT_PIN,
       SEED_DEMO_DATA: 'true',
-      // Enabled so the guard rails on permanent account deletion are exercised
+      // Enabled so the guard rails on permanent account removal are exercised
       // against a real server. The database is per-run and thrown away.
-      ENABLE_DESTRUCTIVE_OPERATIONS: 'true',
+      // ENABLE_DESTRUCTIVE_OPERATIONS is deliberately left unset: the database
+      // wipe must stay disarmed even when account removal is wanted.
+      ENABLE_ACCOUNT_REMOVAL: 'true',
       CORS_ORIGINS: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -778,5 +780,18 @@ describe('permanent account removal', () => {
     expect(res.status).toBe(400)
     expect((await res.json() as { message?: string }).message).toMatch(/signed in with/i)
     expect(db.prepare('SELECT COUNT(*) AS c FROM supervisors WHERE id = ?').get(SUPER_ADMIN_ID)).toEqual({ c: 1 })
+  })
+
+  it('does not arm the database wipe just because account removal is on', async () => {
+    // The two switches are separate on purpose. Wanting an operator to be able
+    // to remove a staff account must never also expose a full ledger wipe, even
+    // though both sit behind the same Super Admin PIN.
+    const admin = await sessionFor('SUPER-ADMIN', SUPER_ADMIN_PIN)
+    const res = await fetch(`${BASE}/api/auth/wipe-database`, {
+      method: 'POST', headers: auth(admin), body: JSON.stringify({ pin: SUPER_ADMIN_PIN }),
+    })
+    expect(res.status).toBe(403)
+    expect((await res.json() as { error?: string }).error).toBe('DISABLED')
+    expect(db.prepare('SELECT COUNT(*) AS c FROM shifts').get().c).toBeGreaterThan(0)
   })
 })

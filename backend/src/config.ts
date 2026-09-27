@@ -20,6 +20,13 @@ export const ENV = {
   IS_TEST: process.env.NODE_ENV === 'test',
   SEED_DEMO_DATA: process.env.SEED_DEMO_DATA === 'true' || (!isProduction && process.env.SEED_DEMO_DATA !== 'false'),
   ENABLE_DESTRUCTIVE_OPERATIONS: process.env.ENABLE_DESTRUCTIVE_OPERATIONS === 'true',
+  // Account removal is deliberately a separate switch from the database wipe.
+  // Removing a staff account is a routine administrative action that a tenant
+  // operator needs; wiping the whole ledger is not, and should not be armed in
+  // production just because account deletion is wanted. Both are super-admin
+  // only and both re-check the Super Admin PIN, but they stay independently
+  // controllable.
+  ENABLE_ACCOUNT_REMOVAL: process.env.ENABLE_ACCOUNT_REMOVAL === 'true',
   // Fails closed in principle, but an empty allowlist with no override would
   // reject the web app's own origin and take the dashboard down. Default to the
   // documented production origin and log a loud warning, rather than shipping a

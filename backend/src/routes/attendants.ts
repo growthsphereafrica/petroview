@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db'
 import { hashPin, newToken, validateNewSecret } from '../auth'
-import { attendantFinancialFootprint, destructiveOperationsEnabled, superAdminPinAccepted } from '../destructive'
+import { attendantFinancialFootprint, accountRemovalEnabled, superAdminPinAccepted } from '../destructive'
 import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 
 export const attendantsRouter = Router()
@@ -333,8 +333,8 @@ interface PurgeTarget {
  * re-entered, matching /api/auth/wipe-database.
  */
 attendantsRouter.delete('/:id/permanent', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
-  if (!destructiveOperationsEnabled()) {
-    res.status(403).json({ error: 'DISABLED', message: 'Destructive operations are disabled on this server.' })
+  if (!accountRemovalEnabled()) {
+    res.status(403).json({ error: 'DISABLED', message: 'Account removal is disabled on this server.' })
     return
   }
   const session = sessionOf(req)

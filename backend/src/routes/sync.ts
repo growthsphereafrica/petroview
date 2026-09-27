@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { db, deserializeShift, type ShiftRow, type ShiftStatus, type SyncEntityType } from '../db'
+import { db, deserializeShift, salesFromTransactions, type ShiftRow, type ShiftStatus, type SyncEntityType } from '../db'
 import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 import { newToken } from '../auth'
 import { ENV } from '../config'
@@ -400,47 +400,6 @@ function queue(entityType: SyncEntityType, entityId: string, createdAt: string):
   db.prepare('DELETE FROM syncQueue WHERE entityType = ? AND entityId = ?').run(entityType, entityId)
   db.prepare('INSERT INTO syncQueue (id, entityType, entityId, status, attempts, nextRetryAt, lastError, createdAt, updatedAt) VALUES (?,?,?,?,?,?,?,?,?)')
     .run(newToken(), entityType, entityId, 'SYNCED', 1, null, null, createdAt, new Date().toISOString())
-}
-
-/**
- * Rewrites an open shift's sales breakdown from its own synced transactions.
- *
- * A client cannot know what was sold until the closing meter reading exists,
- * so it deliberately sends litres and amount as zero for the entire time the
- * shift is open (see shiftService.ts). Every litres and sales figure in Head
- * Office and on the supervisor dashboard reads this column, so a shift with
- * real synced sales reported 0 litres and GHS 0 until somebody closed it, and
- * the dashboard showed cars served alongside zero litres for the whole shift.
- *
- * Only applied while the shift is open. Closing supplies a meter reading that
- * is validated against these figures, and the variance is computed from the
- * client's own close-time totals, so the financial result never depends on
- * this estimate.
- */
-function salesFromTransactions(shiftId: string, salesJson: string): string {
-  let skeleton: Array<Record<string, unknown>>
-  try {
-    const parsed: unknown = JSON.parse(salesJson)
-    if (!Array.isArray(parsed)) return salesJson
-    skeleton = parsed as Array<Record<string, unknown>>
-  } catch {
-    return salesJson
-  }
-  const rows = db.prepare('SELECT fuelCode, SUM(COALESCE(litres,0)) AS litres, SUM(COALESCE(amount,0)) AS amount, MAX(unitPrice) AS unitPrice FROM transactions WHERE shiftId = ? GROUP BY fuelCode').all(shiftId) as Array<{ fuelCode: string; litres: number; amount: number; unitPrice: number }>
-  if (rows.length === 0) return salesJson
-  const byFuel = new Map(rows.map(row => [String(row.fuelCode), row]))
-  const merged: Array<Record<string, unknown>> = skeleton.map(item => {
-    const totals = byFuel.get(String(item.fuelCode))
-    if (!totals) return { ...item, litres: 0, amount: 0 }
-    byFuel.delete(String(item.fuelCode))
-    return { ...item, litres: money(Number(totals.litres)), amount: money(Number(totals.amount)) }
-  })
-  // A fuel the shift's price list never mentioned still has to be counted, or
-  // the station understates what it sold.
-  for (const [fuelCode, totals] of byFuel) {
-    merged.push({ fuelCode, litres: money(Number(totals.litres)), amount: money(Number(totals.amount)), unitPrice: Number(totals.unitPrice) || 0 })
-  }
-  return JSON.stringify(merged)
 }
 
 function refreshOpenShiftSales(shiftId: string): void {

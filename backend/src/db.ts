@@ -473,10 +473,64 @@ function migrateLegacyTables(): void {
   }
 }
 
+/**
+ * Rewrites an open shift's sales breakdown from its own synced transactions.
+ *
+ * A client cannot know what was sold until the closing meter reading exists,
+ * so it deliberately sends litres and amount as zero for the whole time the
+ * shift is open. Every litres and sales figure in Head Office and on the
+ * supervisor dashboard reads that column, so a shift with real synced sales
+ * reported 0 litres and GHS 0 until somebody closed it.
+ *
+ * Only correct while the shift is open. Closing supplies a meter reading that
+ * is validated against these figures, and the variance is computed from the
+ * client's own close-time totals, so the financial result never depends on
+ * this estimate.
+ */
+export function salesFromTransactions(shiftId: string, salesJson: string): string {
+  let skeleton: Array<Record<string, unknown>>
+  try {
+    const parsed: unknown = JSON.parse(salesJson)
+    if (!Array.isArray(parsed)) return salesJson
+    skeleton = parsed as Array<Record<string, unknown>>
+  } catch {
+    return salesJson
+  }
+  const rows = db.prepare('SELECT fuelCode, SUM(COALESCE(litres,0)) AS litres, SUM(COALESCE(amount,0)) AS amount, MAX(unitPrice) AS unitPrice FROM transactions WHERE shiftId = ? GROUP BY fuelCode').all(shiftId) as Array<{ fuelCode: string; litres: number; amount: number; unitPrice: number }>
+  if (rows.length === 0) return salesJson
+  const byFuel = new Map(rows.map(row => [String(row.fuelCode), row]))
+  const merged: Array<Record<string, unknown>> = skeleton.map(item => {
+    const totals = byFuel.get(String(item.fuelCode))
+    if (!totals) return { ...item, litres: 0, amount: 0 }
+    byFuel.delete(String(item.fuelCode))
+    return { ...item, litres: Math.round(Number(totals.litres) * 100) / 100, amount: Math.round(Number(totals.amount) * 100) / 100 }
+  })
+  // A fuel the shift's price list never mentioned still has to be counted, or
+  // the station understates what it sold.
+  for (const [fuelCode, totals] of byFuel) {
+    merged.push({ fuelCode, litres: Math.round(Number(totals.litres) * 100) / 100, amount: Math.round(Number(totals.amount) * 100) / 100, unitPrice: Number(totals.unitPrice) || 0 })
+  }
+  return JSON.stringify(merged)
+}
+
+function backfillOpenShiftSales(): void {
+  const open = db.prepare("SELECT id, sales FROM shifts WHERE status = 'OPEN'").all() as Array<{ id: string; sales: string }>
+  const update = db.prepare("UPDATE shifts SET sales = ? WHERE id = ? AND status = 'OPEN'")
+  let changed = 0
+  for (const row of open) {
+    const next = salesFromTransactions(row.id, row.sales)
+    if (next !== row.sales && update.run(next, row.id).changes > 0) changed++
+  }
+  if (changed > 0) {
+    console.log(`[db] Derived open-shift sales from transactions for ${changed} shift(s)`)
+  }
+}
+
 export function initSchema(): void {
   for (const ddl of Object.values(SCHEMA_DDL)) db.exec(ddl)
 
   migrateLegacyTables()
+  backfillOpenShiftSales()
 
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
   const ensureIndex = (name: string, sql: string): void => {

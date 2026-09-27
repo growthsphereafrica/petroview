@@ -402,6 +402,53 @@ function queue(entityType: SyncEntityType, entityId: string, createdAt: string):
     .run(newToken(), entityType, entityId, 'SYNCED', 1, null, null, createdAt, new Date().toISOString())
 }
 
+/**
+ * Rewrites an open shift's sales breakdown from its own synced transactions.
+ *
+ * A client cannot know what was sold until the closing meter reading exists,
+ * so it deliberately sends litres and amount as zero for the entire time the
+ * shift is open (see shiftService.ts). Every litres and sales figure in Head
+ * Office and on the supervisor dashboard reads this column, so a shift with
+ * real synced sales reported 0 litres and GHS 0 until somebody closed it, and
+ * the dashboard showed cars served alongside zero litres for the whole shift.
+ *
+ * Only applied while the shift is open. Closing supplies a meter reading that
+ * is validated against these figures, and the variance is computed from the
+ * client's own close-time totals, so the financial result never depends on
+ * this estimate.
+ */
+function salesFromTransactions(shiftId: string, salesJson: string): string {
+  let skeleton: Array<Record<string, unknown>>
+  try {
+    const parsed: unknown = JSON.parse(salesJson)
+    if (!Array.isArray(parsed)) return salesJson
+    skeleton = parsed as Array<Record<string, unknown>>
+  } catch {
+    return salesJson
+  }
+  const rows = db.prepare('SELECT fuelCode, SUM(COALESCE(litres,0)) AS litres, SUM(COALESCE(amount,0)) AS amount, MAX(unitPrice) AS unitPrice FROM transactions WHERE shiftId = ? GROUP BY fuelCode').all(shiftId) as Array<{ fuelCode: string; litres: number; amount: number; unitPrice: number }>
+  if (rows.length === 0) return salesJson
+  const byFuel = new Map(rows.map(row => [String(row.fuelCode), row]))
+  const merged: Array<Record<string, unknown>> = skeleton.map(item => {
+    const totals = byFuel.get(String(item.fuelCode))
+    if (!totals) return { ...item, litres: 0, amount: 0 }
+    byFuel.delete(String(item.fuelCode))
+    return { ...item, litres: money(Number(totals.litres)), amount: money(Number(totals.amount)) }
+  })
+  // A fuel the shift's price list never mentioned still has to be counted, or
+  // the station understates what it sold.
+  for (const [fuelCode, totals] of byFuel) {
+    merged.push({ fuelCode, litres: money(Number(totals.litres)), amount: money(Number(totals.amount)), unitPrice: Number(totals.unitPrice) || 0 })
+  }
+  return JSON.stringify(merged)
+}
+
+function refreshOpenShiftSales(shiftId: string): void {
+  const row = db.prepare("SELECT sales FROM shifts WHERE id = ? AND status = 'OPEN'").get(shiftId) as { sales: string } | undefined
+  if (!row) return
+  db.prepare("UPDATE shifts SET sales = ? WHERE id = ? AND status = 'OPEN'").run(salesFromTransactions(shiftId, row.sales), shiftId)
+}
+
 const insertAudit = db.prepare(`
   INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, meta, timestamp)
   VALUES (@id, @action, @actorId, @actorName, @actorRole, @targetId, @targetDescription, NULL, @meta, @timestamp)
@@ -549,6 +596,7 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
           if (open) throw new Error(`Attendant already has an open shift (${open.number}). It must be closed before another is opened.`)
         }
         db.transaction(() => {
+          if (shift.status === 'OPEN') shift.sales = salesFromTransactions(String(shift.id), String(shift.sales))
           upsertShift.run(shift)
           queue('SHIFT', String(shift.id), String(shift.createdAt))
           const previouslyClosed = existing && String(existing.status) === 'CLOSED'
@@ -595,6 +643,7 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
         }
         db.transaction(() => {
           upsertTransaction.run({ id, shiftId: shift.id, attendantId: shift.attendantId, fuelCode: fuelCode as FuelCode, litres, amount, unitPrice, method: method as PaymentMethod, customerRef, recordedAt })
+          if (shift.status === 'OPEN') refreshOpenShiftSales(shift.id)
           queue('TRANSACTION', id, recordedAt)
           if (!existing) {
             recordAudit('SALE_RECORDED', shift.id, `${litres}L ${fuelCode} for GHS ${amount.toFixed(2)} on ${shift.number}`, { companyId: shift.companyId, stationId: shift.stationId, litres, amount, unitPrice, method, transactionId: id }, session)

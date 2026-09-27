@@ -588,3 +588,68 @@ describe('one open shift per attendant', () => {
     expect(replay.accepted, JSON.stringify(replay.rejected)).toContain(first)
   })
 })
+
+describe('an open shift reports the sales it has actually taken', () => {
+  it('accumulates litres and takings from synced transactions while still open', async () => {
+    // A client cannot know what was sold until the closing meter reading
+    // exists, so it sends litres and amount as zero for the whole time the
+    // shift is open. Every litres and sales figure in Head Office and on the
+    // supervisor dashboard reads that column, so without this a shift with real
+    // sales reported 0 litres and GHS 0 for its entire life and the dashboard
+    // showed cars served next to zero litres.
+    const session = await login(DEMO_ATTENDANT_CODE, DEMO_ATTENDANT_PIN)
+    const stations = (await (await fetch(`${BASE}/api/companies/directory/omcs/${session.companyId}/stations`)).json()) as Array<{ id: string }>
+    const shiftId = `live-${Math.random().toString(36).slice(2, 10)}`
+    const openedAt = new Date(Date.now() - 3_600_000).toISOString()
+    const skeleton = [{ fuelCode: 'PMS', litres: 0, amount: 0, unitPrice: 14.8 }, { fuelCode: 'AGO', litres: 0, amount: 0, unitPrice: 15.2 }]
+
+    const send = (entities: unknown[]) => fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST', headers: auth(session.token), body: JSON.stringify({ entities }),
+    }).then(r => r.json() as Promise<{ accepted: string[]; rejected: Array<{ id: string; reason: string }> }>)
+
+    const opened = await send([{
+      type: 'SHIFT',
+      data: {
+        id: shiftId, number: shiftId, stationId: stations[0].id, attendantId: session.userId,
+        pumpId: '', status: 'OPEN', openedAt,
+        openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 1000 }],
+        closingReadings: [], sales: skeleton, expectedTotal: 0, payments: {}, actualTotal: 0, variance: 0,
+      },
+    }])
+    expect(opened.accepted, JSON.stringify(opened.rejected)).toContain(shiftId)
+
+    const readSales = (): Array<{ fuelCode: string; litres: number; amount: number }> => {
+      const row = db.prepare('SELECT sales FROM shifts WHERE id = ?').get(shiftId) as { sales: string }
+      return JSON.parse(row.sales) as Array<{ fuelCode: string; litres: number; amount: number }>
+    }
+    const litresSoFar = (): number => readSales().reduce((sum, s) => sum + Number(s.litres || 0), 0)
+    expect(litresSoFar()).toBe(0)
+
+    // Syncing a sale has to move the shift's own aggregate, not just the
+    // transactions table, because that is what the dashboards read.
+    const sale = await send([{
+      type: 'TRANSACTION',
+      data: {
+        id: `live-tx-${Math.random().toString(36).slice(2, 10)}`,
+        shiftId, fuelCode: 'PMS', litres: 40, unitPrice: 14.8, amount: 592,
+        method: 'CASH', recordedAt: new Date(Date.now() - 1_800_000).toISOString(),
+      },
+    }])
+    expect(sale.accepted, JSON.stringify(sale.rejected)).toHaveLength(1)
+    expect(litresSoFar()).toBe(40)
+    expect(readSales().find(s => s.fuelCode === 'PMS')?.amount).toBe(592)
+    // A fuel with no sales stays at zero rather than disappearing.
+    expect(readSales().find(s => s.fuelCode === 'AGO')?.litres).toBe(0)
+
+    // A second sale accumulates rather than replacing.
+    await send([{
+      type: 'TRANSACTION',
+      data: {
+        id: `live-tx-${Math.random().toString(36).slice(2, 10)}`,
+        shiftId, fuelCode: 'AGO', litres: 10, unitPrice: 15.2, amount: 152,
+        method: 'CASH', recordedAt: new Date(Date.now() - 900_000).toISOString(),
+      },
+    }])
+    expect(litresSoFar()).toBe(50)
+  })
+})

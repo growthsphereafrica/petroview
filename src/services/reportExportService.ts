@@ -6,10 +6,10 @@
  * 3. CSV (.csv) with UTF-8 BOM for clean Windows Excel & data tool imports
  */
 
-import { jsPDF } from 'jspdf'
-import autoTable from 'jspdf-autotable'
-import * as XLSX from 'xlsx'
-
+// jsPDF and SheetJS together weigh ~780kB. Three lazy dashboard chunks import
+// this module, so a static import made every supervisor and head-office login
+// download them before the user ever exported anything. They are pulled in on
+// demand instead, inside the functions that actually need them.
 export interface StaffSummaryRow {
   employeeCode: string
   name: string
@@ -72,7 +72,11 @@ export interface ReportExportData {
  * Generates and triggers an immediate automatic download of a formatted PDF report.
  * Bypasses the browser print window entirely.
  */
-export function exportReportToPdf(data: ReportExportData): void {
+export async function exportReportToPdf(data: ReportExportData): Promise<void> {
+  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ])
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -362,7 +366,8 @@ export function exportReportToPdf(data: ReportExportData): void {
  * Creates multiple structured sheets with formatted numbers and headers.
  * Opens 100% cleanly in Microsoft Excel on Windows/Mac without any corrupt file warnings.
  */
-export function exportReportToExcel(data: ReportExportData): void {
+export async function exportReportToExcel(data: ReportExportData): Promise<void> {
+  const XLSX = await import('xlsx')
   const wb = XLSX.utils.book_new()
   const currency = data.currency || 'GHS'
 

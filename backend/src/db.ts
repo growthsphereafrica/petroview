@@ -116,6 +116,24 @@ export const db = new Database(ENV.DB_PATH)
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 
+// Durability. WAL alone only promises durability up to the OS page cache, so a
+// host power loss could truncate the ledger. FULL fsyncs the WAL on every
+// commit. This costs a few ms per write, which is the right trade for money.
+// NORMAL was the previous effective behaviour and is not sufficient here.
+db.pragma('synchronous = FULL')
+
+// The write-ahead log had reached 4MB against a 237KB main database, meaning
+// most of the ledger lived in the WAL and any crash risked losing it. Checkpoint
+// every 1000 pages (~4MB) to keep the main database current, and let SQLite
+// truncate the WAL afterwards so it cannot grow without bound.
+db.pragma('wal_autocheckpoint = 1000')
+db.pragma('journal_size_limit = 67108864')
+
+// Without this a concurrent writer gets an immediate SQLITE_BUSY instead of
+// waiting, and the forecourt sync endpoint pushes bulk writes from several
+// stations at once.
+db.pragma('busy_timeout = 5000')
+
 const SCHEMA_DDL: Record<string, string> = {
   companies: `
 CREATE TABLE IF NOT EXISTS companies (

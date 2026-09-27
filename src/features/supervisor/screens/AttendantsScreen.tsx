@@ -279,9 +279,9 @@ export const SupervisorAttendantsScreen: React.FC<{
   }
 
   // Export Native Excel (.xlsx)
-  const exportStationExcel = () => {
+  const exportStationExcel = async () => {
     const payload = getStationExportPayload()
-    if (payload) exportReportToExcel(payload)
+    if (payload) await exportReportToExcel(payload)
   }
 
   // Export CSV (.csv) with UTF-8 BOM
@@ -291,9 +291,9 @@ export const SupervisorAttendantsScreen: React.FC<{
   }
 
   // Automatic PDF (.pdf) Download without print dialog
-  const exportStationPdf = () => {
+  const exportStationPdf = async () => {
     const payload = getStationExportPayload()
-    if (payload) exportReportToPdf(payload)
+    if (payload) await exportReportToPdf(payload)
   }
 
   // Filtered list of attendants

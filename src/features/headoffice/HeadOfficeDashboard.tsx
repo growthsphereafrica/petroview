@@ -488,9 +488,9 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   }
 
   // Native Microsoft Excel (.xlsx) Download
-  const handleDownloadExcel = () => {
+  const handleDownloadExcel = async () => {
     const payload = buildExportPayload()
-    if (payload) exportReportToExcel(payload)
+    if (payload) await exportReportToExcel(payload)
   }
 
   // Standard CSV (.csv) with UTF-8 BOM Download
@@ -500,9 +500,9 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   }
 
   // Automatic PDF (.pdf) Download without print dialog
-  const handleDownloadPdf = () => {
+  const handleDownloadPdf = async () => {
     const payload = buildExportPayload()
-    if (payload) exportReportToPdf(payload)
+    if (payload) await exportReportToPdf(payload)
   }
 
   if (!summary) return <Splash />

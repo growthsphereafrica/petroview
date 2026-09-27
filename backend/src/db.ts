@@ -438,6 +438,35 @@ function migrateLegacyTables(): void {
     console.log(`[db] Backfilled shifts.companyId for ${backfilled.changes} legacy shift(s)`)
   }
 
+  // Second pass: shifts whose stationId does not exist in companyStations.
+  // These carry the pre-tenancy hardcoded default 'STN-01', so the join above
+  // cannot resolve them and they kept skipping verification forever. The
+  // attendant is the authoritative link: an attendant is bound to exactly one
+  // station and company, so attribute the shift to the station that attendant
+  // actually works, rather than leaving the row unattributable.
+  //
+  // Requires the attendant's station to itself resolve, otherwise there is
+  // nothing trustworthy to fall back to and the row is reported instead.
+  const viaAttendant = db.prepare(`
+    UPDATE shifts
+    SET stationId = (SELECT a.stationId FROM attendants a WHERE a.id = shifts.attendantId),
+        companyId = (SELECT a.companyId FROM attendants a WHERE a.id = shifts.attendantId),
+        companyShortCode = (SELECT a.companyShortCode FROM attendants a WHERE a.id = shifts.attendantId)
+    WHERE (companyId IS NULL OR companyId = '')
+      AND stationId IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM companyStations cs WHERE cs.id = shifts.stationId)
+      AND EXISTS (
+        SELECT 1 FROM attendants a
+        WHERE a.id = shifts.attendantId
+          AND a.stationId IS NOT NULL
+          AND a.companyId IS NOT NULL
+          AND EXISTS (SELECT 1 FROM companyStations cs WHERE cs.id = a.stationId)
+      )
+  `).run()
+  if (viaAttendant.changes > 0) {
+    console.log(`[db] Re-attributed ${viaAttendant.changes} shift(s) with unresolvable station via their attendant's station`)
+  }
+
   const unresolvable = db.prepare('SELECT COUNT(*) AS c FROM shifts WHERE companyId IS NULL OR companyId = ?').get('') as { c: number }
   if (unresolvable.c > 0) {
     console.warn(`[db] WARNING: ${unresolvable.c} shift(s) have no resolvable company and will skip ledger verification`)

@@ -17,6 +17,7 @@ export const ENV = {
     ? Math.abs(Number(process.env.PRICE_TOLERANCE_GHS))
     : 0.01,
   IS_PRODUCTION: isProduction,
+  IS_TEST: process.env.NODE_ENV === 'test',
   SEED_DEMO_DATA: process.env.SEED_DEMO_DATA === 'true' || (!isProduction && process.env.SEED_DEMO_DATA !== 'false'),
   ENABLE_DESTRUCTIVE_OPERATIONS: process.env.ENABLE_DESTRUCTIVE_OPERATIONS === 'true',
   // Fails closed in principle, but an empty allowlist with no override would

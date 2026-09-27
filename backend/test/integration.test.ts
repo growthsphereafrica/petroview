@@ -110,7 +110,9 @@ beforeAll(async () => {
       DEMO_HQ_PIN,
       DEMO_ATTENDANT_PIN,
       SEED_DEMO_DATA: 'true',
-      ENABLE_DESTRUCTIVE_OPERATIONS: 'false',
+      // Enabled so the guard rails on permanent account deletion are exercised
+      // against a real server. The database is per-run and thrown away.
+      ENABLE_DESTRUCTIVE_OPERATIONS: 'true',
       CORS_ORIGINS: '',
     },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -651,5 +653,130 @@ describe('an open shift reports the sales it has actually taken', () => {
       },
     }])
     expect(litresSoFar()).toBe(50)
+  })
+})
+
+describe('permanent account removal', () => {
+  const NEW_PIN = '123477'
+  const SUPER_ADMIN_ID = 'sup-super-admin'
+
+  // The login route rate limits by client, and this file already logs in for
+  // other suites. One session per role, reused across these cases, keeps the
+  // limiter out of the way of what is actually under test.
+  let adminToken: string
+  let hqToken: string
+  let firstStationId: string
+
+  async function sessionFor(employeeCode: string, pin: string): Promise<string> {
+    if (employeeCode === 'SUPER-ADMIN') return (adminToken ??= (await login('SUPER-ADMIN', SUPER_ADMIN_PIN)).token)
+    return (hqToken ??= (await login('PV-HQ01', DEMO_HQ_PIN)).token)
+  }
+
+  async function stationId(): Promise<string> {
+    if (firstStationId) return firstStationId
+    const stations = (await (await fetch(`${BASE}/api/companies/directory/omcs/comp-pv/stations`)).json()) as Array<{ id: string }>
+    firstStationId = stations[0].id
+    return firstStationId
+  }
+
+  async function createAttendant(code: string, fullName: string): Promise<{ id: string; token: string }> {
+    const token = await sessionFor('SUPER-ADMIN', SUPER_ADMIN_PIN)
+    const res = await fetch(`${BASE}/api/attendants`, {
+      method: 'POST',
+      headers: auth(token),
+      body: JSON.stringify({ employeeCode: code, fullName, pin: NEW_PIN, stationId: await stationId() }),
+    })
+    const body = (await res.json()) as { id?: string }
+    if (!res.ok || !body.id) throw new Error(`create ${code} failed: ${res.status} ${JSON.stringify(body)}`)
+    return { id: body.id, token }
+  }
+
+  function purge(token: string, id: string, pin?: string): Promise<Response> {
+    return fetch(`${BASE}/api/attendants/${id}/permanent`, {
+      method: 'DELETE', headers: auth(token), body: JSON.stringify(pin === undefined ? {} : { pin }),
+    })
+  }
+
+  it('is closed to everyone below super admin', async () => {
+    // Head office manages staff day to day, so it is the role most likely to be
+    // holding a session when an account has to go. It gets deactivate, never this.
+    const target = await createAttendant('PV701A', 'Purge Guard Hq')
+    const res = await purge(await sessionFor('PV-HQ01', DEMO_HQ_PIN), target.id, SUPER_ADMIN_PIN)
+    expect(res.status).toBe(403)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM attendants WHERE id = ?').get(target.id)).toEqual({ c: 1 })
+  })
+
+  it('demands the Super Admin PIN be re-entered', async () => {
+    const target = await createAttendant('PV702A', 'Purge Guard Pin')
+    // Even a valid super admin session is not enough on its own.
+    expect((await purge(target.token, target.id)).status).toBe(403)
+    expect((await purge(target.token, target.id, '000000')).status).toBe(403)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM attendants WHERE id = ?').get(target.id)).toEqual({ c: 1 })
+  })
+
+  it('refuses to remove an account the ledger still points at', async () => {
+    // Hard-deleting an attendant that has traded leaves sales and closed shifts
+    // referencing an account that no longer exists, which quietly breaks
+    // attribution in every historical report. Those get deactivated instead.
+    const target = await createAttendant('PV703A', 'Purge Guard Ledger')
+    db.prepare(`INSERT INTO shifts (id, number, attendantId, attendantName, pumpId, pumpName, stationId, stationName,
+      status, openedAt, openingReadings, closingReadings, sales, expectedTotal, payments, actualTotal, variance, syncStatus, createdAt, updatedAt)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+      'purge-ledger-shift', 'PL-1', target.id, 'Purge Guard Ledger', '', '', 'st-1', 'Station',
+      'OPEN', new Date().toISOString(), '[]', '[]', '[]', 0, '{}', 0, 0, 'SYNCED', new Date().toISOString(), new Date().toISOString(),
+    )
+
+    const res = await purge(target.token, target.id, SUPER_ADMIN_PIN)
+    expect(res.status).toBe(409)
+    const body = (await res.json()) as { shifts?: number; message?: string }
+    expect(body.shifts).toBe(1)
+    expect(body.message).toMatch(/deactivate/i)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM attendants WHERE id = ?').get(target.id)).toEqual({ c: 1 })
+  })
+
+  it('removes a clean account once the PIN checks out, and records it', async () => {
+    const target = await createAttendant('PV705A', 'Purge Guard Clean')
+    const res = await purge(target.token, target.id, SUPER_ADMIN_PIN)
+    const text = await res.text()
+    expect(res.status, text).toBe(200)
+    expect(JSON.parse(text)).toMatchObject({ success: true, removed: true, employeeCode: 'PV705A' })
+    expect(db.prepare('SELECT COUNT(*) AS c FROM attendants WHERE id = ?').get(target.id)).toEqual({ c: 0 })
+
+    const audit = db.prepare('SELECT action FROM audit_log WHERE targetId = ? ORDER BY timestamp DESC').get(target.id) as { action: string } | undefined
+    expect(audit?.action).toBe('ATTENDANT_PURGED')
+  })
+
+  it('leaves the ordinary delete as a deactivate, not a removal', async () => {
+    // The "remove staff member" button in the app is wired to DELETE /:id. It
+    // must keep deactivating, so an everyday click can never destroy a row.
+    const target = await createAttendant('PV706A', 'Purge Guard Soft')
+    const res = await fetch(`${BASE}/api/attendants/${target.id}`, { method: 'DELETE', headers: auth(target.token) })
+    expect(res.status).toBe(200)
+    const row = db.prepare('SELECT active, approvalStatus FROM attendants WHERE id = ?').get(target.id) as { active: number; approvalStatus: string }
+    expect(row.active).toBe(0)
+    expect(row.approvalStatus).toBe('REJECTED')
+  })
+
+  it('keeps supervisor deletion off the head office desk', async () => {
+    // Head office could permanently delete a supervisor account with no PIN and
+    // no re-authentication, which was a weaker bar than wiping the database.
+    const victim = db.prepare('SELECT id FROM supervisors WHERE isSuperAdmin = 0 AND id <> ? LIMIT 1').get(SUPER_ADMIN_ID) as { id: string } | undefined
+    expect(victim, 'expected a seeded non-superadmin supervisor').toBeTruthy()
+
+    const hq = await sessionFor('PV-HQ01', DEMO_HQ_PIN)
+    const res = await fetch(`${BASE}/api/supervisors/${victim!.id}`, { method: 'DELETE', headers: auth(hq), body: JSON.stringify({}) })
+    expect(res.status).toBe(403)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM supervisors WHERE id = ?').get(victim!.id)).toEqual({ c: 1 })
+  })
+
+  it('will not let a super admin delete the platform admin account', async () => {
+    // The SUPER-ADMIN row is the only way back into the system if every tenant
+    // account is lost, so it is not deletable from the app even with its own PIN.
+    const admin = await sessionFor('SUPER-ADMIN', SUPER_ADMIN_PIN)
+    const res = await fetch(`${BASE}/api/supervisors/${SUPER_ADMIN_ID}`, { method: 'DELETE', headers: auth(admin), body: JSON.stringify({ pin: SUPER_ADMIN_PIN }) })
+    // Refused as self-deletion, which is checked before anything else.
+    expect(res.status).toBe(400)
+    expect((await res.json() as { message?: string }).message).toMatch(/signed in with/i)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM supervisors WHERE id = ?').get(SUPER_ADMIN_ID)).toEqual({ c: 1 })
   })
 })

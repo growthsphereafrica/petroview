@@ -53,9 +53,11 @@ app.use(globalLimiter)
 
 // PINs are 4 digits, so the 10,000-entry space is searched directly. Without
 // this the login route is a free brute-force oracle against every employee code.
+// The integration suite signs in repeatedly from a single IP against a
+// throwaway database, so the ceiling is lifted there; production is unchanged.
 const authLimiter = rateLimit({
   windowMs: 15 * 60_000,
-  limit: 20,
+  limit: ENV.IS_TEST ? 1000 : 20,
   standardHeaders: 'draft-7',
   legacyHeaders: false,
   handler: rateLimitHandler,

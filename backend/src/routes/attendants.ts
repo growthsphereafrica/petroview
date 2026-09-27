@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db'
 import { hashPin, newToken, validateNewSecret } from '../auth'
+import { attendantFinancialFootprint, destructiveOperationsEnabled, superAdminPinAccepted } from '../destructive'
 import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 
 export const attendantsRouter = Router()
@@ -312,4 +313,63 @@ attendantsRouter.delete('/:id', authenticate, requireRole('supervisor', 'headoff
     audit(req, 'ATTENDANT_DELETED', target.id, `Deactivated attendant ${target.employeeCode}`, null, { companyId: target.companyId, stationId: target.stationId }, now)
   })()
   res.json({ success: true, id: target.id, employeeCode: target.employeeCode, active: false })
+})
+
+interface PurgeTarget {
+  id: string
+  employeeCode: string
+  fullName: string
+  companyId: string | null
+  stationId: string | null
+}
+
+/**
+ * Permanently removes an account row.
+ *
+ * Deliberately a separate route from the soft delete above. `DELETE /:id` is
+ * wired to a "remove staff member" button in the app, and quietly upgrading
+ * that into a hard delete would make an ordinary click irreversible. This
+ * endpoint is opt-in, super admin only, and demands the Super Admin PIN be
+ * re-entered, matching /api/auth/wipe-database.
+ */
+attendantsRouter.delete('/:id/permanent', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  if (!destructiveOperationsEnabled()) {
+    res.status(403).json({ error: 'DISABLED', message: 'Destructive operations are disabled on this server.' })
+    return
+  }
+  const session = sessionOf(req)
+  const target = db.prepare('SELECT id, employeeCode, fullName, companyId, stationId FROM attendants WHERE id = ?').get(req.params.id) as PurgeTarget | undefined
+  if (!target) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Attendant not found.' })
+    return
+  }
+  if (target.id === session.userId) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'You cannot delete the account you are signed in with.' })
+    return
+  }
+  if (!superAdminPinAccepted((req.body ?? {}).pin)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'The supplied Super Admin PIN is invalid.' })
+    return
+  }
+  const footprint = attendantFinancialFootprint(target.id)
+  if (footprint.shifts > 0 || footprint.transactions > 0) {
+    res.status(409).json({
+      error: 'CONFLICT',
+      message: `This account owns ${footprint.shifts} shift(s) and ${footprint.transactions} transaction(s). Deactivate it instead so that history stays attributable to a real person.`,
+      ...footprint,
+    })
+    return
+  }
+  const now = new Date().toISOString()
+  try {
+    db.transaction(() => {
+      db.prepare('DELETE FROM sessions WHERE userId = ?').run(target.id)
+      db.prepare('DELETE FROM attendants WHERE id = ?').run(target.id)
+      audit(req, 'ATTENDANT_PURGED', target.id, `Permanently removed attendant ${target.employeeCode} (${target.fullName})`, null, { companyId: target.companyId, stationId: target.stationId, ...footprint }, now)
+    })()
+  } catch {
+    res.status(409).json({ error: 'CONFLICT', message: 'Attendant could not be removed. Deactivate the account instead.' })
+    return
+  }
+  res.json({ success: true, id: target.id, employeeCode: target.employeeCode, removed: true })
 })

@@ -526,11 +526,42 @@ function backfillOpenShiftSales(): void {
   }
 }
 
+/**
+ * Reconciles each entity's syncStatus against the sync queue.
+ *
+ * The queue is the record of what actually reached the server: queue() writes
+ * SYNCED inside the same transaction that persists the entity. The redundant
+ * syncStatus column on the row drifted, because rows written before the queue
+ * was introduced kept PENDING forever and were only rewritten when re-synced.
+ * Production carried seven shifts and twenty-two transactions all marked
+ * PENDING while the queue recorded every one of them SYNCED, so Head Office
+ * reported 0% sync compliance on a network that had in fact synced completely.
+ *
+ * The queue wins, and only for entities it has a SYNCED row for. Nothing here
+ * can mark an unsynced entity as synced.
+ */
+export function reconcileSyncStatus(): void {
+  for (const [table, idColumn] of [['shifts', 'id'], ['transactions', 'id'], ['receipts', 'id']] as const) {
+    const result = db.prepare(`
+      UPDATE ${table} SET syncStatus = 'SYNCED'
+      WHERE syncStatus = 'PENDING'
+        AND EXISTS (
+          SELECT 1 FROM syncQueue q
+          WHERE q.entityId = ${table}.${idColumn}
+            AND q.entityType = '${table === 'shifts' ? 'SHIFT' : table === 'transactions' ? 'TRANSACTION' : 'RECEIPT'}'
+            AND q.status = 'SYNCED'
+        )
+    `).run()
+    if (result.changes > 0) console.log(`[db] Reconciled ${result.changes} ${table} row(s) from the sync queue`)
+  }
+}
+
 export function initSchema(): void {
   for (const ddl of Object.values(SCHEMA_DDL)) db.exec(ddl)
 
   migrateLegacyTables()
   backfillOpenShiftSales()
+  reconcileSyncStatus()
 
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
   const ensureIndex = (name: string, sql: string): void => {

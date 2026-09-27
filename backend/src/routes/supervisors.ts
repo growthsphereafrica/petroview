@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { db } from '../db'
 import { newToken } from '../auth'
+import { destructiveOperationsEnabled, superAdminPinAccepted, supervisorApprovalFootprint } from '../destructive'
 import { authenticate, requireRole, type AuthRequest, type SessionClaims } from '../middleware'
 export const supervisorsRouter = Router()
 
@@ -150,27 +151,50 @@ supervisorsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffic
 })
 
 // --- Delete supervisor permanently ---
-supervisorsRouter.delete('/:id', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
+supervisorsRouter.delete('/:id', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  if (!destructiveOperationsEnabled()) {
+    res.status(403).json({ error: 'DISABLED', message: 'Destructive operations are disabled on this server.' })
+    return
+  }
+  const session = sessionOf(req)
   const row = db.prepare('SELECT id, employeeCode, fullName, companyId, stationId, isSuperAdmin FROM supervisors WHERE id = ?').get(req.params.id) as SupervisorTarget | undefined
   if (!row) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Supervisor not found.' })
     return
   }
-  if (!canManageSupervisor(sessionOf(req), row)) {
-    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot delete this supervisor.' })
+  if (row.id === session.userId) {
+    res.status(400).json({ error: 'BAD_REQUEST', message: 'You cannot delete the account you are signed in with.' })
     return
   }
-  db.prepare('DELETE FROM sessions WHERE userId = ?').run(req.params.id)
-  db.prepare('DELETE FROM supervisors WHERE id = ?').run(req.params.id)
+  // Guards against deleting the last way into the system: this route refuses the
+  // Super Admin account and refuses the final active super admin outright.
+  if (Number(row.isSuperAdmin) === 1) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'A Super Admin account cannot be deleted from this screen.' })
+    return
+  }
+  const remainingAdmins = (db.prepare('SELECT COUNT(*) AS c FROM supervisors WHERE isSuperAdmin = 1 AND active = 1 AND id <> ?').get(row.id) as { c: number }).c
+  if (remainingAdmins === 0) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'The last active Super Admin cannot be deleted.' })
+    return
+  }
+  if (!superAdminPinAccepted((req.body ?? {}).pin)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'The supplied Super Admin PIN is invalid.' })
+    return
+  }
+  const footprint = supervisorApprovalFootprint(row.id)
   const now = new Date().toISOString()
-  db.prepare(
-    'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
-  ).run(
-    newToken(), 'SUPERVISOR_DELETED',
-    sessionOf(req).userId, sessionOf(req).fullName, sessionOf(req).role.toUpperCase(),
-    req.params.id, `Deleted supervisor ${row.employeeCode} (${row.fullName})`, null, now, null,
-  )
-  res.json({ success: true, id: req.params.id, employeeCode: row.employeeCode })
+  db.transaction(() => {
+    db.prepare('DELETE FROM sessions WHERE userId = ?').run(row.id)
+    db.prepare('DELETE FROM supervisors WHERE id = ?').run(row.id)
+    db.prepare(
+      'INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)',
+    ).run(
+      newToken(), 'SUPERVISOR_DELETED',
+      session.userId, session.fullName, session.role.toUpperCase(),
+      row.id, `Deleted supervisor ${row.employeeCode} (${row.fullName})`, null, now, JSON.stringify(footprint),
+    )
+  })()
+  res.json({ success: true, id: row.id, employeeCode: row.employeeCode })
 })
 
 // --- Deactivate supervisor ---

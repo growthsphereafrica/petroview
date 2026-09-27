@@ -908,17 +908,16 @@ export class SupervisorService {
     role: 'attendant' | 'supervisor',
     actorName = 'Administrator',
   ): Promise<void> {
-    // Delete from backend first (global)
-    try {
-      if (role === 'attendant') {
-        const { backendDeleteAttendant } = await import('../../services/backendApiService')
-        await backendDeleteAttendant(id)
-      } else {
-        const { backendDeleteSupervisor } = await import('../../services/backendApiService')
-        await backendDeleteSupervisor(id)
-      }
-    } catch (backendErr) {
-      console.warn('[supervisorService] Backend deleteStaff warning:', backendErr)
+    // Backend first, and its failure is fatal. This used to log a warning and
+    // carry on deleting locally, which meant a rejected server call still
+    // produced a green "Deleted" message while the account stayed alive on the
+    // server and came back on the next sync.
+    if (role === 'attendant') {
+      const { backendDeleteAttendant } = await import('../../services/backendApiService')
+      await backendDeleteAttendant(id)
+    } else {
+      const { backendDeleteSupervisor } = await import('../../services/backendApiService')
+      await backendDeleteSupervisor(id)
     }
 
     if (role === 'attendant') {
@@ -938,6 +937,49 @@ export class SupervisorService {
       targetId: id,
       targetDescription: `Deleted ${role} account (${id})`,
       notes: `Deleted by ${actorName}`,
+      timestamp: new Date().toISOString(),
+    })
+  }
+
+  /**
+   * Permanently removes a staff account instead of deactivating it.
+   *
+   * The server re-verifies the Super Admin PIN and refuses any account the
+   * ledger still references, so a refusal here is a real answer from the
+   * authoritative store and must reach the operator rather than being retried
+   * locally. Accounts that have traded should be deactivated, not removed.
+   */
+  async purgeStaff(
+    id: string,
+    role: 'attendant' | 'supervisor',
+    pin: string,
+    actorName = 'Administrator',
+  ): Promise<void> {
+    if (role === 'attendant') {
+      const { backendPurgeAttendant } = await import('../../services/backendApiService')
+      await backendPurgeAttendant(id, pin)
+    } else {
+      const { backendPurgeSupervisor } = await import('../../services/backendApiService')
+      await backendPurgeSupervisor(id, pin)
+    }
+
+    if (role === 'attendant') {
+      await prodDb.attendants.delete(id)
+      liveSyncBus.publish({ table: 'ATTENDANTS', reason: 'DELETE', key: id })
+    } else {
+      await prodDb.supervisors.delete(id)
+      liveSyncBus.publish({ table: 'SUPERVISORS', reason: 'DELETE', key: id })
+    }
+
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'STAFF_PURGED',
+      actorId: 'admin',
+      actorName,
+      actorRole: 'SUPERVISOR',
+      targetId: id,
+      targetDescription: `Permanently removed ${role} account (${id})`,
+      notes: `Permanently removed by ${actorName}`,
       timestamp: new Date().toISOString(),
     })
   }

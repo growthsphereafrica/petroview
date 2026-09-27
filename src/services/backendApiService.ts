@@ -455,6 +455,26 @@ export async function backendDeactivateAttendant(id: string): Promise<{ id: stri
   return apiCall(`/api/attendants/${id}/deactivate`, { method: 'POST' })
 }
 
+/**
+ * Permanently removes the account row rather than deactivating it. Separate from
+ * backendDeleteAttendant, which only sets active = 0. The server re-checks the
+ * Super Admin PIN, refuses accounts the ledger still points at, and writes an
+ * audit record, so this cannot be used as a quiet way to erase history.
+ */
+export async function backendPurgeAttendant(id: string, pin: string): Promise<{ success: boolean; removed: boolean }> {
+  return apiCall(`/api/attendants/${id}/permanent`, {
+    method: 'DELETE',
+    body: JSON.stringify({ pin }),
+  })
+}
+
+export async function backendPurgeSupervisor(id: string, pin: string): Promise<{ success: boolean }> {
+  return apiCall(`/api/supervisors/${id}`, {
+    method: 'DELETE',
+    body: JSON.stringify({ pin }),
+  })
+}
+
 // ── Supervisor management ─────────────────────────────────────────────────────
 
 export async function backendUpdateSupervisor(

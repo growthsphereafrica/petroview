@@ -519,16 +519,28 @@ export const SuperSuperAdminDashboard: React.FC = () => {
     }
   }
 
-  // Delete Staff
-  const handleDeleteStaff = async (id: string, role: 'attendant' | 'supervisor', name: string, code: string) => {
-    if (!window.confirm(`Are you sure you want to permanently delete staff member ${name} (${code})?`)) return
+  /**
+   * Permanent removal, as opposed to deactivating via the Edit dialog's active
+   * toggle. The server re-checks the Super Admin PIN and refuses any account the
+   * ledger still points at, so the PIN is collected here and any refusal is
+   * shown verbatim rather than reported as a success.
+   */
+  const handlePurgeStaff = async (id: string, role: 'attendant' | 'supervisor', name: string, code: string) => {
+    const pin = window.prompt(
+      `Permanently remove ${name} (${code})?\n\nThis erases the account for good and cannot be undone. Accounts that have traded sales must be deactivated instead. Enter your Super Admin PIN to confirm.`,
+    )
+    if (pin === null) return
+    if (!pin.trim()) {
+      alert('A Super Admin PIN is required.')
+      return
+    }
     try {
-      await supervisorService.deleteStaff(id, role, 'Super Admin')
-      setActionNotice({ text: `Deleted ${role} ${name} (${code})`, type: 'success' })
+      await supervisorService.purgeStaff(id, role, pin.trim(), 'Super Admin')
+      setActionNotice({ text: `Permanently removed ${name} (${code})`, type: 'success' })
       void loadData()
       setTimeout(() => setActionNotice(null), 4000)
     } catch (err: any) {
-      alert(err.message || 'Failed to delete staff')
+      alert(err.message || 'Failed to remove account')
     }
   }
 
@@ -1074,9 +1086,9 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                       </button>
 
                       <button
-                        onClick={() => handleDeleteStaff(staff.id, staff.staffType === 'hq_admin' ? 'supervisor' : staff.staffType, staff.fullName, staff.employeeCode)}
+                        onClick={() => handlePurgeStaff(staff.id, staff.staffType === 'hq_admin' ? 'supervisor' : staff.staffType, staff.fullName, staff.employeeCode)}
                         className="p-1.5 rounded-lg bg-slate-900 border border-slate-800 hover:border-rose-500/50 text-rose-400 hover:text-rose-300 transition"
-                        title="Delete User"
+                        title="Permanently remove account (requires Super Admin PIN)"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

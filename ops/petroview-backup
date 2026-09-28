@@ -8,6 +8,11 @@
 # that fails is deleted rather than kept as a false sense of safety.
 set -eu
 
+# Operator settings, kept out of this script so enabling offsite replication does
+# not require a redeploy. Sourced rather than read from cron so a manual run and
+# the nightly run behave identically.
+[ -r /etc/default/petroview-backup ] && . /etc/default/petroview-backup
+
 BK=/etc/dokploy/backups/petroview
 IMG=app-navigate-haptic-hard-drive-2os2em:latest
 SVC=app-navigate-haptic-hard-drive-2os2em

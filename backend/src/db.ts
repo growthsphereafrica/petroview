@@ -514,12 +514,33 @@ export function salesFromTransactions(shiftId: string, salesJson: string): strin
 }
 
 function backfillOpenShiftSales(): void {
-  const open = db.prepare("SELECT id, sales FROM shifts WHERE status = 'OPEN'").all() as Array<{ id: string; sales: string }>
-  const update = db.prepare("UPDATE shifts SET sales = ? WHERE id = ? AND status = 'OPEN'")
+  const open = db.prepare("SELECT id, sales, expectedTotal FROM shifts WHERE status = 'OPEN'").all() as Array<{ id: string; sales: string; expectedTotal: number }>
+  const update = db.prepare("UPDATE shifts SET sales = ?, expectedTotal = ? WHERE id = ? AND status = 'OPEN'")
+  const salesTotal = (sales: string): number => {
+    try {
+      const parsed = JSON.parse(sales) as Array<{ amount?: number }>
+      return Math.round(parsed.reduce((sum, item) => sum + (Number(item?.amount) || 0), 0) * 100) / 100
+    } catch {
+      return 0
+    }
+  }
   let changed = 0
   for (const row of open) {
     const next = salesFromTransactions(row.id, row.sales)
-    if (next !== row.sales && update.run(next, row.id).changes > 0) changed++
+    // expectedTotal has to move with sales. Filling in the sales array while
+    // leaving the total at zero produced shifts that reported real fuel and real
+    // money in one column and nothing in the other, which is worse than the
+    // inconsistency it was meant to repair: anything reading expectedTotal saw
+    // an open shift worth zero. A restore drill caught this.
+    const total = salesTotal(next)
+    if (Math.abs(total - Number(row.expectedTotal)) > 0.02) {
+      if (update.run(next, total, row.id).changes > 0) {
+        changed++
+        console.log(`[db] Set open-shift ${row.id} expectedTotal to GHS ${total.toFixed(2)} to match its derived sales`)
+      }
+    } else if (next !== row.sales && update.run(next, total, row.id).changes > 0) {
+      changed++
+    }
   }
   if (changed > 0) {
     console.log(`[db] Derived open-shift sales from transactions for ${changed} shift(s)`)

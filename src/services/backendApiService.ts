@@ -282,6 +282,21 @@ export async function backendGetCompanies(): Promise<{ count: number; companies:
   return { count: 0, companies: [] }
 }
 
+export async function backendGetStationCoverage(companyId?: string): Promise<{ activeStationCount: number; totalStationCount: number; stationCoveragePct: number } | null> {
+  try {
+    const query = companyId ? `?companyId=${encodeURIComponent(companyId)}` : ''
+    const data = await apiCall<any>(`/api/companies/station-coverage${query}`)
+    if (!data || typeof data.stationCoveragePct !== 'number') return null
+    return {
+      activeStationCount: Number(data.activeStationCount) || 0,
+      totalStationCount: Number(data.totalStationCount) || 0,
+      stationCoveragePct: Number(data.stationCoveragePct),
+    }
+  } catch {
+    return null
+  }
+}
+
 export async function backendGetCompanyStations(companyId?: string): Promise<BackendCompanyStation[]> {
   if (companyId) {
     const data = await apiCall<any>(`/api/companies/${companyId}/stations`)

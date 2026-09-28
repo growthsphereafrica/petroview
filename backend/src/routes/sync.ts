@@ -435,8 +435,14 @@ function recordAudit(action: AuditAction, targetId: string, description: string,
   })
 }
 
-export function assertShiftLedger(shift: ShiftRow & { companyId?: string | null }): void {
-  if (!shift.companyId) {
+/**
+ * A single shift's surplus is capped. Nothing in a fuel station legitimately
+ * produces a five-figure overage, and without a ceiling one malformed row
+ * would distort every rollup that sums shift variance.
+ */
+const VARIANCE_CEILING_GHS = 1_000_000
+
+export function assertShiftLedger(shift: ShiftRow & { companyId?: string | null }): void {  if (!shift.companyId) {
     // Fail closed. Returning silently meant a shift with an unresolvable company
     // skipped every reconciliation check and was accepted as verified.
     throw new Error('Shift has no company scope, so its transaction ledger cannot be verified.')
@@ -461,11 +467,24 @@ export function assertShiftLedger(shift: ShiftRow & { companyId?: string | null 
     if (Math.abs(totals.litres - sale.litres) > 0.05 || Math.abs(totals.amount - sale.amount) > 0.02) throw new Error('Shift sales do not match the synced transaction ledger.')
   }
   for (const [method, amount] of Object.entries(expectedPayments)) {
-    if (Math.abs((transactionPayments[method] ?? 0) - amount) > 0.02) throw new Error('Shift payments do not match the synced transaction ledger.')
+    // The ledger records fuel SOLD; payments record cash HANDED IN. Requiring
+    // these to be equal made the whole variance concept unreachable: a shift
+    // where the attendant legitimately came up short, which is precisely the
+    // situation a variance exists to surface, was refused as a ledger mismatch
+    // at close and then permanently stuck as 409 LEDGER_MISMATCH at review with
+    // no way to resolve it. So payments are not compared to the ledger here.
+    // What must hold is that the shift is internally consistent and that its
+    // claimed variance is plausible.
+    if (!Number.isFinite(amount) || amount < -0.02) throw new Error(`Shift ${method} payment cannot be negative.`)
   }
   const ledgerTotal = money(Array.from(transactionSales.values()).reduce((sum, sale) => sum + sale.amount, 0))
-  const paymentTotal = money(Object.values(transactionPayments).reduce((sum, amount) => sum + amount, 0))
-  if (Math.abs(ledgerTotal - shift.expectedTotal) > 0.02 || Math.abs(paymentTotal - shift.actualTotal) > 0.02) throw new Error('Shift totals do not match the synced transaction ledger.')
+  const paymentTotal = money(Object.values(expectedPayments).reduce((sum, amount) => sum + amount, 0))
+  if (Math.abs(ledgerTotal - shift.expectedTotal) > 0.02) throw new Error('Shift sales total does not match the synced transaction ledger.')
+  if (Math.abs(paymentTotal - shift.actualTotal) > 0.02) throw new Error('Shift payment total does not match its own recorded payments.')
+  // A shift cannot lose more than it took, and a surplus is capped so a single
+  // row cannot distort the rollups with an implausible figure.
+  if (Number(shift.variance) < -Math.abs(shift.expectedTotal) - 0.02) throw new Error('Shift variance is larger than the sales it is measured against.')
+  if (Number(shift.variance) > VARIANCE_CEILING_GHS) throw new Error('Shift variance is implausibly large and needs manual review.')
 }
 
 const idempotencyCache = new Map<string, { timestamp: number; response: { success: boolean; cloudTxId: string; timestamp: string; accepted: string[]; rejected: Array<{ id: string; reason: string }>; serverTime: string } }>()
@@ -554,11 +573,22 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
           const open = db.prepare("SELECT number FROM shifts WHERE attendantId = ? AND status = 'OPEN' AND id <> ? LIMIT 1").get(shift.attendantId, shift.id) as { number: string } | undefined
           if (open) throw new Error(`Attendant already has an open shift (${open.number}). It must be closed before another is opened.`)
         }
+        const previouslyClosed = existing && String(existing.status) === 'CLOSED'
         db.transaction(() => {
           if (shift.status === 'OPEN') shift.sales = salesFromTransactions(String(shift.id), String(shift.sales))
           upsertShift.run(shift)
+          // A close was previously trusted on the strength of the client's own
+          // `sales` array, checked only against the meter deltas. That let a
+          // shift declare fuel that no TRANSACTION row backed, so it could sit in
+          // the review queue and in every shift-level revenue total looking like
+          // a clean sale. assertShiftLedger already existed but only ran at
+          // review time, which is after the inflated figures have been shown.
+          // Enforcing it here means an unbacked close is refused outright.
+          if (!previouslyClosed && shift.status === 'CLOSED') {
+            const persisted = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id) as ShiftRow & { companyId?: string | null }
+            assertShiftLedger(persisted)
+          }
           queue('SHIFT', String(shift.id), String(shift.createdAt))
-          const previouslyClosed = existing && String(existing.status) === 'CLOSED'
           if (!previouslyClosed && shift.status === 'CLOSED') {
             recordAudit('SHIFT_CLOSED', String(shift.id), `Shift ${String(shift.number)} closed for ${String(shift.stationName)}. Variance GHS ${Number(shift.variance).toFixed(2)}`, { companyId: shift.companyId, stationId: shift.stationId, expectedTotal: shift.expectedTotal, actualTotal: shift.actualTotal, variance: shift.variance }, session)
           } else if (!existing) {

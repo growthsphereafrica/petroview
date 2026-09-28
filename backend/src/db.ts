@@ -556,12 +556,33 @@ export function reconcileSyncStatus(): void {
   }
 }
 
+/**
+ * Stops tenant head office accounts from displaying as "SUPER-ADMIN".
+ *
+ * Every company's HQ admin was seeded with the display name SUPER-ADMIN, so the
+ * staff roster showed three different people all labelled identically to the one
+ * account that actually is the platform admin. It is confusing enough to be
+ * mistaken for an access-control problem. The login route already rewrites the
+ * name on the way in; this fixes the stored value so every read agrees.
+ */
+export function normaliseHqAdminNames(): void {
+  const result = db.prepare(`
+    UPDATE supervisors
+    SET fullName = trim(coalesce(companyShortCode, '') || ' HQ Admin')
+    WHERE isSuperAdmin = 0
+      AND isHeadOffice = 1
+      AND (fullName IS NULL OR upper(fullName) = 'SUPER-ADMIN' OR upper(fullName) LIKE '%SUPER%')
+  `).run()
+  if (result.changes > 0) console.log(`[db] Renamed ${result.changes} head office account(s) away from "SUPER-ADMIN"`)
+}
+
 export function initSchema(): void {
   for (const ddl of Object.values(SCHEMA_DDL)) db.exec(ddl)
 
   migrateLegacyTables()
   backfillOpenShiftSales()
   reconcileSyncStatus()
+  normaliseHqAdminNames()
 
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name=?")
   const ensureIndex = (name: string, sql: string): void => {

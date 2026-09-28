@@ -120,6 +120,38 @@ function scopedStations(session: SessionClaims, requestedCompany: unknown, stati
   return db.prepare(`SELECT cs.id, cs.name, cs.code, cs.region, cs.location, cs.companyId FROM companyStations cs JOIN companies c ON c.id = cs.companyId WHERE ${conditions.join(' AND ')} ORDER BY cs.name`).all(...params) as StationSummaryRow[]
 }
 
+/**
+ * Active and total stations in the caller's scope.
+ *
+ * scopedStations only ever returns active stations, so it cannot be used to
+ * measure coverage: the numerator and denominator would both be the active set
+ * and the answer would always be 100%. This applies the same scoping but keeps
+ * the inactive rows, so a closed branch actually registers as a gap.
+ */
+function scopedStationCounts(session: SessionClaims, requestedCompany: unknown, stationId: string | null): { active: number; total: number } {
+  const companyId = scopeCompany(session, requestedCompany)
+  const conditions = ['1 = 1']
+  const params: unknown[] = []
+  if (companyId) {
+    conditions.push('cs.companyId = ?')
+    params.push(companyId)
+  }
+  if (session.role === 'supervisor') {
+    if (!stationId) return { active: 0, total: 0 }
+    conditions.push('cs.id = ?')
+    params.push(stationId)
+  } else if (stationId) {
+    conditions.push('cs.id = ?')
+    params.push(stationId)
+  }
+  if (session.role !== 'superadmin' && !companyId && session.role !== 'supervisor') return { active: 0, total: 0 }
+  const row = db.prepare(`SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN cs.active = 1 THEN 1 ELSE 0 END), 0) AS active
+    FROM companyStations cs WHERE ${conditions.join(' AND ')}`).get(...params) as { total: number; active: number }
+  return { active: row.active, total: row.total }
+}
+
 function attendantRows(session: SessionClaims, companyId: string | null, stationId: string | null): AttendantRow[] {
   const conditions = ['a.active = 1']
   const params: unknown[] = []
@@ -197,6 +229,7 @@ headOfficeRouter.get('/summary', authenticate, requireRole('supervisor', 'headof
   }).sort((a, b) => b.sales - a.sales)
 
   const pendingSync = inRange.filter(row => row.syncStatus === 'PENDING').length
+  const stationCounts = scopedStationCounts(session, queryCompany, stationId)
   res.json({
     generatedAt: new Date().toISOString(),
     currency: 'GHS',
@@ -213,7 +246,16 @@ headOfficeRouter.get('/summary', authenticate, requireRole('supervisor', 'headof
     rejected: closed.filter(row => row.status === 'REJECTED').length,
     pendingReview: closed.filter(row => row.status === 'CLOSED').length,
     pendingSync,
-    syncCompliancePct: Math.round(((inRange.length - pendingSync) / (inRange.length || 1)) * 1000) / 10,
+    // This used to be labelled "Network Compliance" and derived from syncStatus.
+    // It could not report anything but 100: the server is the source of truth, so
+    // any row present in the database got there through a completed sync. A
+    // metric that cannot fail is worse than no metric, because it looks like
+    // assurance. Station coverage is the real question the card was asking, and
+    // it can genuinely be below 100 when a branch is inactive.
+    activeStationCount: stationCounts.active,
+    stationCoveragePct: stationCounts.total
+      ? Math.round((stationCounts.active / stationCounts.total) * 1000) / 10
+      : 100,
     stations,
     attendants,
     recentShifts: inRange.slice(0, 6).map(row => deserializeShift(row as ShiftRow)),

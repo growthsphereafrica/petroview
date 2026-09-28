@@ -74,7 +74,8 @@ export interface HeadOfficeSummary {
   rejected: number
   pendingReview: number
   pendingSync: number
-  syncCompliancePct: number
+  activeStationCount: number
+  stationCoveragePct: number
   stations: StationRollup[]
   attendants: AttendantRollup[]
   recentShifts: Shift[]
@@ -101,7 +102,7 @@ export class RollupService {
     const today = startOfTodayIso()
 
     // 1. Fetch real company stations
-    let targetStations: { id: string; name: string; code: string; location: string; region: string }[] = []
+    let targetStations: { id: string; name: string; code: string; location: string; region: string; active: boolean }[] = []
 
     if (options?.stationId) {
       const dbStation = await prodDb.companyStations.get(options.stationId)
@@ -113,6 +114,7 @@ export class RollupService {
             code: dbStation.code,
             location: dbStation.location,
             region: dbStation.region,
+            active: dbStation.active,
           },
         ]
       } else {
@@ -125,6 +127,7 @@ export class RollupService {
               code: staticStn.code,
               location: staticStn.location,
               region: staticStn.region,
+              active: true,
             },
           ]
         }
@@ -145,6 +148,7 @@ export class RollupService {
                 location: st.location,
                 region: st.region,
                 pumpsCount: st.pumpsCount,
+                active: st.active,
                 createdAt: new Date().toISOString(),
               })
             }
@@ -158,6 +162,7 @@ export class RollupService {
         code: s.code,
         location: s.location,
         region: s.region,
+        active: s.active,
       }))
     } else {
       const allCompStations = await prodDb.companyStations.toArray()
@@ -167,6 +172,7 @@ export class RollupService {
         code: s.code,
         location: s.location,
         region: s.region,
+        active: s.active,
       }))
     }
 
@@ -256,8 +262,29 @@ export class RollupService {
     const carsServedTotal = await countTransactionsForShifts(inRangeShifts.map(s => s.id))
 
     const pendingShiftSync = inRangeShifts.filter(s => s.syncStatus === 'PENDING').length
-    const totalSyncUnits = inRangeShifts.length + 1
-    const syncCompliancePct = Math.round(((inRangeShifts.length + 1 - pendingShiftSync) / totalSyncUnits) * 1000) / 10
+
+    // Replaces a "sync compliance" figure that could not report anything but 100.
+    // The server holds the source of truth, so any shift present locally arrived
+    // by a completed sync; a percentage derived from it was an assurance that
+    // never failed. Station coverage can genuinely be under 100 when a branch is
+    // inactive, which is the question a coverage card should be answering.
+    //
+    // The local station mirror only ever receives active branches (the station
+    // endpoints filter active = 1 so closed branches stay out of station
+    // pickers), so counting locally would return 100 no matter what. Prefer the
+    // server's numbers and fall back to the local count only when offline.
+    let activeStations = targetStations.filter(s => s.active !== false).length
+    let stationCoveragePct = targetStations.length
+      ? Math.round((activeStations / targetStations.length) * 1000) / 10
+      : 100
+    try {
+      const { backendGetStationCoverage } = await import('../../services/backendApiService')
+      const live = await backendGetStationCoverage(options?.companyId)
+      if (live && live.totalStationCount > 0) {
+        activeStations = live.activeStationCount
+        stationCoveragePct = live.stationCoveragePct
+      }
+    } catch { /* offline */ }
 
     // 3. Compute Per-Station Rollup
     const stationRollups: StationRollup[] = targetStations.map(st => {
@@ -362,7 +389,8 @@ export class RollupService {
       rejected,
       pendingReview,
       pendingSync: pendingShiftSync,
-      syncCompliancePct,
+      activeStationCount: activeStations,
+      stationCoveragePct,
       stations: stationRollups,
       attendants: attendantRollups,
       recentShifts: [...inRangeShifts]

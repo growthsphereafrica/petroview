@@ -110,7 +110,6 @@ export class CompanyService {
           pumpsCount: st.pumpsCount || 4,
         }))
       : undefined
-
     let companyId = `comp-${trimmedShortCode.toLowerCase()}`
 
     // Call backend API to create company & auto-provision HQ admin on live server
@@ -160,6 +159,7 @@ export class CompanyService {
           location: st.location,
           region: st.region,
           pumpsCount: st.pumpsCount,
+          active: true,
           createdAt: now,
         }
         stations.push(stationObj)
@@ -227,6 +227,7 @@ export class CompanyService {
             location: cs.location,
             region: cs.region,
             pumpsCount: cs.pumpsCount,
+            active: true,
             createdAt: new Date().toISOString(),
           })
         }
@@ -265,6 +266,7 @@ export class CompanyService {
       location: station.location.trim(),
       region: station.region.trim(),
       pumpsCount: station.pumpsCount || 4,
+      active: true,
       createdAt: now,
     }
 

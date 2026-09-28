@@ -14,6 +14,19 @@ SVC=app-navigate-haptic-hard-drive-2os2em
 VOL=petroview-data
 KEEP=14
 
+# Offsite replication. The local snapshots below live on the same VPS as the
+# application, so they survive database corruption but not host loss, disk
+# failure, or ransomware. A copy off the machine is the difference between an
+# incident and data loss.
+#
+# Set OFFSITE_REMOTE to an rclone remote to enable it, e.g. "gdrive:petroview".
+# While no remote is configured this logs OFFSITE SKIPPED and exits 0, so the
+# local backup keeps succeeding and a missing credential never blocks a snapshot.
+# Once a remote IS configured, a replication failure exits non-zero on purpose:
+# a backup that silently stops reaching offsite is worse than a loud one.
+OFFSITE_REMOTE=${OFFSITE_REMOTE:-}
+OFFSITE_KEEP=${OFFSITE_KEEP:-30}
+
 mkdir -p $BK
 STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 NAME=masterview-$STAMP.sqlite
@@ -54,3 +67,42 @@ ls -1t masterview-*.sqlite | tail -n +$((KEEP+1)) | while read old; do
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) PRUNE $old"
   rm -f "$old"
 done
+cd /
+
+# Offsite replication
+if [ -z "$OFFSITE_REMOTE" ]; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE SKIPPED (no OFFSITE_REMOTE configured)"
+  exit 0
+fi
+
+if ! command -v rclone >/dev/null 2>&1; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE FAILED (rclone not installed)"
+  exit 1
+fi
+
+if ! rclone listremotes 2>/dev/null | grep -q "^${OFFSITE_REMOTE%%:*}:"; then
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE FAILED (remote ${OFFSITE_REMOTE%%:*} not configured; run ops/drive-setup instructions)"
+  exit 1
+fi
+
+if rclone copyto "$BK/$NAME" "$OFFSITE_REMOTE/$NAME" --checksum 2>/tmp/offsite.err; then
+  # Confirm the offsite object is really there and really the same size. A
+  # transfer that reports success but lands truncated is a known failure mode on
+  # large uploads, and this file is the only copy of the ledger.
+  REMOTE_SIZE=$(rclone size --json "$OFFSITE_REMOTE/$NAME" 2>/dev/null | sed -n 's/.*"bytes":\([0-9]*\).*/\1/p')
+  LOCAL_SIZE=$(stat -c%s "$BK/$NAME")
+  if [ -n "$REMOTE_SIZE" ] && [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE OK $OFFSITE_REMOTE/$NAME size=$REMOTE_SIZE"
+  else
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE FAILED (size mismatch local=$LOCAL_SIZE remote=${REMOTE_SIZE:-missing})"
+    exit 1
+  fi
+else
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE FAILED ($OFFSITE_REMOTE/$NAME): $(tr '\n' ' ' < /tmp/offsite.err)"
+  exit 1
+fi
+
+# Offsite retention, so the Drive folder cannot grow without bound.
+rclone delete --min-age "${OFFSITE_KEEP}d" "$OFFSITE_REMOTE" \
+  --include "masterview-*.sqlite" --exclude "*" 2>/dev/null \
+  && echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) OFFSITE RETAINED ${OFFSITE_KEEP}d"

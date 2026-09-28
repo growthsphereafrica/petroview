@@ -161,6 +161,11 @@ authRouter.post('/login', async (req, res) => {
     'INSERT INTO sessions (token, role, userId, employeeCode, fullName, stationId, companyId, companyShortCode, createdAt, expiresAt) VALUES (?,?,?,?,?,?,?,?,?,?)',
   ).run(token, role, account.id, account.employeeCode, resolvedFullName, account.stationId, account.companyId, account.companyShortCode, createdAt, expiresAt)
 
+  // Expired sessions were never removed, so the table only ever grew. Production
+  // had reached 148 rows of which 147 were already dead. Login is the one moment
+  // guaranteed to be cheap and frequent enough to keep it bounded.
+  db.prepare("DELETE FROM sessions WHERE expiresAt < datetime('now')").run()
+
   res.json({
     token,
     userId: account.id,

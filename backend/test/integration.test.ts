@@ -432,6 +432,28 @@ describe('closed shifts are frozen against new money', () => {
     })
     expect(((await openRes.json()) as { accepted: string[] }).accepted).toContain(shiftId)
 
+    // A close is refused unless the transaction ledger backs the declared sales,
+    // so the sale has to be synced before the shift can be closed.
+    await fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST',
+      headers: auth(session.token),
+      body: JSON.stringify({
+        entities: [{
+          type: 'TRANSACTION',
+          data: {
+            id: `freeze-tx-${Math.random().toString(36).slice(2, 10)}`,
+            shiftId,
+            fuelCode: 'PMS',
+            litres: 20,
+            unitPrice: 14.8,
+            amount: 296,
+            method: 'CASH',
+            recordedAt: new Date(Date.now() - 5_400_000).toISOString(),
+          },
+        }],
+      }),
+    })
+
     const closeRes = await fetch(`${BASE}/api/sync/entities`, {
       method: 'POST',
       headers: auth(session.token),
@@ -793,5 +815,304 @@ describe('permanent account removal', () => {
     expect(res.status).toBe(403)
     expect((await res.json() as { error?: string }).error).toBe('DISABLED')
     expect(db.prepare('SELECT COUNT(*) AS c FROM shifts').get().c).toBeGreaterThan(0)
+  })
+})
+
+describe('closing a shift end to end', () => {
+  // Production had never closed a single shift, so the whole path that produces
+  // the money figures a supervisor approves was unproven against real data.
+  // These cases drive it the way the app does: real seeded product prices, real
+  // per-sale transactions, then a close with meter readings.
+
+  let attendant: { token: string; userId: string; companyId: string }
+  let stationId: string
+
+  async function openShift(prefix: string): Promise<{ shiftId: string; openedAt: string }> {
+    const shiftId = `${prefix}-${Math.random().toString(36).slice(2, 10)}`
+    const openedAt = new Date(Date.now() - 7_200_000).toISOString()
+    const res = await fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST',
+      headers: auth(attendant.token),
+      body: JSON.stringify({ entities: [{ type: 'SHIFT', data: {
+        id: shiftId, number: shiftId, stationId, attendantId: attendant.userId,
+        pumpId: '', status: 'OPEN', openedAt,
+        openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+        closingReadings: [], sales: [], expectedTotal: 0, payments: {}, actualTotal: 0, variance: 0,
+      } }] }),
+    })
+    expect(((await res.json()) as { accepted: string[] }).accepted).toContain(shiftId)
+    return { shiftId, openedAt }
+  }
+
+  const sendShift = (shiftId: string, data: Record<string, unknown>) => fetch(`${BASE}/api/sync/entities`, {
+    method: 'POST', headers: auth(attendant.token), body: JSON.stringify({ entities: [{ type: 'SHIFT', data }] }),
+  }).then(r => r.json() as Promise<{ accepted: string[]; rejected: Array<{ reason: string }> }>)
+
+  // A close is only accepted when the transaction ledger backs the claimed
+  // sales, so any case that declares fuel has to record the sale first, exactly
+  // as the app does.
+  const sendSale = (shiftId: string, fuelCode: string, litres: number, unitPrice: number) => fetch(`${BASE}/api/sync/entities`, {
+    method: 'POST', headers: auth(attendant.token),
+    body: JSON.stringify({ entities: [{ type: 'TRANSACTION', data: {
+      id: `tx-${Math.random().toString(36).slice(2, 10)}`, shiftId, fuelCode, litres, unitPrice,
+      amount: Math.round(litres * unitPrice * 100) / 100, method: 'CASH',
+      recordedAt: new Date(Date.now() - 1_800_000).toISOString(),
+    } }] }),
+  }).then(r => r.json() as Promise<{ accepted: string[]; rejected: Array<{ reason: string }> }>)
+
+  beforeAll(async () => {
+    const session = await login(DEMO_ATTENDANT_CODE, DEMO_ATTENDANT_PIN)
+    attendant = session as unknown as typeof attendant
+    const stations = (await (await fetch(`${BASE}/api/companies/directory/omcs/${session.companyId}/stations`)).json()) as Array<{ id: string }>
+    stationId = stations[0].id
+  })
+
+  it('refuses a sale priced below the company price list', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number } | undefined
+    expect(price, 'seeded PMS product should exist').toBeTruthy()
+
+    const { shiftId } = await openShift('close-price')
+    const litres = 25
+    // The highest-value guard in the system. An attendant is the least
+    // privileged role and controls the request body, so if the server took the
+    // unit price on trust they could sell 25 litres at 0.01, hand in 0.25, and
+    // produce a shift that reconciles to zero variance. A supervisor would
+    // approve a clean sheet and the revenue would simply never have existed.
+    const res = await fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST',
+      headers: auth(attendant.token),
+      body: JSON.stringify({ entities: [{ type: 'TRANSACTION', data: {
+        id: `tx-${Math.random().toString(36).slice(2, 10)}`, shiftId, fuelCode: 'PMS',
+        litres, unitPrice: 0.01, amount: 0.25, method: 'CASH',
+        recordedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      } }] }),
+    })
+    const body = await res.json() as { accepted: string[]; rejected: Array<{ reason: string }> }
+    expect(body.accepted).toHaveLength(0)
+    expect(body.rejected[0].reason).toMatch(/company price is/i)
+    expect(db.prepare('SELECT COUNT(*) AS c FROM transactions WHERE shiftId = ?').get(shiftId)).toEqual({ c: 0 })
+  })
+
+  it('values a genuine sale at the company price', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId } = await openShift('close-priced')
+    const litres = 25
+    const res = await fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST',
+      headers: auth(attendant.token),
+      body: JSON.stringify({ entities: [{ type: 'TRANSACTION', data: {
+        id: `tx-${Math.random().toString(36).slice(2, 10)}`, shiftId, fuelCode: 'PMS',
+        litres, unitPrice: price.price, amount: Math.round(litres * price.price * 100) / 100, method: 'CASH',
+        recordedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      } }] }),
+    })
+    const body = await res.json() as { accepted: string[]; rejected: Array<{ reason: string }> }
+    expect(body.accepted, JSON.stringify(body.rejected)).toHaveLength(1)
+
+    const row = db.prepare('SELECT unitPrice, amount FROM transactions WHERE shiftId = ? AND fuelCode = ?').get(shiftId, 'PMS') as { unitPrice: number; amount: number }
+    expect(row.unitPrice).toBe(price.price)
+    expect(row.amount).toBeCloseTo(litres * price.price, 2)
+  })
+
+  it('closes a shift and lands the variance a supervisor will review', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-happy')
+    const litres = 40
+    const saleAmount = Math.round(litres * price.price * 100) / 100
+
+    await fetch(`${BASE}/api/sync/entities`, {
+      method: 'POST', headers: auth(attendant.token),
+      body: JSON.stringify({ entities: [{ type: 'TRANSACTION', data: {
+        id: `tx-${Math.random().toString(36).slice(2, 10)}`, shiftId, fuelCode: 'PMS',
+        litres, unitPrice: price.price, amount: saleAmount, method: 'CASH',
+        recordedAt: new Date(Date.now() - 3_600_000).toISOString(),
+      } }] }),
+    })
+
+    // The attendant counted 40 litres, so the closing meters must show 40 more
+    // than the opening ones.AGO is unchanged.
+    const body = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1000 + litres }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres, unitPrice: price.price, amount: saleAmount }],
+      expectedTotal: saleAmount,
+      payments: { CASH: saleAmount, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: saleAmount, variance: 0,
+    })
+    expect(body.accepted, JSON.stringify(body.rejected)).toContain(shiftId)
+
+    const row = db.prepare('SELECT status, closedAt, expectedTotal, actualTotal, variance FROM shifts WHERE id = ?').get(shiftId) as Record<string, number | string>
+    expect(row.status).toBe('CLOSED')
+    expect(row.closedAt).toBeTruthy()
+    expect(Number(row.expectedTotal)).toBeCloseTo(saleAmount, 2)
+    expect(Number(row.actualTotal)).toBeCloseTo(saleAmount, 2)
+    expect(Number(row.variance)).toBe(0)
+
+    // The server keeps the transaction ledger and the shift in agreement.
+    const ledger = db.prepare('SELECT SUM(amount) AS total, COUNT(*) AS n FROM transactions WHERE shiftId = ?').get(shiftId) as { total: number; n: number }
+    expect(ledger.n).toBe(1)
+    expect(Math.abs(ledger.total - saleAmount)).toBeLessThanOrEqual(0.02)
+
+    // And it reaches the review queue a supervisor actually works from.
+    const hq = (await login('PV-HQ01', DEMO_HQ_PIN)).token
+    const list = await (await fetch(`${BASE}/api/shifts?status=CLOSED`, { headers: auth(hq) })).json() as { shifts: Array<{ id: string }> }
+    expect(list.shifts.map(s => s.id)).toContain(shiftId)
+  })
+
+  it('surfaces a genuine shortage as a non-zero variance', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-short')
+    const counted = 40
+    const handedIn = counted * price.price - 50
+    const sold = await sendSale(shiftId, 'PMS', counted, price.price)
+    expect(sold.accepted, JSON.stringify(sold.rejected)).toHaveLength(1)
+
+    const body = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1000 + counted }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: counted, unitPrice: price.price, amount: counted * price.price }],
+      expectedTotal: counted * price.price,
+      payments: { CASH: handedIn, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: handedIn, variance: -50,
+    })
+    expect(body.accepted, JSON.stringify(body.rejected)).toContain(shiftId)
+
+    const row = db.prepare('SELECT variance FROM shifts WHERE id = ?').get(shiftId) as { variance: number }
+    expect(Number(row.variance)).toBeCloseTo(-50, 2)
+  })
+
+  it('refuses to hide a shortage behind a clean variance', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-tamper')
+    const sold = await sendSale(shiftId, 'PMS', 40, price.price)
+    expect(sold.accepted, JSON.stringify(sold.rejected)).toHaveLength(1)
+
+    // The real fraud, and the reason variance is recomputed server side: 40
+    // litres really moved and are really in the ledger, so the meters check
+    // passes. But the attendant hands in GHS 200 less than the sale was worth
+    // and reports a variance of zero. A supervisor reading the shift would see a
+    // clean sheet and approve it, and the missing cash would only surface much
+    // later if at all.
+    const body = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1040 }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: 40, unitPrice: price.price, amount: 40 * price.price }],
+      expectedTotal: 40 * price.price,
+      payments: { CASH: 40 * price.price - 200, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: 40 * price.price - 200,
+      variance: 0,
+    })
+    expect(body.accepted).toHaveLength(0)
+    expect(body.rejected[0].reason).toMatch(/variance does not match/i)
+    expect(db.prepare('SELECT status FROM shifts WHERE id = ?').get(shiftId)).toEqual({ status: 'OPEN' })
+  })
+
+  it('refuses a close whose declared sales no transaction backs', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-unbacked')
+    // 40 litres of real money claimed, with no sale ever recorded. The meters
+    // agree, so nothing else in the close catches it.
+    const body = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1040 }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: 40, unitPrice: price.price, amount: 40 * price.price }],
+      expectedTotal: 40 * price.price,
+      payments: { CASH: 40 * price.price, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: 40 * price.price, variance: 0,
+    })
+    expect(body.accepted).toHaveLength(0)
+    expect(body.rejected[0].reason).toMatch(/transactions are incomplete/i)
+    expect(db.prepare('SELECT status FROM shifts WHERE id = ?').get(shiftId)).toEqual({ status: 'OPEN' })
+    expect(db.prepare('SELECT COUNT(*) AS c FROM transactions WHERE shiftId = ?').get(shiftId)).toEqual({ c: 0 })
+  })
+
+  it('refuses a close that omits one of the fuels opened', async () => {
+    const { shiftId, openedAt } = await openShift('close-missing-fuel')
+    const body = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1000 }],
+      sales: [], expectedTotal: 0, payments: {}, actualTotal: 0, variance: 0,
+    })
+    expect(body.accepted).toHaveLength(0)
+    expect(body.rejected[0].reason).toMatch(/same fuel codes/i)
+  })
+
+  it('records an approval against a closed shift and freezes its money figures', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-approve')
+    const amount = Math.round(20 * price.price * 100) / 100
+    const sold = await sendSale(shiftId, 'PMS', 20, price.price)
+    expect(sold.accepted, JSON.stringify(sold.rejected)).toHaveLength(1)
+    const closeResult = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1020 }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: 20, unitPrice: price.price, amount }],
+      expectedTotal: amount, payments: { CASH: amount, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: amount, variance: 0,
+    })
+    expect(closeResult.accepted, JSON.stringify(closeResult.rejected)).toContain(shiftId)
+
+    const hq = (await login('PV-HQ01', DEMO_HQ_PIN)).token
+    const res = await fetch(`${BASE}/api/shifts/${shiftId}/review`, {
+      method: 'POST', headers: auth(hq), body: JSON.stringify({ status: 'APPROVED' }),
+    })
+    expect(res.status).toBe(200)
+    const row = db.prepare('SELECT status, expectedTotal, actualTotal, variance FROM shifts WHERE id = ?').get(shiftId) as Record<string, unknown>
+    expect(row.status).toBe('APPROVED')
+    expect(Number(row.expectedTotal)).toBeCloseTo(amount, 2)
+    expect(Number(row.variance)).toBe(0)
+
+    // The shifts table has no reviewer column, so attribution lives only in the
+    // audit log. If that write is ever dropped, a disputed approval has no
+    // record of who signed it off.
+    const closed = db.prepare("SELECT COUNT(*) AS c FROM audit_log WHERE action = 'SHIFT_CLOSED' AND targetId = ?").get(shiftId) as { c: number }
+    expect(closed.c).toBeGreaterThan(0)
+    const approval = db.prepare("SELECT actorId, actorRole FROM audit_log WHERE action = 'REVIEW_APPROVED' AND targetId = ?").get(shiftId) as { actorId: string; actorRole: string } | undefined
+    expect(approval?.actorId, 'the approval must name the supervisor who signed it').toBeTruthy()
+  })
+
+  it('lets a supervisor approve a shift that came up genuinely short', async () => {
+    // The regression this guards: a cash shortage is the normal case a variance
+    // is for. It used to be rejected as a ledger mismatch, which would have left
+    // the very shifts that most need review permanently stuck.
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-short-approve')
+    const counted = 30
+    const amount = Math.round(counted * price.price * 100) / 100
+    const sold = await sendSale(shiftId, 'PMS', counted, price.price)
+    expect(sold.accepted, JSON.stringify(sold.rejected)).toHaveLength(1)
+    const closeResult = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1000 + counted }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: counted, unitPrice: price.price, amount }],
+      expectedTotal: amount,
+      payments: { CASH: amount - 75, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: amount - 75, variance: -75,
+    })
+    expect(closeResult.accepted, JSON.stringify(closeResult.rejected)).toContain(shiftId)
+
+    const hq = (await login('PV-HQ01', DEMO_HQ_PIN)).token
+    const res = await fetch(`${BASE}/api/shifts/${shiftId}/review`, {
+      method: 'POST', headers: auth(hq), body: JSON.stringify({ status: 'REVIEWED', reviewerNotes: 'Confirmed shortage with the attendant.' }),
+    })
+    expect(res.status, 'a genuine shortage must remain reviewable').toBe(200)
+    const row = db.prepare('SELECT status, variance, reviewerNotes FROM shifts WHERE id = ?').get(shiftId) as Record<string, unknown>
+    expect(row.status).toBe('REVIEWED')
+    expect(Number(row.variance)).toBeCloseTo(-75, 2)
+    expect(row.reviewerNotes).toBeTruthy()
   })
 })

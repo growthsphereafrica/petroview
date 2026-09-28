@@ -197,6 +197,36 @@ companiesRouter.get('/all/stations', authenticate, (req: AuthRequest, res) => {
   res.json(rows.map(publicStation))
 })
 
+/**
+ * Active and total station count for the caller's scope.
+ *
+ * The station listings above deliberately filter to active = 1, so a client
+ * mirroring them can never see a closed branch and would compute coverage as a
+ * permanent 100%. This exposes just the two numbers needed to measure coverage
+ * without loosening the filtering that keeps inactive branches out of station
+ * pickers and shift scoping.
+ */
+companiesRouter.get('/station-coverage', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const requestedCompany = typeof req.query.companyId === 'string' ? req.query.companyId : null
+  const companyId = session.role === 'superadmin' ? requestedCompany : session.companyId
+  if (!companyId) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'A company scope is required.' })
+    return
+  }
+  const row = db.prepare(`SELECT
+      COUNT(*) AS total,
+      COALESCE(SUM(CASE WHEN cs.active = 1 THEN 1 ELSE 0 END), 0) AS active
+    FROM companyStations cs
+    JOIN companies c ON c.id = cs.companyId
+    WHERE cs.companyId = ? AND c.active = 1`).get(companyId) as { total: number; active: number }
+  res.json({
+    activeStationCount: row.active,
+    totalStationCount: row.total,
+    stationCoveragePct: row.total ? Math.round((row.active / row.total) * 1000) / 10 : 100,
+  })
+})
+
 companiesRouter.get('/', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
   const session = sessionOf(req)
   const rows = session.role === 'superadmin'

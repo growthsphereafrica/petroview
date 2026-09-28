@@ -151,6 +151,24 @@ export class ProductionDatabase extends Dexie {
       syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
       auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
     })
+    this.version(10).stores({
+      companies: 'id, shortCode, name, adminCode, active',
+      // 'active' is now indexed so the Head Office coverage card can count
+      // deactivated branches without loading every station row.
+      companyStations: 'id, companyId, code, name, active',
+      products: 'id, companyId, code, category, active',
+      expenses: 'id, stationId, companyId, date, category, status, createdAt',
+      attendants: 'id, employeeCode, stationId, companyId, active, approvalStatus',
+      sessions: 'id, token, attendantId, expiresAt',
+      supervisors: 'id, employeeCode, stationId, companyId, active, approvalStatus, isHeadOffice, isSuperAdmin',
+      supervisorSessions: 'id, token, supervisorId, expiresAt',
+      shifts: 'id, number, attendantId, stationId, status, syncStatus, openedAt, createdAt',
+      transactions: 'id, shiftId, fuelCode, method, recordedAt',
+      receipts: 'id, shiftId, capturedAt',
+      tankReadings: 'id, stationId, companyId, recordedBy, recordedAt, createdAt',
+      syncQueue: 'id, entityType, entityId, status, attempts, nextRetryAt, createdAt',
+      auditLog: 'id, action, actorId, actorRole, targetId, timestamp',
+    })
   }
 }
 

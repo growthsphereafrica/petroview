@@ -855,10 +855,12 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
             <Card className="p-4 bg-slate-900/90 shadow-md">
               <div className="flex items-center gap-2 mb-2">
                 <Building2 className="w-4 h-4 text-cyan-400" />
-                <p className="text-[9px] uppercase font-bold text-slate-500">Network Compliance</p>
+                <p className="text-[9px] uppercase font-bold text-slate-500">Station Coverage</p>
               </div>
-              <p className="text-2xl font-black text-cyan-400">{summary.syncCompliancePct}%</p>
-              <p className="text-[10px] text-slate-500 mt-1">{summary.stationCount} Station Branches</p>
+              <p className="text-2xl font-black text-cyan-400">{summary.stationCoveragePct}%</p>
+              <p className="text-[10px] text-slate-500 mt-1">
+                {summary.activeStationCount} of {summary.stationCount} Station Branches Active
+              </p>
             </Card>
           </div>
 

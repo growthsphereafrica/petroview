@@ -65,6 +65,7 @@ export interface CompanyStation {
   region: string
   pumpsCount: number
   supervisorName?: string
+  active: boolean
   createdAt: string
 }
 

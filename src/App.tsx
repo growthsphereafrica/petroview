@@ -14,6 +14,7 @@ import {
   type UnifiedSession,
 } from './features/unified/UnifiedLoginScreen'
 import { backendGetMe, backendLogout } from './services/backendApiService'
+import { syncService } from './core/services/syncService'
 import {
   Smartphone,
   Building2,
@@ -87,6 +88,7 @@ const MainAppLayout: React.FC = () => {
         const refreshed = { ...session, stationId: identity.stationId ?? session.stationId, companyId: identity.companyId ?? session.companyId }
         saveUnifiedSession(refreshed)
         setSession(current => current && current.stationId === refreshed.stationId && current.companyId === refreshed.companyId ? current : refreshed)
+        void syncService.retryUnauthorizedOnLogin()
       } catch {
         if (cancelled) return
         clearUnifiedSession()
@@ -124,6 +126,7 @@ const MainAppLayout: React.FC = () => {
         onAuthenticated={next => {
           saveUnifiedSession(next)
           setSession(next)
+          void syncService.retryUnauthorizedOnLogin()
         }}
       />
     )

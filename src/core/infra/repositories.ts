@@ -302,7 +302,7 @@ export const shiftRepo = {
 
 export const transactionRepo = {
   async add(tx: ShiftTransaction): Promise<void> {
-    await prodDb.transactions.add(tx)
+    await prodDb.transactions.put(tx)
   },
   async getById(id: string): Promise<ShiftTransaction | undefined> {
     return prodDb.transactions.get(id)
@@ -321,7 +321,7 @@ export const transactionRepo = {
 
 export const receiptRepo = {
   async add(receipt: ReceiptRecord): Promise<void> {
-    await prodDb.receipts.add(receipt)
+    await prodDb.receipts.put(receipt)
   },
   async listForShift(shiftId: string): Promise<ReceiptRecord[]> {
     const rows = await prodDb.receipts.where('shiftId').equals(shiftId).toArray()
@@ -331,7 +331,7 @@ export const receiptRepo = {
 
 export const syncQueueRepo = {
   async add(item: SyncQueueItem): Promise<void> {
-    await prodDb.syncQueue.add(item)
+    await prodDb.syncQueue.put(item)
   },
   async getPending(): Promise<SyncQueueItem[]> {
     // DEAD_LETTER is excluded: it is terminal and must not be retried.
@@ -340,9 +340,12 @@ export const syncQueueRepo = {
       .toArray()
     const priority = (item: SyncQueueItem) => item.entityType === 'SHIFT' ? 0 : 1
     return rows.sort((a, b) => {
+      // SHIFTS must ALWAYS be synced before TRANSACTIONS so referenced shifts exist on the server
+      const pDiff = priority(a) - priority(b)
+      if (pDiff !== 0) return pDiff
       const created = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       if (created !== 0) return created
-      return priority(a) - priority(b) || a.id.localeCompare(b.id)
+      return a.id.localeCompare(b.id)
     })
   },
   async getAll(): Promise<SyncQueueItem[]> {
@@ -370,6 +373,38 @@ export const syncQueueRepo = {
       nextRetryAt: null,
       updatedAt: new Date().toISOString(),
     })
+  },
+  /** Returns all dead-lettered records to the retry queue. */
+  async reviveAllDeadLettered(): Promise<number> {
+    const rows = await prodDb.syncQueue.filter(q => q.status === 'DEAD_LETTER').toArray()
+    const now = new Date().toISOString()
+    for (const item of rows) {
+      await prodDb.syncQueue.put({
+        ...item,
+        status: 'PENDING',
+        attempts: 0,
+        nextRetryAt: null,
+        updatedAt: now,
+      })
+    }
+    return rows.length
+  },
+  /** Revives dead-lettered records that were blocked specifically due to expired or missing auth. */
+  async reviveUnauthorized(): Promise<number> {
+    const rows = await prodDb.syncQueue
+      .filter(q => q.status === 'DEAD_LETTER' && typeof q.lastError === 'string' && q.lastError.toUpperCase().includes('UNAUTHORIZED'))
+      .toArray()
+    const now = new Date().toISOString()
+    for (const item of rows) {
+      await prodDb.syncQueue.put({
+        ...item,
+        status: 'PENDING',
+        attempts: 0,
+        nextRetryAt: null,
+        updatedAt: now,
+      })
+    }
+    return rows.length
   },
   /**
    * Discards a dead-lettered record from the queue. The underlying entity stays

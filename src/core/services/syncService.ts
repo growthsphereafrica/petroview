@@ -199,6 +199,28 @@ export class SyncService {
     void this.runPendingSync().catch(err => console.error('[SyncService] retry pass failed', err))
   }
 
+  /** Re-queues ALL dead-lettered records for retry. */
+  async retryAllDeadLettered(): Promise<number> {
+    const count = await syncQueueRepo.reviveAllDeadLettered()
+    if (count > 0) {
+      liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'UPDATE', key: 'ALL' })
+      this.emit({ ...(await this.getStats()) })
+      void this.runPendingSync().catch(err => console.error('[SyncService] retryAll pass failed', err))
+    }
+    return count
+  }
+
+  /** Automatically revives records that failed due to expired credentials now that the user authenticated. */
+  async retryUnauthorizedOnLogin(): Promise<number> {
+    const count = await syncQueueRepo.reviveUnauthorized()
+    if (count > 0) {
+      liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'UPDATE', key: 'UNAUTHORIZED' })
+      this.emit({ ...(await this.getStats()) })
+      void this.runPendingSync().catch(err => console.error('[SyncService] auto-revive unauthorized pass failed', err))
+    }
+    return count
+  }
+
   /** Discards a dead-lettered record's upload. The sale itself is untouched. */
   async discardDeadLettered(id: string): Promise<void> {
     await syncQueueRepo.discard(id)

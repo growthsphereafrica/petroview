@@ -51,6 +51,16 @@ export const SyncScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
     }
   }
 
+  const retryAllDeadLettered = async () => {
+    setBusyId('ALL')
+    try {
+      await syncService.retryAllDeadLettered()
+      await reload()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const discardDeadLettered = async (item: SyncQueueItem) => {
     const ok = window.confirm(
       `Discard the queued upload for ${item.entityType} ${item.entityId}?\n\n` +
@@ -98,18 +108,27 @@ export const SyncScreen: React.FC<{ onBack: () => void }> = ({ onBack }) => {
 
         {deadLettered.length > 0 && (
           <div className="rounded-2xl border border-rose-500/40 bg-rose-950/30 p-4">
-            <div className="flex items-start gap-2 mb-3">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs font-bold text-rose-200">
-                  {deadLettered.length} record(s) could not be uploaded
-                </p>
-                <p className="text-[11px] text-rose-200/70 mt-0.5">
-                  These stopped retrying after repeated rejections. They are safe on this device but are
-                  <span className="font-bold"> not </span>
-                  in head-office totals. Tell your supervisor, then retry or discard each one.
-                </p>
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs font-bold text-rose-200">
+                    {deadLettered.length} record(s) could not be uploaded
+                  </p>
+                  <p className="text-[11px] text-rose-200/70 mt-0.5">
+                    These stopped retrying after repeated rejections. They are safe on this device but are
+                    <span className="font-bold"> not </span>
+                    in head-office totals. Tell your supervisor, then retry or discard each one.
+                  </p>
+                </div>
               </div>
+              <button
+                onClick={() => void retryAllDeadLettered()}
+                disabled={busyId === 'ALL'}
+                className="shrink-0 px-3 py-1.5 rounded-xl bg-orange-600 hover:bg-orange-500 disabled:opacity-40 text-white text-[11px] font-black flex items-center gap-1 shadow-md shadow-orange-950/40"
+              >
+                <RotateCcw className="w-3.5 h-3.5" /> Retry All
+              </button>
             </div>
             <div className="flex flex-col gap-2">
               {deadLettered.map(item => (

@@ -101,10 +101,59 @@ function audit(req: AuthRequest, action: string, targetId: string, description: 
   )
 }
 
-pumpsRouter.get('/', authenticate, (req: AuthRequest, res) => {
-  const session = sessionOf(req)
-  const requestedStation = typeof req.query.stationId === 'string' ? req.query.stationId : null
-  const requestedCompany = typeof req.query.companyId === 'string' ? req.query.companyId : null
+pumpsRouter.get('/', (req: AuthRequest, res) => {
+  const requestedStation = typeof req.query.stationId === 'string' ? req.query.stationId.trim() : null
+  const requestedCompany = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : null
+
+  // Optional authentication: allow public lookup when stationId is passed (e.g. registration screen)
+  let session: SessionClaims | null = null
+  const header = req.header('authorization')
+  const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (token) {
+    const row = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token) as SessionClaims | undefined
+    if (row && new Date(row.expiresAt).getTime() > Date.now()) {
+      session = row
+    }
+  }
+
+  if (!session) {
+    if (!requestedStation) {
+      res.status(401).json({ error: 'UNAUTHORIZED', message: 'Missing authentication token.' })
+      return
+    }
+    const station = stationById(requestedStation)
+    if (!station) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'Station not found.' })
+      return
+    }
+    let rows = db.prepare('SELECT p.* FROM pumps p WHERE p.stationId = ? AND p.active = 1 ORDER BY p.name ASC LIMIT 100').all(station.id) as PumpRow[]
+    if (rows.length === 0) {
+      const now = new Date().toISOString()
+      for (let p = 1; p <= 4; p++) {
+        const pId = `pump-${station.id}-${p}`
+        const pName = `Pump ${p}`
+        db.prepare('INSERT OR IGNORE INTO pumps (id, stationId, companyId, name, fuels, active, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)').run(
+          pId, station.id, station.companyId, pName, JSON.stringify(['PMS', 'AGO']), now, now,
+        )
+      }
+      rows = db.prepare('SELECT p.* FROM pumps p WHERE p.stationId = ? AND p.active = 1 ORDER BY p.name ASC LIMIT 100').all(station.id) as PumpRow[]
+    }
+    res.json({
+      count: rows.length,
+      pumps: rows.map(row => ({
+        id: row.id,
+        stationId: row.stationId,
+        companyId: row.companyId,
+        name: row.name,
+        fuels: parseStoredFuels(row.fuels),
+        active: Number(row.active) === 1,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      })),
+    })
+    return
+  }
+
   if (requestedCompany === 'ALL' && session.role !== 'superadmin') {
     res.status(403).json({ error: 'FORBIDDEN', message: 'Only Super Admin can list all companies.' })
     return

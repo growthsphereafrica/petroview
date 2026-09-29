@@ -30,7 +30,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { MVPLogo } from '../../components/common/MVPLogo'
-import { getStationName, registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
+import { getStationName, getStationPumps, registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
 import { backendLogin, backendRegister, backendGetRegisterOmcs, backendGetRegisterStations, backendGetNextStaffCode, type BackendLoginResponse } from '../../services/backendApiService'
 import { ThemeToggleButton, useTheme } from '../../context/ThemeContext'
 import type { Company, CompanyStation, UnifiedRole } from '../../core/domain/types'
@@ -215,9 +215,32 @@ export const UnifiedLoginScreen: React.FC<{
       const prefix = shortCode
       try {
         const next = await backendGetNextStaffCode(activeCompId, regRole, prefix)
-        setRegGeneratedCode(next.nextCode || '')
+        if (next?.nextCode) {
+          setRegGeneratedCode(next.nextCode)
+          return
+        }
+      } catch (err) {
+        console.warn('Backend staff code allocation fallback:', err)
+      }
+
+      // Robust client-side fallback if backend code allocation returned empty or errored
+      const suffix = regRole === 'attendant' ? 'A' : 'M'
+      try {
+        const { attendantRepo, supervisorRepo } = await import('../../core/infra/repositories')
+        const [atts, sups] = await Promise.all([attendantRepo.listAll(), supervisorRepo.listAll()])
+        const allCodes = [...atts.map(a => a.employeeCode), ...sups.map(s => s.employeeCode)]
+        let maxIndex = 0
+        const pattern = new RegExp(`^${prefix}[-_]?(?:ACC[-_]?)?(\\d+)[-_]?[AM]?$`, 'i')
+        for (const c of allCodes) {
+          const m = String(c).trim().match(pattern)
+          if (m) {
+            const val = parseInt(m[1], 10)
+            if (!isNaN(val) && val > maxIndex) maxIndex = val
+          }
+        }
+        setRegGeneratedCode(`${prefix}${String(maxIndex + 1).padStart(3, '0')}${suffix}`)
       } catch {
-        setRegGeneratedCode('')
+        setRegGeneratedCode(`${prefix}001${suffix}`)
       }
     })()
   }, [regCompanyId, regRole, companies])
@@ -231,6 +254,7 @@ export const UnifiedLoginScreen: React.FC<{
     }
     let cancelled = false
     async function loadDynamicPumps() {
+      const fallbackPumps = getStationPumps(regStationId)
       try {
         const { backendGetPumps } = await import('../../services/backendApiService')
         const res = await backendGetPumps(regStationId)
@@ -246,11 +270,11 @@ export const UnifiedLoginScreen: React.FC<{
           return
         }
       } catch (err) {
-        console.warn('Failed to load server pumps for registration:', err)
-        if (!cancelled) {
-          setStationPumps([])
-          setRegPumpId('')
-        }
+        console.warn('Failed to load server pumps for registration, using defaults:', err)
+      }
+      if (!cancelled) {
+        setStationPumps(fallbackPumps)
+        setRegPumpId(prev => (fallbackPumps.some(p => p.id === prev) ? prev : fallbackPumps[0]?.id || 'pump-1'))
       }
     }
     void loadDynamicPumps()
@@ -314,23 +338,35 @@ export const UnifiedLoginScreen: React.FC<{
     if (!regPhone.trim()) { setRegError('Please enter your phone number.'); return }
     if (!/^\d{4}$/.test(regPin)) { setRegError('PIN must be exactly 4 numeric digits.'); return }
     if (regPin !== regConfirmPin) { setRegError('PINs do not match. Please re-enter.'); return }
-    if (!regGeneratedCode) { setRegError('Unable to allocate a staff code. Please try again.'); return }
-    if (regRole === 'attendant' && !regPumpId) { setRegError('Select a registered pump before continuing.'); return }
+    const targetCompany = selectedCompany || companies[0]
+    if (!targetCompany) { setRegError('Select a registered company before continuing.'); return }
+
+    let codeToUse = regGeneratedCode
+    if (!codeToUse) {
+      const suffix = regRole === 'attendant' ? 'A' : 'M'
+      const prefix = (targetCompany.shortCode || 'PV').toUpperCase()
+      codeToUse = `${prefix}001${suffix}`
+      setRegGeneratedCode(codeToUse)
+    }
+
+    let pumpToUse = regPumpId
+    if (regRole === 'attendant' && !pumpToUse) {
+      const fallbackPumps = getStationPumps(regStationId)
+      pumpToUse = fallbackPumps[0]?.id || 'pump-1'
+      setRegPumpId(pumpToUse)
+    }
 
     setRegistering(true)
     try {
-      const targetCompany = selectedCompany || companies[0]
-      if (!targetCompany) throw new Error('Select a registered company before continuing.')
-
       const result = await backendRegister({
-        employeeCode: regGeneratedCode,
+        employeeCode: codeToUse,
         fullName: regFullName.trim(),
         pin: regPin,
         phone: regPhone.trim(),
         stationId: regStationId.trim() || undefined,
         companyId: targetCompany.id,
         companyShortCode: targetCompany.shortCode,
-        pumpId: regRole === 'attendant' ? regPumpId : undefined,
+        pumpId: regRole === 'attendant' ? pumpToUse : undefined,
       })
 
       setRegSuccessData({

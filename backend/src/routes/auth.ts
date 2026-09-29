@@ -311,7 +311,16 @@ authRouter.post('/register', (req, res) => {
       return
     }
     const requestedPump = typeof pumpId === 'string' ? pumpId.trim() : ''
-    if (!requestedPump || !db.prepare('SELECT 1 FROM pumps WHERE id = ? AND stationId = ? AND active = 1').get(requestedPump, scope.stationId)) {
+    let pumpExists = requestedPump && scope.stationId ? db.prepare('SELECT 1 FROM pumps WHERE id = ? AND stationId = ? AND active = 1').get(requestedPump, scope.stationId) : null
+    if (!pumpExists && requestedPump && scope.stationId) {
+      // Auto-ensure pump exists in case the station had not pre-populated its pump records
+      const pumpName = requestedPump.replace(/^pump-.*-(\d+)$/, 'Pump $1').replace(/^pump-/, 'Pump ')
+      db.prepare('INSERT OR IGNORE INTO pumps (id, stationId, companyId, name, fuels, active, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)').run(
+        requestedPump, scope.stationId, scope.companyId, pumpName, JSON.stringify(['PMS', 'AGO']), now, now,
+      )
+      pumpExists = db.prepare('SELECT 1 FROM pumps WHERE id = ? AND stationId = ? AND active = 1').get(requestedPump, scope.stationId)
+    }
+    if (!requestedPump || !pumpExists) {
       res.status(400).json({ error: 'BAD_REQUEST', message: 'Select an active pump belonging to the selected station.' })
       return
     }
@@ -343,31 +352,39 @@ authRouter.post('/register', (req, res) => {
 })
 
 // --- Next sequential staff code generation ---
-authRouter.get('/next-code', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const session = req.session!
+authRouter.get('/next-code', (req: AuthRequest, res) => {
   const role = req.query.role === 'supervisor' ? 'supervisor' : 'attendant'
-  const companyId = session.role === 'superadmin'
-    ? (typeof req.query.companyId === 'string' ? req.query.companyId.trim() : '')
-    : (session.companyId ?? '')
-  if (session.role !== 'superadmin' && !companyId) {
-    res.status(403).json({ error: 'FORBIDDEN', message: 'Your account is not assigned to a company.' })
-    return
+  const companyQuery = typeof req.query.companyId === 'string' ? req.query.companyId.trim() : ''
+  const shortCodeQuery = typeof req.query.shortCode === 'string' ? req.query.shortCode.trim().toUpperCase() : ''
+
+  // Optional auth: inspect token if present, but do not block public pre-login registration
+  let session: SessionClaims | null = null
+  const header = req.header('authorization')
+  const token = header?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+  if (token) {
+    const row = db.prepare('SELECT * FROM sessions WHERE token = ?').get(token) as SessionClaims | undefined
+    if (row && new Date(row.expiresAt).getTime() > Date.now()) {
+      session = row
+    }
   }
 
-  let prefix = session.role === 'superadmin' && typeof req.query.shortCode === 'string'
-    ? req.query.shortCode.trim().toUpperCase()
-    : (session.companyShortCode ?? '').trim().toUpperCase()
+  const companyId = session?.role === 'superadmin'
+    ? companyQuery
+    : (session?.companyId ?? companyQuery)
+
+  let prefix = session?.role === 'superadmin' && shortCodeQuery
+    ? shortCodeQuery
+    : (session?.companyShortCode ?? shortCodeQuery).trim().toUpperCase()
 
   if (companyId) {
     const comp = db.prepare('SELECT id, shortCode FROM companies WHERE (id = ? OR shortCode = ? COLLATE NOCASE) AND active = 1').get(companyId, companyId) as { id: string; shortCode: string } | undefined
-    if (!comp) {
-      res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found or inactive.' })
-      return
+    if (comp) {
+      prefix = comp.shortCode.trim().toUpperCase()
     }
-    prefix = comp.shortCode.trim().toUpperCase()
-  } else if (session.role === 'superadmin') {
-    res.status(400).json({ error: 'BAD_REQUEST', message: 'companyId is required.' })
-    return
+  }
+
+  if (!prefix && shortCodeQuery) {
+    prefix = shortCodeQuery
   }
   if (!prefix) prefix = 'PV'
 
@@ -384,7 +401,7 @@ authRouter.get('/next-code', authenticate, requireRole('headoffice', 'superadmin
 
   const allCodes = [...attendantCodes, ...supervisorCodes]
   let maxIndex = 0
-  const pattern = new RegExp(`^${prefix}(\\d+)[AM]?$`, 'i')
+  const pattern = new RegExp(`^${prefix}[-_]?(?:ACC[-_]?)?(\\d+)[-_]?[AM]?$`, 'i')
   for (const code of allCodes) {
     const match = String(code).trim().match(pattern)
     if (match) {

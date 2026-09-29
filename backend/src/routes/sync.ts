@@ -570,8 +570,22 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
         // on insert only, so duplicates already in the ledger stay updatable
         // and can still be closed and reconciled by hand.
         if (!existing && shift.status === 'OPEN') {
-          const open = db.prepare("SELECT number FROM shifts WHERE attendantId = ? AND status = 'OPEN' AND id <> ? LIMIT 1").get(shift.attendantId, shift.id) as { number: string } | undefined
-          if (open) throw new Error(`Attendant already has an open shift (${open.number}). It must be closed before another is opened.`)
+          const open = db.prepare("SELECT id, number, openedAt FROM shifts WHERE attendantId = ? AND status = 'OPEN' AND id <> ? LIMIT 1").get(shift.attendantId, shift.id) as { id: string; number: string; openedAt: string } | undefined
+          if (open) {
+            // If the existing open shift has an older or prior openedAt timestamp, auto-close the stale
+            // previous shift so the attendant's active shift and incoming sales are never permanently stranded.
+            if (new Date(String(shift.openedAt)).getTime() >= new Date(open.openedAt).getTime()) {
+              db.prepare(`
+                UPDATE shifts 
+                SET status = 'CLOSED', 
+                    closedAt = ?, 
+                    notes = CASE WHEN notes IS NULL OR notes = '' THEN 'Auto-closed upon opening of shift ' || ? ELSE notes || ' | Auto-closed upon opening of shift ' || ? END
+                WHERE id = ?
+              `).run(shift.openedAt, shift.number, shift.number, open.id)
+            } else {
+              throw new Error(`Attendant already has an open shift (${open.number}). It must be closed before another is opened.`)
+            }
+          }
         }
         const previouslyClosed = existing && String(existing.status) === 'CLOSED'
         db.transaction(() => {

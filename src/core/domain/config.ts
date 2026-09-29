@@ -167,7 +167,7 @@ export const LOCKOUT_MS = 5 * 60 * 1000
  *
  * Must stay in step with MIN_SECRET_LENGTH in backend/src/auth.ts.
  */
-export const MIN_PIN_LENGTH = 6
+export const MIN_PIN_LENGTH = 4
 export const MAX_PIN_LENGTH = 32
 
 export function isPinShape(value: string): boolean {

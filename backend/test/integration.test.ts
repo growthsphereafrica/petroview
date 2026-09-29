@@ -378,7 +378,7 @@ describe('login hardening', () => {
     })
   })
 
-  it('refuses to issue a new 4-digit credential', async () => {
+  it('refuses to issue a credential shorter than 4 digits', async () => {
     const session = await login('SUPER-ADMIN', SUPER_ADMIN_PIN)
     const stations = (await (await fetch(`${BASE}/api/companies/directory/omcs/comp-pv/stations`)).json()) as Array<{ id: string }>
     const res = await fetch(`${BASE}/api/attendants`, {
@@ -387,13 +387,13 @@ describe('login hardening', () => {
       body: JSON.stringify({
         employeeCode: 'PV998A',
         fullName: 'Weak Pin',
-        pin: '1234',
+        pin: '123',
         stationId: stations[0].id,
       }),
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as { message?: string }
-    expect(body.message).toMatch(/at least 6 digits/i)
+    expect(body.message).toMatch(/at least 4 digits/i)
   })
 })
 

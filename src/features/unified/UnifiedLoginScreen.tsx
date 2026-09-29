@@ -295,7 +295,7 @@ export const UnifiedLoginScreen: React.FC<{
       const pin = loginPin.trim()
 
       if (!rawCode) throw new Error('Please enter your Staff / Admin Code.')
-      if (!/^\d{4}$/.test(pin)) throw new Error('PIN must be 4 digits.')
+      if (!/^\d{4,8}$/.test(pin)) throw new Error('PIN must be 4 to 8 digits.')
 
       const code =
         rawCode.toUpperCase() === 'SUPERADMIN' || rawCode.toUpperCase() === 'SUPER ADMIN'
@@ -336,7 +336,7 @@ export const UnifiedLoginScreen: React.FC<{
 
     if (!regFullName.trim()) { setRegError('Please enter your full official name.'); return }
     if (!regPhone.trim()) { setRegError('Please enter your phone number.'); return }
-    if (!/^\d{4}$/.test(regPin)) { setRegError('PIN must be exactly 4 numeric digits.'); return }
+    if (!/^\d{4,6}$/.test(regPin)) { setRegError('PIN must be 4 to 6 numeric digits.'); return }
     if (regPin !== regConfirmPin) { setRegError('PINs do not match. Please re-enter.'); return }
     const targetCompany = selectedCompany || companies[0]
     if (!targetCompany) { setRegError('Select a registered company before continuing.'); return }
@@ -503,10 +503,11 @@ export const UnifiedLoginScreen: React.FC<{
                   <input
                     ref={pinInputRef}
                     value={loginPin}
-                    onChange={e => setLoginPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    onChange={e => setLoginPin(e.target.value.replace(/\D/g, '').slice(0, 8))}
                     placeholder="••••"
                     type={showLoginPin ? 'text' : 'password'}
                     inputMode="numeric"
+                    maxLength={8}
                     autoComplete="current-password"
                     className="w-full rounded-xl bg-slate-900/90 border border-slate-800 pl-10 pr-4 py-3 text-lg font-mono tracking-[0.4em] text-white placeholder:text-slate-700 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20 outline-none transition text-center"
                   />
@@ -761,18 +762,19 @@ export const UnifiedLoginScreen: React.FC<{
                 </div>
               )}
 
-              {/* 8. 4-digit PIN + Confirm */}
+              {/* 8. 4-6 digit PIN + Confirm */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-400 mb-1.5 uppercase tracking-wide">
-                    Create 4-Digit PIN
+                    Create PIN (4–6 Digits)
                   </label>
                   <input
                     value={regPin}
-                    onChange={e => setRegPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    onChange={e => setRegPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="••••"
                     type="password"
                     inputMode="numeric"
+                    maxLength={6}
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-base font-mono tracking-widest text-center text-white placeholder:text-slate-700 focus:border-orange-500 outline-none transition"
                     required
                   />
@@ -784,10 +786,11 @@ export const UnifiedLoginScreen: React.FC<{
                   </label>
                   <input
                     value={regConfirmPin}
-                    onChange={e => setRegConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    onChange={e => setRegConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
                     placeholder="••••"
                     type="password"
                     inputMode="numeric"
+                    maxLength={6}
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-base font-mono tracking-widest text-center text-white placeholder:text-slate-700 focus:border-orange-500 outline-none transition"
                     required
                   />

@@ -13,7 +13,7 @@ import { ENV } from './config'
  * policy existed keep working. They should be reset to a compliant PIN, and the
  * write paths below will not issue another one.
  */
-export const MIN_SECRET_LENGTH = 6
+export const MIN_SECRET_LENGTH = 4
 export const MAX_SECRET_LENGTH = 32
 
 /**

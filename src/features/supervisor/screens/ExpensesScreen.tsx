@@ -33,7 +33,7 @@ import {
   Sparkles,
   Filter,
 } from 'lucide-react'
-import { useSupervisorSession } from '../providers'
+import { useSupervisorSession, useSupervisorData } from '../providers'
 import { Badge, Card, ScreenHeader, StatusBar } from '../../shared/ui'
 import { formatDateTime, formatGHS } from '../../../utils/currencyFormatter'
 import { getStationName } from '../../../core/domain/config'
@@ -55,6 +55,7 @@ export const SupervisorExpensesScreen: React.FC<{
   onToast?: (msg: string, kind?: 'success' | 'error' | 'warning' | 'info') => void
 }> = ({ onBack, onToast }) => {
   const { supervisor } = useSupervisorSession()
+  const { stats, refresh: refreshSupervisorData } = useSupervisorData()
   const stationId = supervisor?.stationId || 'STN-GV-042'
   const stationName = supervisor ? getStationName(supervisor.stationId) : 'Green Valley Station'
   const companyId = supervisor?.companyId || 'COMP-MVP'
@@ -129,33 +130,22 @@ export const SupervisorExpensesScreen: React.FC<{
       setExpenses(list)
       setSummary(sum)
 
-      // Compute today's station sales for net reconciliation
-      const allShifts = await shiftRepo.listAll()
-      const currentStationName = getStationName(stationId).toLowerCase()
-      const stationShifts = allShifts.filter(
-        s =>
-          s.stationId === stationId ||
-          !stationId ||
-          stationId === 'STN-01' ||
-          s.stationId === 'STN-01' ||
-          (s.stationName && s.stationName.toLowerCase() === currentStationName) ||
-          (s as any).companyId === companyId,
-      )
-      const todayShifts = stationShifts.filter(
-        s => (s.openedAt && s.openedAt.slice(0, 10) === todayStr) || (s.closedAt && s.closedAt.slice(0, 10) === todayStr),
-      )
-      const salesTotal = Math.round(
-        todayShifts.reduce(
-          (acc, s) => acc + (s.actualTotal || (s.sales ? s.sales.reduce((x, y) => x + y.amount, 0) : 0)),
-          0,
-        ),
-      )
-      setTodaySales(salesTotal)
+      // Synchronize with authoritative supervisor stats so Expenses and Dashboard match 100%
+      try {
+        await refreshSupervisorData()
+      } catch { /* best effort */ }
+      setTodaySales(stats?.salesToday ?? 0)
     } finally {
       setLoading(false)
       setRefreshing(false)
     }
   }
+
+  useEffect(() => {
+    if (stats?.salesToday !== undefined) {
+      setTodaySales(stats.salesToday)
+    }
+  }, [stats?.salesToday])
 
   useEffect(() => {
     loadData()

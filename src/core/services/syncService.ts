@@ -40,6 +40,8 @@ export class SyncService {
   private debounceTimer: number | null = null
   private autoSyncInterval: number | null = null
 
+  private lastResult: SyncResult | null = null
+
   constructor() {
     this.initAutoSync()
   }
@@ -50,27 +52,26 @@ export class SyncService {
     // Immediately trigger upload when connection returns
     window.addEventListener('online', () => {
       console.log('[SyncService] Device is ONLINE. Triggering immediate background sync pass.')
-      void this.runPendingSync().catch(err => console.error('[SyncService] sync pass failed', err))
+      void this.runPendingSync(true).catch(err => console.error('[SyncService] sync pass failed', err))
     })
 
     // Trigger sync when tab becomes active again
     window.addEventListener('focus', () => {
-      void this.runPendingSync().catch(err => console.error('[SyncService] sync pass failed', err))
+      void this.runPendingSync(true).catch(err => console.error('[SyncService] sync pass failed', err))
     })
 
-    // Continuous background sync loop (checks every 12 seconds)
+    // Continuous background sync loop (checks every 10 seconds)
     this.autoSyncInterval = window.setInterval(() => {
       if (typeof navigator !== 'undefined' && navigator.onLine === false) return
       void this.runPendingSync().catch(err => console.error('[SyncService] periodic pass failed', err))
-    }, 12_000)
+    }, 10_000)
   }
 
   /**
-   * Triggers a debounced background sync pass whenever local data changes.
-   * Ensures high-frequency transactions don't overload the gateway while
-   * guaranteeing zero-delay background upload.
+   * Triggers a fast background sync pass whenever local data changes.
+   * Ensures near real-time propagation from attendants to managers and HQ.
    */
-  triggerBackgroundSync(delayMs = 600): void {
+  triggerBackgroundSync(delayMs = 100): void {
     if (typeof window === 'undefined') return
     if (this.debounceTimer) window.clearTimeout(this.debounceTimer)
     this.debounceTimer = window.setTimeout(() => {
@@ -108,17 +109,22 @@ export class SyncService {
 
   /**
    * Triggers a sync pass for all due items.
-   *
-   * A pass that arrives while another is running is deferred rather than
-   * dropped: the running pass records that a rerun is needed and performs it on
-   * exit. Previously a sale made during a sync pass was simply not uploaded
-   * until the next 12-second tick, and the colliding pass was discarded
-   * silently.
+   * When force = true (e.g. manual Push), ignores exponential backoff and retries immediately.
    */
-  async runPendingSync(): Promise<SyncResult> {
+  async runPendingSync(force = false): Promise<SyncResult> {
     const empty: SyncResult = { attempted: 0, succeeded: 0, failed: 0, deadLettered: 0 }
     if (this.running) {
       this.rerunRequested = true
+      if (force) {
+        while (this.running) {
+          await new Promise(r => setTimeout(r, 60))
+        }
+        const remaining = await syncQueueRepo.getCount()
+        if (remaining > 0) {
+          return this.runPendingSync(true)
+        }
+        return this.lastResult ?? empty
+      }
       return empty
     }
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -126,7 +132,7 @@ export class SyncService {
     }
     this.running = true
     try {
-      const due = await syncQueueRepo.getPending()
+      const due = await syncQueueRepo.getPending(force)
       const result: SyncResult = { attempted: due.length, succeeded: 0, failed: 0, deadLettered: 0 }
 
       for (const item of due) {
@@ -165,6 +171,7 @@ export class SyncService {
       // and getAll() loaded every historical row on every pass.
       await syncQueueRepo.pruneSynced()
 
+      this.lastResult = result
       this.emit({ ...(await this.getStats()), result })
       return result
     } catch (err) {

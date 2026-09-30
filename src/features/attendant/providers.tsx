@@ -287,7 +287,7 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
   )
 
   const pushSync = useCallback(async () => {
-    const result = await syncService.runPendingSync()
+    const result = await syncService.runPendingSync(true)
     setPendingCount(await syncService.pendingCount())
     notify(
       result.attempted === 0

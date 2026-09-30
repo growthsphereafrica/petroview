@@ -309,12 +309,24 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
     ),
   )
 
-  // Continuous background auto-sync & refresh for Head Office (every 12 seconds)
+  // Continuous background auto-sync & refresh for Head Office (every 5 seconds)
   useEffect(() => {
+    const handleVisOrFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void loadData()
+      }
+    }
+    window.addEventListener('visibilitychange', handleVisOrFocus)
+    window.addEventListener('focus', handleVisOrFocus)
+
     const timer = window.setInterval(() => {
       void loadData()
-    }, 12_000)
-    return () => window.clearInterval(timer)
+    }, 5_000)
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisOrFocus)
+      window.removeEventListener('focus', handleVisOrFocus)
+      window.clearInterval(timer)
+    }
   }, [loadData])
 
   const topStations = useMemo(() => {

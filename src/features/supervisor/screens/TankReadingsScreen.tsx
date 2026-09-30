@@ -118,6 +118,18 @@ export const SupervisorTankReadingsScreen: React.FC<{
           (a, b) => new Date(b.recordedAt).getTime() - new Date(a.recordedAt).getTime(),
         )
         setReadings(merged)
+        if (merged.length > 0 && merged[0].readings?.length) {
+          const latest = merged[0].readings
+          setEntries(prev =>
+            prev.map(e => {
+              const prevForTank = latest.find(r => r.tankId === e.tankId || r.fuelCode === e.fuelCode)
+              if (prevForTank && prevForTank.closingLevel > 0) {
+                return { ...e, openingLevel: prevForTank.closingLevel }
+              }
+              return e
+            }),
+          )
+        }
       } catch {
         // Offline: display local records
         if (localRecords.length > 0) {

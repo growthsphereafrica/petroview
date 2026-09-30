@@ -4,9 +4,10 @@
  */
 
 import React, { useEffect, useState } from 'react'
-import { Gauge } from 'lucide-react'
+import { CheckCircle2, Gauge, Sparkles } from 'lucide-react'
 import { ScreenHeader } from '../ui'
 import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
+import { shiftRepo } from '../../../core/infra/repositories'
 import type { FuelCode, MeterReading } from '../../../core/domain/types'
 
 interface Props {
@@ -22,11 +23,57 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onB
     Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>,
   )
   const [errors, setErrors] = useState<Partial<Record<FuelCode, string>>>({})
+  const [autoFilledShift, setAutoFilledShift] = useState<string | null>(null)
+  const [loadingDefaults, setLoadingDefaults] = useState(mode === 'opening')
 
   useEffect(() => {
-    setValues(Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>)
-    setErrors({})
-  }, [pumpId, pump])
+    let cancelled = false
+    const init = async () => {
+      const initial = Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>
+      if (mode === 'opening') {
+        setLoadingDefaults(true)
+        try {
+          const allShifts = await shiftRepo.listAll()
+          // Find the most recent closed shift for this pump that has closing readings
+          const prevShifts = allShifts.filter(
+            s =>
+              (s.pumpId === pumpId || (s.pumpName && pump.name && s.pumpName === pump.name)) &&
+              s.closingReadings &&
+              s.closingReadings.length > 0 &&
+              (s.status === 'CLOSED' || s.status === 'APPROVED' || s.status === 'REJECTED'),
+          )
+          const latestClosed = prevShifts.sort((a, b) =>
+            new Date(b.closedAt || b.openedAt).getTime() - new Date(a.closedAt || a.openedAt).getTime(),
+          )[0]
+
+          if (!cancelled && latestClosed && latestClosed.closingReadings?.length) {
+            let filledCount = 0
+            for (const r of latestClosed.closingReadings) {
+              if (pump.fuels.includes(r.fuelCode as FuelCode) && r.value > 0) {
+                initial[r.fuelCode as FuelCode] = String(r.value)
+                filledCount += 1
+              }
+            }
+            if (filledCount > 0) {
+              setAutoFilledShift(latestClosed.number || latestClosed.id)
+            }
+          }
+        } catch {
+          // fallback to blank for manual first-time entry
+        } finally {
+          if (!cancelled) setLoadingDefaults(false)
+        }
+      }
+      if (!cancelled) {
+        setValues(initial)
+        setErrors({})
+      }
+    }
+    void init()
+    return () => {
+      cancelled = true
+    }
+  }, [pumpId, pump, mode])
 
   const parse = (v: string): number => Number(v.replace(/,/g, '')) || 0
 
@@ -66,10 +113,21 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onB
         <div className="rounded-xl bg-slate-900 border border-slate-800 p-3 flex items-center gap-3">
           <Gauge className="w-5 h-5 text-orange-400 shrink-0" />
           <p className="text-[11px] text-slate-400 leading-snug">
-            Read the figures shown on each {mode === 'opening' ? 'meter before' : 'meter at the end of'} your shift and enter them
-            below. These lock in your sales calculation.
+            {mode === 'opening'
+              ? 'Opening meters are automatically carried from the previous closing stock. Verify the figures below before starting.'
+              : 'Read the figures shown on each meter at the end of your shift and enter them below. These lock in your sales calculation.'}
           </p>
         </div>
+
+        {autoFilledShift && mode === 'opening' && (
+          <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 p-3 flex items-center gap-2.5 shadow-sm">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <p className="text-[11px] text-emerald-300 font-medium">
+              Opening stock auto-filled from closing readings of Shift{' '}
+              <span className="font-bold text-white">{autoFilledShift}</span>.
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-col gap-3">
           {pump.fuels.map(fuel => (

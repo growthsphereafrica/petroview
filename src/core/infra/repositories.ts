@@ -333,10 +333,11 @@ export const syncQueueRepo = {
   async add(item: SyncQueueItem): Promise<void> {
     await prodDb.syncQueue.put(item)
   },
-  async getPending(): Promise<SyncQueueItem[]> {
+  async getPending(forceAll = false): Promise<SyncQueueItem[]> {
     // DEAD_LETTER is excluded: it is terminal and must not be retried.
+    // If forceAll is true (e.g. user pressed Push or manual retry), include all pending/failed items immediately
     const rows = await prodDb.syncQueue
-      .filter(q => (q.status === 'PENDING' || q.status === 'FAILED') && (q.nextRetryAt === null || new Date(q.nextRetryAt).getTime() <= Date.now()))
+      .filter(q => (q.status === 'PENDING' || q.status === 'FAILED') && (forceAll || q.nextRetryAt === null || new Date(q.nextRetryAt).getTime() <= Date.now()))
       .toArray()
     const priority = (item: SyncQueueItem) => item.entityType === 'SHIFT' ? 0 : 1
     return rows.sort((a, b) => {

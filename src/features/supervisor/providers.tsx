@@ -13,7 +13,7 @@ import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { loadUnifiedSession, clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
 import type { AuditEntry, Attendant, Shift, ShiftStatus, Supervisor } from '../../core/domain/types'
 
-const AUTO_SYNC_INTERVAL_MS = 15_000
+const AUTO_SYNC_INTERVAL_MS = 5_000
 
 // ---------------------------------------------------------------------------
 // Session
@@ -173,6 +173,14 @@ export const SupervisorDataProvider: React.FC<{ children: React.ReactNode }> = (
 
   // Background auto-sync: periodically push pending records and refresh remote shifts when online.
   useEffect(() => {
+    const handleVisOrFocus = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        void refresh()
+      }
+    }
+    window.addEventListener('visibilitychange', handleVisOrFocus)
+    window.addEventListener('focus', handleVisOrFocus)
+
     const timer = window.setInterval(() => {
       void (async () => {
         try {
@@ -181,7 +189,11 @@ export const SupervisorDataProvider: React.FC<{ children: React.ReactNode }> = (
         } catch { /* best effort */ }
       })()
     }, AUTO_SYNC_INTERVAL_MS)
-    return () => window.clearInterval(timer)
+    return () => {
+      window.removeEventListener('visibilitychange', handleVisOrFocus)
+      window.removeEventListener('focus', handleVisOrFocus)
+      window.clearInterval(timer)
+    }
   }, [refresh])
 
   const reviewShift = useCallback(
@@ -222,7 +234,7 @@ export const SupervisorDataProvider: React.FC<{ children: React.ReactNode }> = (
   )
 
   const pushSync = useCallback(async () => {
-    const result = await syncService.runPendingSync()
+    const result = await syncService.runPendingSync(true)
     await refresh()
     return result
   }, [refresh])

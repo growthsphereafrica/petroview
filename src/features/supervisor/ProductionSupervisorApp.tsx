@@ -3,7 +3,7 @@
  * supervisor screen flow with typed navigation and a global toast.
  */
 
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 import { SupervisorSessionProvider, SupervisorDataProvider, useSupervisorSession } from './providers'
 import { clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
@@ -19,6 +19,8 @@ import { SupervisorExpensesScreen } from './screens/ExpensesScreen'
 import { PumpsManagementView } from '../shared/PumpsManagementView'
 import { ScreenHeader, StatusBar } from '../shared/ui'
 import { getStationName } from '../../core/domain/config'
+import { productService } from '../../core/services/productService'
+import type { Product } from '../../core/domain/types'
 
 type Screen = 'dashboard' | 'tank_readings' | 'expenses' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings' | 'pumps'
 
@@ -39,7 +41,13 @@ const SupervisorNavigator: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [selectedShiftId, setSelectedShiftId] = useState<string | null>(null)
   const [toast, setToast] = useState<ToastState | null>(null)
+  const [availableProducts, setAvailableProducts] = useState<Product[]>([])
   const go = (s: Screen) => setScreen(s)
+
+  // Load active products so PumpsManagementView only shows non-deleted options
+  useEffect(() => {
+    productService.listActiveProducts(supervisor?.companyId).then(setAvailableProducts).catch(() => {})
+  }, [supervisor?.companyId])
 
   const openShift = (shiftId: string) => {
     setSelectedShiftId(shiftId)
@@ -81,6 +89,7 @@ const SupervisorNavigator: React.FC = () => {
               companyName={supervisor?.companyShortCode || 'Station'}
               userRole="supervisor"
               userStationId={supervisor?.stationId}
+              availableProducts={availableProducts}
               stations={[
                 {
                   id: supervisor?.stationId || 'stn-01',

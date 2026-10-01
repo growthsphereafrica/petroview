@@ -217,18 +217,15 @@ export class ProductService {
 
   // ── Private helpers ─────────────────────────────────────────────────────────
 
-  /** Offline fallback: return cached products, or hard-coded defaults. */
+  /**
+   * Offline fallback: return cached products only.
+   * Returns an empty array if there is no valid cache — this ensures that
+   * products deleted by HQ are NOT resurrected from hard-coded defaults.
+   * The UI must handle an empty product list gracefully.
+   */
   private async _fallback(): Promise<Product[]> {
     const cached = readCache()
-    if (cached) return cached
-    // Hard-coded minimal fallback so the UI never breaks offline
-    const now = new Date().toISOString()
-    return [
-      { id: 'prod-pms',  companyId: undefined, code: 'PMS',  name: 'Super Petrol (PMS)', category: 'FUEL', unitPrice: 14.8, unit: 'Litre', color: '#16a34a', active: true, createdAt: now, updatedAt: now },
-      { id: 'prod-ago',  companyId: undefined, code: 'AGO',  name: 'Diesel (AGO)',        category: 'FUEL', unitPrice: 15.2, unit: 'Litre', color: '#2563eb', active: true, createdAt: now, updatedAt: now },
-      { id: 'prod-dpk',  companyId: undefined, code: 'DPK',  name: 'Kerosene (DPK)',      category: 'FUEL', unitPrice: 13.9, unit: 'Litre', color: '#ea580c', active: true, createdAt: now, updatedAt: now },
-      { id: 'prod-kero', companyId: undefined, code: 'KERO', name: 'Kerosene (KERO)',     category: 'FUEL', unitPrice: 13.5, unit: 'Litre', color: '#9333ea', active: true, createdAt: now, updatedAt: now },
-    ]
+    return cached ?? []
   }
 
   private _toMap(products: Product[]): Record<string, number> {
@@ -236,10 +233,6 @@ export class ProductService {
     for (const p of products) {
       if (p.active) map[p.code] = p.unitPrice
     }
-    if (!map.PMS)  map.PMS  = 14.8
-    if (!map.AGO)  map.AGO  = 15.2
-    if (!map.DPK)  map.DPK  = 13.9
-    if (!map.KERO) map.KERO = 13.5
     return map
   }
 }

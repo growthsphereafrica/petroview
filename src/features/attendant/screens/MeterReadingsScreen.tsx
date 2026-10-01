@@ -19,6 +19,8 @@ interface Props {
 
 export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onBack }) => {
   const pump = getStationPumps().find(p => p.id === pumpId) ?? PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
+  // Safe fuel meta lookup — custom OMC products may not be in the static FUEL_META map
+  const getFuelColor = (fuel: string) => FUEL_META[fuel]?.color ?? '#F97316'
   const [values, setValues] = useState<Record<FuelCode, string>>(() =>
     Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>,
   )
@@ -134,7 +136,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onB
             <div key={fuel} className="flex items-center gap-3">
               <span
                 className="w-14 shrink-0 rounded-lg px-2 py-1 text-center text-[10px] font-black text-white uppercase"
-                style={{ backgroundColor: FUEL_META[fuel].color }}
+                style={{ backgroundColor: getFuelColor(fuel) }}
               >
                 {fuel}
               </span>

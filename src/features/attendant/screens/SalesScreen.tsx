@@ -46,6 +46,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
 
   // Dynamic products and prices loaded from OMC / ProductService
   const [activeProducts, setActiveProducts] = useState<Product[]>([])
+  const [productsLoading, setProductsLoading] = useState(true)
   const [fuelCode, setFuelCode] = useState<FuelCode>(pump.fuels[0])
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState<PaymentMethod>('CASH')
@@ -67,21 +68,29 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   // Load products for the attendant's company
   useEffect(() => {
     let cancelled = false
+    setProductsLoading(true)
     productService
       .listActiveProducts(attendant?.companyId)
       .then(prods => {
-        if (!cancelled && prods.length > 0) {
-          setActiveProducts(prods)
-          if (!prods.some(p => p.code === fuelCode)) {
-            setFuelCode(prods[0].code)
+        if (!cancelled) {
+          // Only show products that also have a nozzle configured on this pump
+          const pumpFuels = new Set(pump.fuels)
+          const visible = prods.filter(p => pumpFuels.has(p.code as FuelCode))
+          setActiveProducts(visible)
+          // Reset selected fuel if it was removed
+          if (visible.length > 0 && !visible.some(p => p.code === fuelCode)) {
+            setFuelCode(visible[0].code)
           }
+          setProductsLoading(false)
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        if (!cancelled) setProductsLoading(false)
+      })
     return () => {
       cancelled = true
     }
-  }, [attendant?.companyId])
+  }, [attendant?.companyId, pump.fuels.join(',')])
 
   // Load transactions for the active shift
   useEffect(() => {
@@ -227,41 +236,44 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
             <span className="text-[10px] text-slate-500 font-mono">OMC Live Pricing</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {(activeProducts.length > 0
-              ? activeProducts
-              : pump.fuels.map(f => ({
-                  code: f,
-                  name: f,
-                  unitPrice: FALLBACK_UNIT_PRICES[f] ?? FALLBACK_UNIT_PRICES.PMS,
-                  color: FUEL_META[f]?.color || '#22c55e',
-                }))
-            ).map(p => {
-              const active = p.code === fuelCode
-              const color = p.color || FUEL_META[p.code as FuelCode]?.color || '#22c55e'
-              return (
-                <button
-                  key={p.code}
-                  type="button"
-                  onClick={() => {
-                    setFuelCode(p.code)
-                    setLitres('')
-                  }}
-                  className={`px-3.5 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
-                    active
-                      ? 'border-orange-500 bg-orange-500/15 text-orange-500 ring-1 ring-orange-500/30'
-                      : isDark
-                      ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
-                      : 'border-slate-200 bg-white text-slate-700 hover:text-slate-900'
-                  }`}
-                >
-                  <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-                  <span>{p.code}</span>
-                  <span className="text-slate-500 font-mono text-[10px]">
-                    @ GHS {p.unitPrice.toFixed(2)}
-                  </span>
-                </button>
-              )
-            })}
+            {productsLoading ? (
+              <span className="text-xs text-slate-500 italic flex items-center gap-1.5">
+                <span className="w-3 h-3 border-2 border-slate-700 border-t-orange-500 rounded-full animate-spin" />
+                Loading products…
+              </span>
+            ) : activeProducts.length === 0 ? (
+              <span className="text-xs text-rose-400 italic">
+                No fuel products configured for this pump. Contact your supervisor.
+              </span>
+            ) : (
+              activeProducts.map(p => {
+                const active = p.code === fuelCode
+                const color = p.color || FUEL_META[p.code as FuelCode]?.color || '#22c55e'
+                return (
+                  <button
+                    key={p.code}
+                    type="button"
+                    onClick={() => {
+                      setFuelCode(p.code)
+                      setLitres('')
+                    }}
+                    className={`px-3.5 py-2 rounded-xl border text-xs font-bold transition flex items-center gap-1.5 ${
+                      active
+                        ? 'border-orange-500 bg-orange-500/15 text-orange-500 ring-1 ring-orange-500/30'
+                        : isDark
+                        ? 'border-slate-800 bg-slate-900 text-slate-400 hover:text-white'
+                        : 'border-slate-200 bg-white text-slate-700 hover:text-slate-900'
+                    }`}
+                  >
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                    <span>{p.code}</span>
+                    <span className="text-slate-500 font-mono text-[10px]">
+                      @ GHS {p.unitPrice.toFixed(2)}
+                    </span>
+                  </button>
+                )
+              })
+            )}
           </div>
         </div>
 

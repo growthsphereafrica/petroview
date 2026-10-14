@@ -19,15 +19,16 @@ import type { Attendant, Shift } from '../core/domain/types'
 import type { MobileSession } from './LoginScreen'
 import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
 import { PRODUCTION_PUMPS, PRODUCTION_STATION } from '../core/domain/config'
+import { mobileProductService } from '../core/services/productService'
 
 const PUMPS = PRODUCTION_PUMPS
-const FUEL_PRICES: Record<string, number> = PRODUCTION_STATION.fuelPrices
 
 export const AttendantDashboard: React.FC<{
   session: MobileSession
   onSignOut: () => void
 }> = ({ session, onSignOut }) => {
   const [shift, setShift] = useState<Shift | null>(null)
+  const [fuelPrices, setFuelPrices] = useState<Record<string, number>>(PRODUCTION_STATION.fuelPrices)
   const [attendantId, setAttendantId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -47,14 +48,16 @@ export const AttendantDashboard: React.FC<{
     async function init() {
       try {
         const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
-        const [curShift, pending] = await Promise.all([
+        const [curShift, pending, prices] = await Promise.all([
           getActiveShiftForAttendant(session.userId),
           pendingSyncCount(),
+          mobileProductService.getFuelPrices().catch(() => PRODUCTION_STATION.fuelPrices),
         ])
         if (active) {
           setAttendantId(session.userId)
           setShift(curShift)
           setPendingCount(pending)
+          if (prices) setFuelPrices(prices)
         }
       } finally {
         if (active) setLoading(false)
@@ -218,7 +221,7 @@ export const AttendantDashboard: React.FC<{
       <OpenShiftModal
         visible={openModal}
         onClose={() => setOpenModal(false)}
-        onConfirm={async pumpId => {
+        onConfirm={async (pumpId, openingReadings) => {
           try {
             setOpenModal(false)
             setError(null)
@@ -239,11 +242,6 @@ export const AttendantDashboard: React.FC<{
               createdAt: new Date().toISOString(),
             }
             setAttendantId(attendant.id)
-            const selectedPump = PUMPS.find(p => p.id === pumpId) || PUMPS[0]
-            const openingReadings: Record<string, { fuelCode: string; value: number }> = {}
-            for (const f of selectedPump.fuels) {
-              openingReadings[f] = { fuelCode: f, value: 1000 }
-            }
             await shiftService.openShift({
               attendant,
               pumpId,
@@ -259,6 +257,7 @@ export const AttendantDashboard: React.FC<{
 
       <SaleModal
         visible={saleModal}
+        fuelPrices={fuelPrices}
         onClose={() => setSaleModal(false)}
         onSave={async (fuel, litres, method) => {
           try {
@@ -281,6 +280,7 @@ export const AttendantDashboard: React.FC<{
       <CloseShiftModal
         visible={closeModal}
         shift={shift}
+        fuelPrices={fuelPrices}
         onClose={() => setCloseModal(false)}
         onConfirm={async (closingReadings, remittance, notes) => {
           try {
@@ -375,30 +375,155 @@ export const AttendantDashboard: React.FC<{
 const OpenShiftModal: React.FC<{
   visible: boolean
   onClose: () => void
-  onConfirm: (pumpId: string) => Promise<void>
+  onConfirm: (
+    pumpId: string,
+    openingReadings: Record<string, { fuelCode: string; value: number }>,
+  ) => Promise<void>
 }> = ({ visible, onClose, onConfirm }) => {
   const [pumpId, setPumpId] = useState('pump-1')
+  const [readings, setReadings] = useState<Record<string, string>>({})
+  const [autoFilled, setAutoFilled] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const selectedPump = PUMPS.find(p => p.id === pumpId) || PUMPS[0]
+
+  useEffect(() => {
+    let active = true
+    async function loadLastClosed() {
+      try {
+        const { listShifts } = await import('../core/infra/repositories')
+        const all = await listShifts()
+        const closed = all
+          .filter(
+            s =>
+              s.pumpId === pumpId &&
+              s.closingReadings &&
+              Object.keys(s.closingReadings).length > 0 &&
+              (s.status === 'CLOSED' || s.status === 'APPROVED' || s.status === 'REJECTED'),
+          )
+          .sort(
+            (a, b) =>
+              new Date(b.closedAt || b.openedAt).getTime() - new Date(a.closedAt || a.openedAt).getTime(),
+          )[0]
+
+        if (active) {
+          const init: Record<string, string> = {}
+          let filled = false
+          for (const f of selectedPump.fuels) {
+            if (closed?.closingReadings?.[f]?.value) {
+              init[f] = String(closed.closingReadings[f].value)
+              filled = true
+            } else {
+              init[f] = ''
+            }
+          }
+          setReadings(init)
+          setAutoFilled(filled ? closed.number : null)
+        }
+      } catch {
+        if (active) {
+          const init: Record<string, string> = {}
+          for (const f of selectedPump.fuels) init[f] = ''
+          setReadings(init)
+          setAutoFilled(null)
+        }
+      }
+    }
+    if (visible) {
+      void loadLastClosed()
+    }
+    return () => {
+      active = false
+    }
+  }, [pumpId, visible])
+
+  const allFilled = selectedPump.fuels.every(f => {
+    const raw = readings[f]
+    const val = parseFloat(raw || '')
+    return raw && raw.trim().length > 0 && Number.isFinite(val) && val >= 0
+  })
+
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalBack}>
-        <Card style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Open Shift</Text>
-          <Text style={styles.modalSub}>Select dispensing pump assigned to you</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-            {PUMPS.map(p => (
-              <Pressable
-                key={p.id}
-                onPress={() => setPumpId(p.id)}
-                style={[styles.pumpChip, { borderColor: pumpId === p.id ? colors.emerald : colors.border }]}
+        <Card style={[styles.modalCard, { maxHeight: '90%' }]}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <Text style={styles.modalTitle}>Open Shift</Text>
+            <Text style={styles.modalSub}>Select dispensing pump and confirm opening meters</Text>
+
+            {/* Pump Selector */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
+              {PUMPS.map(p => (
+                <Pressable
+                  key={p.id}
+                  onPress={() => setPumpId(p.id)}
+                  style={[styles.pumpChip, { borderColor: pumpId === p.id ? colors.emerald : colors.border }]}
+                >
+                  <Text
+                    style={{
+                      color: pumpId === p.id ? colors.emerald : colors.textDim,
+                      fontWeight: '800',
+                      fontSize: 13,
+                    }}
+                  >
+                    {p.name}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {autoFilled && (
+              <View
+                style={{
+                  backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                  borderColor: 'rgba(34, 197, 94, 0.3)',
+                  borderWidth: 1,
+                  borderRadius: 10,
+                  padding: 8,
+                  marginTop: 12,
+                }}
               >
-                <Text style={{ color: pumpId === p.id ? colors.emerald : colors.textDim, fontWeight: '800', fontSize: 13 }}>
-                  {p.name}
+                <Text style={{ color: colors.emerald, fontSize: 11, fontWeight: '700' }}>
+                  ✓ Opening stock auto-filled from closing readings of Shift {autoFilled}.
                 </Text>
-              </Pressable>
-            ))}
-          </View>
-          <PrimaryButton title="Start Shift" onPress={() => void onConfirm(pumpId)} style={{ marginTop: 18 }} />
-          <PrimaryButton title="Cancel" onPress={onClose} tone="rose" style={{ marginTop: 8 }} />
+              </View>
+            )}
+
+            {/* Nozzles */}
+            <View style={{ marginTop: 12, gap: 10 }}>
+              {selectedPump.fuels.map(f => (
+                <View key={f} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
+                  <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 12, marginBottom: 4 }}>
+                    {f} NOZZLE OPENING METER
+                  </Text>
+                  <StyledTextInput
+                    value={readings[f] ?? ''}
+                    onChangeText={t => setReadings(prev => ({ ...prev, [f]: t.replace(/[^0-9.]/g, '') }))}
+                    placeholder="Enter opening meter (e.g. 12500.00)"
+                    keyboardType="number-pad"
+                  />
+                </View>
+              ))}
+            </View>
+
+            <PrimaryButton
+              title={busy ? 'Starting Shift…' : 'Confirm & Start Shift'}
+              onPress={async () => {
+                if (!allFilled) return
+                setBusy(true)
+                const out: Record<string, { fuelCode: string; value: number }> = {}
+                for (const f of selectedPump.fuels) {
+                  out[f] = { fuelCode: f, value: parseFloat(readings[f]) || 0 }
+                }
+                await onConfirm(pumpId, out)
+                setBusy(false)
+              }}
+              disabled={!allFilled || busy}
+              tone="emerald"
+              style={{ marginTop: 18 }}
+            />
+            <PrimaryButton title="Cancel" onPress={onClose} tone="rose" style={{ marginTop: 8 }} />
+          </ScrollView>
         </Card>
       </View>
     </Modal>
@@ -407,17 +532,18 @@ const OpenShiftModal: React.FC<{
 
 const SaleModal: React.FC<{
   visible: boolean
+  fuelPrices: Record<string, number>
   onClose: () => void
   onSave: (fuel: string, litres: number, method: string) => Promise<void>
-}> = ({ visible, onClose, onSave }) => {
+}> = ({ visible, fuelPrices, onClose, onSave }) => {
   const [fuel, setFuel] = useState('PMS')
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState('CASH')
   const [busy, setBusy] = useState(false)
-  const f = fuel as keyof typeof FUEL_PRICES
+  const currentPrice = fuelPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
 
   const setAmountPreset = (ghsAmount: number) => {
-    const l = Math.round((ghsAmount / FUEL_PRICES[f]) * 100) / 100
+    const l = Math.round((ghsAmount / currentPrice) * 100) / 100
     setLitres(String(l))
   }
 
@@ -426,11 +552,11 @@ const SaleModal: React.FC<{
       <View style={styles.modalBack}>
         <Card style={styles.modalCard}>
           <Text style={styles.modalTitle}>Record Fuel Dispensed</Text>
-          <Text style={styles.modalSub}>Price: GHS {FUEL_PRICES[f].toFixed(2)} / Litre</Text>
+          <Text style={styles.modalSub}>Price: GHS {currentPrice.toFixed(2)} / Litre</Text>
 
           {/* Fuel selection */}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-            {Object.keys(FUEL_PRICES).map(k => (
+            {Object.keys(fuelPrices).map(k => (
               <Pressable
                 key={k}
                 onPress={() => setFuel(k)}
@@ -483,7 +609,7 @@ const SaleModal: React.FC<{
           </View>
 
           <View style={{ marginTop: 14 }}>
-            <Text style={styles.amountPreview}>Total: {formatGHS(Number(litres || 0) * FUEL_PRICES[f])}</Text>
+            <Text style={styles.amountPreview}>Total: {formatGHS(Number(litres || 0) * currentPrice)}</Text>
           </View>
 
           <PrimaryButton
@@ -506,13 +632,14 @@ const SaleModal: React.FC<{
 const CloseShiftModal: React.FC<{
   visible: boolean
   shift: Shift | null
+  fuelPrices: Record<string, number>
   onClose: () => void
   onConfirm: (
     closingReadings: Record<string, { fuelCode: string; value: number }>,
     remittance: { CASH: number; MOMO: number; VOUCHER: number; CREDIT: number },
     notes?: string,
   ) => Promise<void>
-}> = ({ visible, shift, onClose, onConfirm }) => {
+}> = ({ visible, shift, fuelPrices, onClose, onConfirm }) => {
   const [busy, setBusy] = useState(false)
   const [values, setValues] = useState<Record<string, string>>({})
   const [cash, setCash] = useState('')
@@ -532,7 +659,7 @@ const CloseShiftModal: React.FC<{
     const opening = shift?.openingReadings?.[fuel]?.value ?? 0
     const raw = values[fuel] ?? ''
     const val = parseFloat(raw.replace(/,/g, '')) || 0
-    const price = FUEL_PRICES[fuel as keyof typeof FUEL_PRICES] ?? 14.8
+    const price = fuelPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
     const hasInput = raw.trim().length > 0
     const isValid = hasInput && val >= opening
 

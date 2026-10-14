@@ -15,11 +15,14 @@ import {
   ArrowRight,
   Fuel,
   RefreshCw,
+  Receipt,
 } from 'lucide-react-native'
 import { colors } from '../../theme'
 import { Card, Badge, PrimaryButton, StyledTextInput } from '../../components/ui'
 import { QrSyncSheet } from '../../components/QrSyncSheet'
 import { TankReadingsSheet } from './TankReadingsSheet'
+import { FuelPricesTab } from './FuelPricesTab'
+import { ExpensesSheet } from './ExpensesSheet'
 import { supervisorService } from '../../core/services/supervisorService'
 import { cloudGetTankReadings } from '../../core/infra/cloudApi'
 import type { Shift, Attendant } from '../../core/domain/types'
@@ -45,7 +48,7 @@ function labelFor(status: Shift['status']): string {
   }
 }
 
-export type SupervisorTab = 'dashboard' | 'shifts' | 'tanks' | 'attendants'
+export type SupervisorTab = 'dashboard' | 'shifts' | 'prices' | 'tanks' | 'attendants'
 
 export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: () => void }> = ({ session, onSignOut }) => {
   const [tab, setTab] = useState<SupervisorTab>('dashboard')
@@ -55,6 +58,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const [loading, setLoading] = useState(true)
   const [qrOpen, setQrOpen] = useState(false)
   const [tankSheetOpen, setTankSheetOpen] = useState(false)
+  const [expensesSheetOpen, setExpensesSheetOpen] = useState(false)
 
   const refresh = useCallback(async () => {
     setLoading(true)
@@ -114,6 +118,8 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
                 rejected={shifts.filter(s => s.status === 'REJECTED').length}
                 shifts={shifts}
                 onGoShifts={() => setTab('shifts')}
+                onGoPrices={() => setTab('prices')}
+                onOpenExpenses={() => setExpensesSheetOpen(true)}
                 onGoTanks={() => setTab('tanks')}
                 onGoAttendants={() => setTab('attendants')}
                 onOpenQr={() => setQrOpen(true)}
@@ -121,6 +127,9 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
             )}
             {tab === 'shifts' && (
               <ShiftsTab shifts={shifts} session={session} onChanged={() => setRefreshKey(k => k + 1)} />
+            )}
+            {tab === 'prices' && (
+              <FuelPricesTab session={session} onChanged={() => setRefreshKey(k => k + 1)} />
             )}
             {tab === 'tanks' && (
               <TanksTab
@@ -145,6 +154,7 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
         {([
           ['dashboard', LayoutDashboard, 'Home'],
           ['shifts', ClipboardCheck, 'Shifts'],
+          ['prices', DollarSign, 'Prices'],
           ['tanks', Droplets, 'Tanks'],
           ['attendants', Users, 'Staff'],
         ] as const).map(([key, Icon, label]) => (
@@ -167,6 +177,11 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
         stationId={session.stationId ?? null}
         stationName={session.stationName}
       />
+      <ExpensesSheet
+        visible={expensesSheetOpen}
+        onClose={() => setExpensesSheetOpen(false)}
+        session={session}
+      />
     </View>
   )
 }
@@ -180,6 +195,8 @@ const Dashboard: React.FC<{
   rejected: number
   shifts: Shift[]
   onGoShifts: () => void
+  onGoPrices: () => void
+  onOpenExpenses: () => void
   onGoTanks: () => void
   onGoAttendants: () => void
   onOpenQr: () => void
@@ -190,6 +207,8 @@ const Dashboard: React.FC<{
   rejected,
   shifts,
   onGoShifts,
+  onGoPrices,
+  onOpenExpenses,
   onGoTanks,
   onGoAttendants,
   onOpenQr,
@@ -251,13 +270,25 @@ const Dashboard: React.FC<{
           onPress={onGoShifts}
         />
         <QuickRow
+          icon={<DollarSign size={16} color={colors.amber} />}
+          title="Station Fuel Prices"
+          subtitle="Configure unit price per litre (PMS, AGO, DPK)"
+          onPress={onGoPrices}
+        />
+        <QuickRow
+          icon={<Receipt size={16} color={colors.rose} />}
+          title="Station Operating Expenses"
+          subtitle="Log generator fuel, utility & forecourt outflows"
+          onPress={onOpenExpenses}
+        />
+        <QuickRow
           icon={<Droplets size={16} color={colors.blue} />}
           title="Tank Inventory & Dips"
           subtitle="Record wet-stock levels & dip measurements"
           onPress={onGoTanks}
         />
         <QuickRow
-          icon={<Users size={16} color={colors.amber} />}
+          icon={<Users size={16} color={colors.emerald} />}
           title="Forecourt Attendants"
           subtitle="PIN resets & attendant approvals"
           onPress={onGoAttendants}
@@ -372,66 +403,209 @@ const ShiftDetailModal: React.FC<{
   onReviewed: (decision: 'APPROVED' | 'REJECTED', notes?: string) => Promise<void>
 }> = ({ shift, session, onClose, onReviewed }) => {
   const [busy, setBusy] = useState<string | null>(null)
+  const [mode, setMode] = useState<'idle' | 'approve' | 'reject'>('idle')
+  const [rejectNote, setRejectNote] = useState('')
+
+  // Compute Nozzle Breakdown
+  const fuels = shift.openingReadings
+    ? Object.keys(shift.openingReadings)
+    : shift.sales.map(s => s.fuelCode)
+
+  const nozzleAudit = fuels.map(fuel => {
+    const opening = shift.openingReadings?.[fuel]?.value ?? 0
+    const closing = shift.closingReadings?.[fuel]?.value ?? 0
+    const saleMatch = shift.sales.find(s => s.fuelCode === fuel)
+    const litres = saleMatch?.litres ?? (closing >= opening && closing > 0 ? closing - opening : 0)
+    const unitPrice = saleMatch?.unitPrice ?? 14.80
+    const amount = saleMatch?.amount ?? litres * unitPrice
+    return { fuel, opening, closing, litres, unitPrice, amount }
+  })
+
+  const totalVol = shift.sales.length > 0
+    ? shift.sales.reduce((a, s) => a + s.litres, 0)
+    : nozzleAudit.reduce((a, n) => a + n.litres, 0)
+
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
       <View style={styles.modal}>
-        <View style={styles.modalCard}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.modalTitle}>{shift.number}</Text>
-            <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
-          </View>
-          <Text style={styles.modalSub}>{shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}</Text>
-          <View style={styles.statsGrid}>
-            <Stat label="Sales Total" value={formatGHS(shift.salesTotal)} />
-            <Stat label="Volume" value={`${formatLitres(shift.sales.reduce((a, s) => a + s.litres, 0))} L`} />
-            <Stat label="Variance" value={formatGHS(shift.variance, { showSign: true })} tone={Math.abs(shift.variance) < 5 ? colors.emerald : colors.rose} />
-            <Stat label="Opened" value={formatDateTime(shift.openedAt)} />
-          </View>
-
-          {shift.status === 'CLOSED' ? (
-            <>
-              <View style={styles.reviewActions}>
-                <View style={{ flex: 1, marginRight: 6 }}>
-                  <Pressable
-                    disabled={!!busy}
-                    onPress={async () => {
-                      setBusy('APPROVED')
-                      await onReviewed('APPROVED')
-                      setBusy(null)
-                    }}
-                    style={[styles.btnApprove, busy && { opacity: 0.5 }]}
-                  >
-                    <CheckCircle2 size={14} color="#052e16" />
-                    <Text style={[styles.btnLabel, { color: '#052e16' }]}>{busy === 'APPROVED' ? 'Reviewing…' : 'Approve'}</Text>
-                  </Pressable>
-                </View>
-                <View style={{ flex: 1, marginLeft: 6 }}>
-                  <Pressable
-                    disabled={!!busy}
-                    onPress={async () => {
-                      setBusy('REJECTED')
-                      await onReviewed('REJECTED', 'Flagged by supervisor')
-                      setBusy(null)
-                    }}
-                    style={[styles.btnReject, busy && { opacity: 0.5 }]}
-                  >
-                    <Text style={[styles.btnLabel, { color: '#fff' }]}>{busy === 'REJECTED' ? 'Reviewing…' : 'Reject'}</Text>
-                  </Pressable>
-                </View>
+        <View style={[styles.modalCard, { maxHeight: '90%' }]}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Header */}
+            <View style={styles.cardHeader}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.modalTitle}>{shift.number}</Text>
+                <Text style={styles.modalSub}>
+                  {shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}
+                </Text>
               </View>
-              <Pressable onPress={onClose} style={{ marginTop: 8, alignItems: 'center', padding: 8 }}>
-                <Text style={{ color: colors.textFaint, fontSize: 12 }}>Close</Text>
-              </Pressable>
-            </>
-          ) : (
-            <Pressable onPress={onClose} style={{ marginTop: 12, alignItems: 'center', padding: 8 }}>
+              <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
+            </View>
+
+            {/* Timing */}
+            <View style={styles.auditRow}>
+              <Text style={styles.auditLabel}>Opened: {formatDateTime(shift.openedAt)}</Text>
+              <Text style={styles.auditLabel}>Closed: {formatDateTime(shift.closedAt ?? shift.updatedAt)}</Text>
+            </View>
+
+            {/* Stats Grid */}
+            <View style={styles.statsGrid}>
+              <Stat label="Sales Total" value={formatGHS(shift.salesTotal)} />
+              <Stat label="Volume Sold" value={`${formatLitres(totalVol)} L`} />
+              <Stat
+                label="Variance"
+                value={formatGHS(shift.variance, { showSign: true })}
+                tone={shift.variance === 0 ? colors.emerald : Math.abs(shift.variance) < 5 ? colors.amber : colors.rose}
+              />
+              <Stat label="Total Remitted" value={formatGHS(shift.actualTotal)} />
+            </View>
+
+            {/* Forecourt Meter Audit */}
+            <Text style={styles.subSectionTitle}>FORECOURT METER AUDIT</Text>
+            <View style={{ gap: 8, marginBottom: 12 }}>
+              {nozzleAudit.map(n => (
+                <View key={n.fuel} style={styles.nozzleBox}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{n.fuel} Nozzle</Text>
+                    <Text style={{ color: colors.text, fontWeight: '800', fontSize: 12 }}>
+                      {formatGHS(n.amount)}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                    <Text style={{ color: colors.textDim, fontSize: 10 }}>
+                      Open: <Text style={{ color: colors.text }}>{n.opening.toFixed(2)}</Text> → Close: <Text style={{ color: colors.text }}>{n.closing > 0 ? n.closing.toFixed(2) : '—'}</Text>
+                    </Text>
+                    <Text style={{ color: colors.textDim, fontSize: 10 }}>
+                      Sold: <Text style={{ color: colors.emerald, fontWeight: '800' }}>{n.litres.toFixed(2)} L</Text> @ GHS {n.unitPrice.toFixed(2)}/L
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* Remittance Breakdown */}
+            <Text style={styles.subSectionTitle}>PAYMENT REMITTANCE</Text>
+            <View style={styles.paymentsBox}>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>Cash at Hand</Text>
+                <Text style={styles.paymentValue}>{formatGHS(shift.payments?.CASH ?? 0)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>Mobile Money (MoMo)</Text>
+                <Text style={styles.paymentValue}>{formatGHS(shift.payments?.MOMO ?? 0)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>POS / Cards / Vouchers</Text>
+                <Text style={styles.paymentValue}>{formatGHS(shift.payments?.VOUCHER ?? 0)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>Credit / Invoices</Text>
+                <Text style={styles.paymentValue}>{formatGHS(shift.payments?.CREDIT ?? 0)}</Text>
+              </View>
+              <View style={[styles.paymentRow, { borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6, marginTop: 4 }]}>
+                <Text style={[styles.paymentLabel, { fontWeight: '900', color: colors.text }]}>Total Handed Over</Text>
+                <Text style={[styles.paymentValue, { color: colors.emerald, fontSize: 13 }]}>{formatGHS(shift.actualTotal)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Text style={[styles.paymentLabel, { fontWeight: '900', color: colors.text }]}>Variance Status</Text>
+                <Text style={[styles.paymentValue, { color: shift.variance === 0 ? colors.emerald : shift.variance > 0 ? colors.blue : colors.rose, fontWeight: '900' }]}>
+                  {shift.variance === 0 ? 'Balanced' : shift.variance > 0 ? `+${formatGHS(shift.variance)} Overage` : `${formatGHS(shift.variance)} Shortage`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Attendant Notes */}
+            {shift.reviewNotes ? (
+              <View style={styles.noteBox}>
+                <Text style={styles.noteTitle}>ATTENDANT HANDOVER NOTE</Text>
+                <Text style={styles.noteBody}>{shift.reviewNotes}</Text>
+              </View>
+            ) : null}
+
+            {/* Review Decision Actions */}
+            {shift.status === 'CLOSED' ? (
+              <View style={{ marginTop: 14 }}>
+                {mode === 'idle' && (
+                  <View style={styles.reviewActions}>
+                    <View style={{ flex: 1, marginRight: 6 }}>
+                      <Pressable
+                        onPress={() => setMode('approve')}
+                        style={styles.btnApprove}
+                      >
+                        <CheckCircle2 size={14} color="#052e16" />
+                        <Text style={[styles.btnLabel, { color: '#052e16' }]}>Approve Shift</Text>
+                      </Pressable>
+                    </View>
+                    <View style={{ flex: 1, marginLeft: 6 }}>
+                      <Pressable
+                        onPress={() => setMode('reject')}
+                        style={styles.btnReject}
+                      >
+                        <Text style={[styles.btnLabel, { color: '#fff' }]}>Reject Shift</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+
+                {mode === 'approve' && (
+                  <View style={styles.decisionBox}>
+                    <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700', marginBottom: 8 }}>
+                      Confirm approval of {shift.number} for {formatGHS(shift.actualTotal)} collected?
+                    </Text>
+                    <PrimaryButton
+                      title={busy === 'APPROVED' ? 'Approving…' : 'Confirm & Approve'}
+                      onPress={async () => {
+                        setBusy('APPROVED')
+                        await onReviewed('APPROVED')
+                        setBusy(null)
+                      }}
+                      tone="emerald"
+                      disabled={!!busy}
+                    />
+                    <Pressable onPress={() => setMode('idle')} style={{ marginTop: 8, alignItems: 'center' }}>
+                      <Text style={{ color: colors.textDim, fontSize: 11 }}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                )}
+
+                {mode === 'reject' && (
+                  <View style={styles.decisionBox}>
+                    <Text style={{ color: colors.rose, fontSize: 12, fontWeight: '700', marginBottom: 6 }}>
+                      Enter reason for rejecting {shift.number}:
+                    </Text>
+                    <StyledTextInput
+                      value={rejectNote}
+                      onChangeText={setRejectNote}
+                      placeholder="e.g. Cash shortage of GHS 50 without receipt"
+                    />
+                    <PrimaryButton
+                      title={busy === 'REJECTED' ? 'Rejecting…' : 'Confirm Rejection'}
+                      onPress={async () => {
+                        setBusy('REJECTED')
+                        await onReviewed('REJECTED', rejectNote)
+                        setBusy(null)
+                      }}
+                      tone="rose"
+                      disabled={!!busy || rejectNote.trim().length < 4}
+                      style={{ marginTop: 8 }}
+                    />
+                    <Pressable onPress={() => { setMode('idle'); setRejectNote('') }} style={{ marginTop: 8, alignItems: 'center' }}>
+                      <Text style={{ color: colors.textDim, fontSize: 11 }}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            ) : null}
+
+            {shift.reviewedBy && (
+              <Text style={styles.reviewedNote}>
+                Reviewed by {shift.reviewedBy} — {formatDateTime(shift.reviewedAt ?? '')}
+              </Text>
+            )}
+
+            <Pressable onPress={onClose} style={{ marginTop: 14, alignItems: 'center', padding: 8 }}>
               <Text style={{ color: colors.textFaint, fontSize: 12 }}>Close</Text>
             </Pressable>
-          )}
-
-          {shift.reviewedBy && (
-            <Text style={styles.reviewedNote}>Reviewed by {shift.reviewedBy} — {formatDateTime(shift.reviewedAt ?? '')}</Text>
-          )}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -786,4 +960,16 @@ const styles = StyleSheet.create({
   tabItemActive: {},
   tabLabel: { fontSize: 10, fontWeight: '800', marginTop: 1 },
   reloadBtn: { alignItems: 'center', padding: 14, marginTop: 4 },
+  subSectionTitle: { color: colors.textFaint, fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginTop: 12, marginBottom: 6 },
+  nozzleBox: { backgroundColor: colors.panel2, borderRadius: 10, padding: 10 },
+  paymentsBox: { backgroundColor: colors.panel2, borderRadius: 10, padding: 10, gap: 6 },
+  paymentRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  paymentLabel: { color: colors.textDim, fontSize: 11 },
+  paymentValue: { color: colors.text, fontSize: 11, fontWeight: '700', fontFamily: 'monospace' },
+  noteBox: { backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: 10, padding: 10, marginTop: 10 },
+  noteTitle: { color: colors.textFaint, fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+  noteBody: { color: colors.text, fontSize: 11, marginTop: 4 },
+  decisionBox: { backgroundColor: colors.panel2, borderRadius: 12, padding: 12, marginTop: 8 },
+  auditRow: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 6 },
+  auditLabel: { color: colors.textDim, fontSize: 10 },
 })

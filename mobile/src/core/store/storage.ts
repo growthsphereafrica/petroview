@@ -107,5 +107,7 @@ export const keys = {
   sessionToken: 'mvp_m_session_token',
   cloudToken: 'mvp_m_cloud_token',
   activeSession: 'mvp_m_active_session',
+  products: 'mvp_m_products',
+  expenses: 'mvp_m_expenses',
   schemaVersion: 'mvp_m_schema_version',
 }

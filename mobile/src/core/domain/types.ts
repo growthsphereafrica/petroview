@@ -4,7 +4,23 @@
  * validation are enforced by the shared service layer.
  */
 
-export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO'
+export type FuelCode = 'PMS' | 'AGO' | 'DPK' | 'KERO' | string
+
+export type ProductCategory = 'FUEL' | 'LUBRICANT' | 'LPG' | 'OTHER'
+
+export interface Product {
+  id: string
+  companyId?: string
+  code: string
+  name: string
+  category: ProductCategory
+  unitPrice: number
+  unit: string
+  color?: string
+  active: boolean
+  createdAt: string
+  updatedAt: string
+}
 
 export type PaymentMethod = 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'
 
@@ -12,7 +28,32 @@ export type ShiftStatus = 'OPEN' | 'CLOSED' | 'REVIEWED' | 'APPROVED' | 'REJECTE
 
 export type SyncStatus = 'PENDING' | 'SYNCED' | 'FAILED'
 
-export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT'
+export type SyncEntityType = 'SHIFT' | 'TRANSACTION' | 'RECEIPT' | 'EXPENSE'
+
+export type ExpensePaymentSource = 'CASH' | 'MOMO' | 'STATION_ACCOUNT' | 'OTHER'
+
+export interface StationExpense {
+  id: string
+  companyId: string
+  companyShortCode?: string
+  stationId: string
+  stationName: string
+  category: string
+  amount: number
+  paymentSource: ExpensePaymentSource
+  payee?: string
+  referenceNumber?: string
+  notes?: string
+  date: string // YYYY-MM-DD
+  recordedBy: {
+    id: string
+    name: string
+    employeeCode: string
+  }
+  status: 'APPROVED' | 'PENDING' | 'REJECTED'
+  createdAt: string
+  updatedAt: string
+}
 
 export interface MeterReading {
   fuelCode: FuelCode

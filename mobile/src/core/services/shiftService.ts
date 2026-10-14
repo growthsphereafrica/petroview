@@ -15,6 +15,7 @@ import {
   pendingSyncCount,
   addAudit,
 } from '../infra/repositories'
+import { mobileProductService } from './productService'
 
 export interface OpenShiftInput {
   attendant: Attendant
@@ -150,6 +151,8 @@ export class ShiftService {
     let meteredSalesTotal = 0
     const salesList: Array<{ fuelCode: string; litres: number; unitPrice: number; amount: number }> = []
 
+    const dynamicPrices = await mobileProductService.getFuelPrices().catch(() => ({} as Record<string, number>))
+
     for (const [fuel, r] of Object.entries(input.closingReadings)) {
       if (typeof r.value !== 'number') {
         throw new DomainError('READINGS_EMPTY', `Closing reading required for ${fuel}.`, fuel)
@@ -165,7 +168,7 @@ export class ShiftService {
       readingsTotal += round2(r.value)
 
       const litres = round2(r.value - opening)
-      const unitPrice = PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? PRODUCTION_STATION.fuelPrices.PMS
+      const unitPrice = dynamicPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
       const amount = round2(litres * unitPrice)
       meteredSalesTotal = round2(meteredSalesTotal + amount)
       salesList.push({ fuelCode: fuel, litres, unitPrice, amount })

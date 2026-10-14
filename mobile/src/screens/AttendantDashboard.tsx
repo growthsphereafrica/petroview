@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap } from 'lucide-react-native'
+import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
@@ -164,18 +164,22 @@ export const AttendantDashboard: React.FC<{
               <PrimaryButton title="Open Shift" onPress={() => setOpenModal(true)} tone="emerald" />
             ) : (
               <>
-                <PrimaryButton title="⚡ Record Sale (POS)" onPress={() => setSaleModal(true)} tone="emerald" />
+                <PrimaryButton
+                  title="🔒 End Shift & Enter Closing Meters"
+                  onPress={() => setCloseModal(true)}
+                  tone="amber"
+                />
                 <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                  <PrimaryButton
+                    title="⚡ Single Receipt (POS)"
+                    onPress={() => setSaleModal(true)}
+                    tone="emerald"
+                    style={{ flex: 1 }}
+                  />
                   <PrimaryButton
                     title="Add Expense"
                     onPress={() => setExpenseModal(true)}
                     tone="violet"
-                    style={{ flex: 1 }}
-                  />
-                  <PrimaryButton
-                    title="Close Shift"
-                    onPress={() => setCloseModal(true)}
-                    tone="amber"
                     style={{ flex: 1 }}
                   />
                 </View>
@@ -235,15 +239,15 @@ export const AttendantDashboard: React.FC<{
               createdAt: new Date().toISOString(),
             }
             setAttendantId(attendant.id)
+            const selectedPump = PUMPS.find(p => p.id === pumpId) || PUMPS[0]
+            const openingReadings: Record<string, { fuelCode: string; value: number }> = {}
+            for (const f of selectedPump.fuels) {
+              openingReadings[f] = { fuelCode: f, value: 1000 }
+            }
             await shiftService.openShift({
               attendant,
               pumpId,
-              openingReadings: {
-                PMS: { fuelCode: 'PMS', value: 1000 },
-                AGO: { fuelCode: 'AGO', value: 500 },
-                DPK: { fuelCode: 'DPK', value: 300 },
-                KERO: { fuelCode: 'KERO', value: 200 },
-              },
+              openingReadings,
             })
             await refresh()
           } catch (e) {
@@ -276,19 +280,17 @@ export const AttendantDashboard: React.FC<{
 
       <CloseShiftModal
         visible={closeModal}
+        shift={shift}
         onClose={() => setCloseModal(false)}
-        onConfirm={async () => {
+        onConfirm={async (closingReadings, remittance, notes) => {
           try {
             setCloseModal(false)
             if (!shift) return
             await shiftService.closeShift({
               shiftId: shift.id,
-              closingReadings: {
-                PMS: { fuelCode: 'PMS', value: 1050 },
-                AGO: { fuelCode: 'AGO', value: 540 },
-                DPK: { fuelCode: 'DPK', value: 320 },
-                KERO: { fuelCode: 'KERO', value: 215 },
-              },
+              closingReadings,
+              remittance,
+              notes,
             })
             await refresh()
           } catch (e) {
@@ -503,35 +505,201 @@ const SaleModal: React.FC<{
 
 const CloseShiftModal: React.FC<{
   visible: boolean
+  shift: Shift | null
   onClose: () => void
-  onConfirm: () => Promise<void>
-}> = ({ visible, onClose, onConfirm }) => {
+  onConfirm: (
+    closingReadings: Record<string, { fuelCode: string; value: number }>,
+    remittance: { CASH: number; MOMO: number; VOUCHER: number; CREDIT: number },
+    notes?: string,
+  ) => Promise<void>
+}> = ({ visible, shift, onClose, onConfirm }) => {
   const [busy, setBusy] = useState(false)
+  const [values, setValues] = useState<Record<string, string>>({})
+  const [cash, setCash] = useState('')
+  const [momo, setMomo] = useState('')
+  const [card, setCard] = useState('')
+  const [credit, setCredit] = useState('')
+  const [notes, setNotes] = useState('')
+
+  const fuels = shift?.openingReadings ? Object.keys(shift.openingReadings) : ['PMS', 'AGO']
+
+  // Per-fuel calculations
+  let totalLitres = 0
+  let totalExpectedCash = 0
+  let allValid = fuels.length > 0
+
+  const nozzleRows = fuels.map(fuel => {
+    const opening = shift?.openingReadings?.[fuel]?.value ?? 0
+    const raw = values[fuel] ?? ''
+    const val = parseFloat(raw.replace(/,/g, '')) || 0
+    const price = FUEL_PRICES[fuel as keyof typeof FUEL_PRICES] ?? 14.8
+    const hasInput = raw.trim().length > 0
+    const isValid = hasInput && val >= opening
+
+    if (!isValid) allValid = false
+
+    const litres = isValid ? Math.round((val - opening) * 100) / 100 : 0
+    const amount = Math.round(litres * price * 100) / 100
+
+    if (isValid) {
+      totalLitres += litres
+      totalExpectedCash += amount
+    }
+
+    return { fuel, opening, raw, val, price, litres, amount, isValid, hasInput }
+  })
+
+  totalLitres = Math.round(totalLitres * 100) / 100
+  totalExpectedCash = Math.round(totalExpectedCash * 100) / 100
+
+  const cNum = parseFloat(cash.replace(/,/g, '')) || 0
+  const mNum = parseFloat(momo.replace(/,/g, '')) || 0
+  const kNum = parseFloat(card.replace(/,/g, '')) || 0
+  const crNum = parseFloat(credit.replace(/,/g, '')) || 0
+  const totalRemitted = Math.round((cNum + mNum + kNum + crNum) * 100) / 100
+  const variance = Math.round((totalRemitted - totalExpectedCash) * 100) / 100
+
   return (
     <Modal visible={visible} transparent animationType="slide">
       <View style={styles.modalBack}>
-        <Card style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Close Shift</Text>
-          <Text style={styles.modalSub}>
-            Meter readings will be reconciled and variance computed. The closed shift is queued for review & sync.
-          </Text>
-          <View style={styles.warningBox}>
-            <Banknote size={14} color={colors.amber} />
-            <Text style={{ color: colors.amber, fontSize: 12, flex: 1, marginLeft: 6 }}>
-              Cash collected must match reported sales. Any variance will be reviewed by the supervisor.
+        <Card style={[styles.modalCard, { maxHeight: '90%' }]}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            <Text style={styles.modalTitle}>End Shift & Closing Meters</Text>
+            <Text style={styles.modalSub}>
+              Enter closing pump stock to compute total litres sold and cash at hand.
             </Text>
-          </View>
-          <PrimaryButton
-            title={busy ? 'Closing…' : 'Confirm Close & Submit'}
-            onPress={async () => {
-              setBusy(true)
-              await onConfirm()
-              setBusy(false)
-            }}
-            tone="amber"
-            style={{ marginTop: 14 }}
-          />
-          <PrimaryButton title="Cancel" onPress={onClose} style={{ marginTop: 8 }} />
+
+            {/* Nozzles input */}
+            <View style={{ marginTop: 12, gap: 10 }}>
+              {nozzleRows.map(row => (
+                <View key={row.fuel} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{row.fuel}</Text>
+                    <Text style={{ color: colors.textDim, fontSize: 11 }}>
+                      Opening: <Text style={{ color: colors.text, fontWeight: '700' }}>{row.opening.toFixed(2)}</Text> · Rate: GHS {row.price.toFixed(2)}/L
+                    </Text>
+                  </View>
+                  <StyledTextInput
+                    value={row.raw}
+                    onChangeText={t => setValues(prev => ({ ...prev, [row.fuel]: t.replace(/[^0-9.]/g, '') }))}
+                    placeholder={`Closing (min ${row.opening.toFixed(2)})`}
+                    keyboardType="number-pad"
+                  />
+                  {row.isValid && (
+                    <Text style={{ color: colors.textDim, fontSize: 11, marginTop: 4 }}>
+                      Sold: <Text style={{ color: colors.emerald, fontWeight: '800' }}>{row.litres.toFixed(2)} L</Text> ={' '}
+                      <Text style={{ color: colors.text, fontWeight: '800' }}>{formatGHS(row.amount)}</Text>
+                    </Text>
+                  )}
+                </View>
+              ))}
+            </View>
+
+            {/* KEY HIGHLIGHT CARD: Litres Sold & Cash to Have at Hand */}
+            <View
+              style={{
+                marginTop: 14,
+                backgroundColor: 'rgba(249, 115, 22, 0.12)',
+                borderColor: colors.amber,
+                borderWidth: 1.5,
+                borderRadius: 14,
+                padding: 12,
+              }}
+            >
+              <Text style={{ color: colors.amber, fontWeight: '900', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                ⚡ Shift Sales Total
+              </Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
+                <View>
+                  <Text style={{ color: colors.textDim, fontSize: 10, textTransform: 'uppercase' }}>Total Litres Sold</Text>
+                  <Text style={{ color: colors.text, fontSize: 18, fontWeight: '900' }}>{totalLitres.toFixed(2)} L</Text>
+                </View>
+                <View style={{ alignItems: 'flex-end' }}>
+                  <Text style={{ color: colors.amber, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
+                    Cash to Have at Hand
+                  </Text>
+                  <Text style={{ color: colors.amber, fontSize: 18, fontWeight: '900' }}>
+                    {formatGHS(totalExpectedCash)}
+                  </Text>
+                </View>
+              </View>
+            </View>
+
+            {/* Remittance handover */}
+            <View style={{ marginTop: 14, gap: 8 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ color: colors.text, fontWeight: '800', fontSize: 12 }}>Handover Remittance</Text>
+                {totalExpectedCash > 0 && (
+                  <Pressable
+                    onPress={() => {
+                      setCash(totalExpectedCash.toFixed(2))
+                      setMomo('')
+                      setCard('')
+                      setCredit('')
+                    }}
+                    style={{ backgroundColor: colors.panel2, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6 }}
+                  >
+                    <Text style={{ color: colors.amber, fontSize: 10, fontWeight: '800' }}>All in Cash</Text>
+                  </Pressable>
+                )}
+              </View>
+
+              <StyledTextInput
+                value={cash}
+                onChangeText={t => setCash(t.replace(/[^0-9.]/g, ''))}
+                placeholder="Cash at Hand (GHS)"
+                keyboardType="number-pad"
+              />
+              <StyledTextInput
+                value={momo}
+                onChangeText={t => setMomo(t.replace(/[^0-9.]/g, ''))}
+                placeholder="Mobile Money / MoMo (GHS)"
+                keyboardType="number-pad"
+              />
+
+              <View
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  backgroundColor: variance === 0 ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <Text style={{ color: variance === 0 ? colors.emerald : colors.rose, fontSize: 11, fontWeight: '700' }}>
+                  {variance === 0 ? 'Balanced — Exact Handover' : variance > 0 ? `Overage: +${formatGHS(variance)}` : `Shortage: ${formatGHS(variance)}`}
+                </Text>
+                <Text style={{ color: colors.text, fontWeight: '900', fontSize: 12 }}>
+                  Total: {formatGHS(totalRemitted)}
+                </Text>
+              </View>
+
+              <StyledTextInput
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Closing note (optional / variance reason)"
+              />
+            </View>
+
+            <PrimaryButton
+              title={busy ? 'Locking…' : 'Confirm Close & Submit to Manager'}
+              onPress={async () => {
+                setBusy(true)
+                const closings: Record<string, { fuelCode: string; value: number }> = {}
+                for (const row of nozzleRows) {
+                  closings[row.fuel] = { fuelCode: row.fuel, value: row.val }
+                }
+                const remittance = { CASH: cNum, MOMO: mNum, VOUCHER: kNum, CREDIT: crNum }
+                await onConfirm(closings, remittance, notes.trim() || undefined)
+                setBusy(false)
+              }}
+              disabled={!allValid}
+              tone="amber"
+              style={{ marginTop: 16 }}
+            />
+            <PrimaryButton title="Cancel" onPress={onClose} style={{ marginTop: 8, marginBottom: 12 }} />
+          </ScrollView>
         </Card>
       </View>
     </Modal>

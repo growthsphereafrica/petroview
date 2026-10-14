@@ -21,8 +21,9 @@ export const SupervisorDashboardScreen: React.FC<{
   onGoToTankReadings: () => void
   onGoToExpenses: () => void
   onGoToPumps: () => void
+  onGoToPrices: () => void
   onOpenShift: (shiftId: string) => void
-}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onGoToPumps, onOpenShift }) => {
+}> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onGoToPumps, onGoToPrices, onOpenShift }) => {
   const { supervisor, signOut } = useSupervisorSession()
   const { shifts, stats, pendingSync, loading, pushSync } = useSupervisorData()
   const [tankReadingCount, setTankReadingCount] = useState(0)
@@ -189,6 +190,14 @@ export const SupervisorDashboardScreen: React.FC<{
             value="Configure"
             onClick={onGoToPumps}
             accent="#F97316"
+          />
+          <TappableRow
+            icon={<DollarSign className="w-4 h-4" />}
+            title="Station Fuel Prices"
+            subtitle="Unit price per litre (PMS, AGO) set by Manager & HQ"
+            value="Manage"
+            onClick={onGoToPrices}
+            accent="#F59E0B"
           />
           <TappableRow
             icon={<ClipboardCheck className="w-4 h-4" />}

@@ -6,19 +6,20 @@
 import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Gauge, Sparkles } from 'lucide-react'
 import { ScreenHeader } from '../ui'
-import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
+import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, findPumpByIdOrName, getStationPumps } from '../../../core/domain/config'
 import { shiftRepo } from '../../../core/infra/repositories'
 import type { FuelCode, MeterReading } from '../../../core/domain/types'
 
 interface Props {
   pumpId: string
+  stationId?: string
   mode: 'opening' | 'closing'
   onSave: (readings: MeterReading[]) => void
   onBack: () => void
 }
 
-export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, mode, onSave, onBack }) => {
-  const pump = getStationPumps().find(p => p.id === pumpId) ?? PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
+export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, onSave, onBack }) => {
+  const pump = findPumpByIdOrName(getStationPumps(stationId), pumpId) ?? PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
   // Safe fuel meta lookup — custom OMC products may not be in the static FUEL_META map
   const getFuelColor = (fuel: string) => FUEL_META[fuel]?.color ?? '#F97316'
   const [values, setValues] = useState<Record<FuelCode, string>>(() =>

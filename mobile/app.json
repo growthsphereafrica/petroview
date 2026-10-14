@@ -7,7 +7,7 @@
     "icon": "./assets/icon.png",
     "scheme": "masterview",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "plugins": [
       "expo-asset",
       [

@@ -17,12 +17,13 @@ import { SupervisorAuditLogScreen } from './screens/AuditLogScreen'
 import { SupervisorTankReadingsScreen } from './screens/TankReadingsScreen'
 import { SupervisorExpensesScreen } from './screens/ExpensesScreen'
 import { PumpsManagementView } from '../shared/PumpsManagementView'
+import { SupervisorFuelPricesScreen } from './screens/FuelPricesScreen'
 import { ScreenHeader, StatusBar } from '../shared/ui'
 import { getStationName } from '../../core/domain/config'
 import { productService } from '../../core/services/productService'
 import type { Product } from '../../core/domain/types'
 
-type Screen = 'dashboard' | 'tank_readings' | 'expenses' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings' | 'pumps'
+type Screen = 'dashboard' | 'tank_readings' | 'expenses' | 'shifts' | 'shift_detail' | 'attendants' | 'audit' | 'sync' | 'settings' | 'pumps' | 'prices'
 
 export interface ToastState {
   message: string
@@ -71,9 +72,12 @@ const SupervisorNavigator: React.FC = () => {
           onGoToTankReadings={() => go('tank_readings')}
           onGoToExpenses={() => go('expenses')}
           onGoToPumps={() => go('pumps')}
+          onGoToPrices={() => go('prices')}
           onOpenShift={openShift}
         />
       )}
+
+      {screen === 'prices' && <SupervisorFuelPricesScreen onBack={() => go('dashboard')} onToast={notify} />}
 
       {screen === 'pumps' && (
         <div className="h-full flex flex-col bg-[#090d16] overflow-y-auto">

@@ -33,6 +33,7 @@ export interface CloseShiftInput {
   shiftId: string
   closingReadings: Record<string, { fuelCode: string; value: number }>
   notes?: string
+  remittance?: Partial<PaymentsBreakdown>
 }
 
 function round2(n: number): number {
@@ -146,6 +147,9 @@ export class ShiftService {
 
     const closing: Record<string, { fuelCode: string; value: number }> = {}
     let readingsTotal = 0
+    let meteredSalesTotal = 0
+    const salesList: Array<{ fuelCode: string; litres: number; unitPrice: number; amount: number }> = []
+
     for (const [fuel, r] of Object.entries(input.closingReadings)) {
       if (typeof r.value !== 'number') {
         throw new DomainError('READINGS_EMPTY', `Closing reading required for ${fuel}.`, fuel)
@@ -159,16 +163,34 @@ export class ShiftService {
       }
       closing[fuel] = { fuelCode: fuel, value: round2(r.value) }
       readingsTotal += round2(r.value)
+
+      const litres = round2(r.value - opening)
+      const unitPrice = PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? PRODUCTION_STATION.fuelPrices.PMS
+      const amount = round2(litres * unitPrice)
+      meteredSalesTotal = round2(meteredSalesTotal + amount)
+      salesList.push({ fuelCode: fuel, litres, unitPrice, amount })
     }
 
-    const diffLitres = round2(readingsTotal - shift.readingsTotal)
-    const variance = round2(shift.salesTotal - diffLitres * PRODUCTION_STATION.fuelPrices.PMS)
+    const payments: PaymentsBreakdown = input.remittance
+      ? {
+          CASH: round2(input.remittance.CASH ?? 0),
+          MOMO: round2(input.remittance.MOMO ?? 0),
+          VOUCHER: round2(input.remittance.VOUCHER ?? 0),
+          CREDIT: round2(input.remittance.CREDIT ?? 0),
+        }
+      : (shift.payments as PaymentsBreakdown)
+    const actualTotal = round2(payments.CASH + payments.MOMO + payments.VOUCHER + payments.CREDIT)
+    const variance = round2(actualTotal - meteredSalesTotal)
     const now = new Date().toISOString()
 
     const closed: Shift = {
       ...shift,
       closedAt: now,
       closingReadings: closing as never,
+      sales: salesList.length > 0 ? (salesList as any) : shift.sales,
+      salesTotal: meteredSalesTotal,
+      payments,
+      actualTotal,
       readingsTotal,
       variance,
       status: 'CLOSED',

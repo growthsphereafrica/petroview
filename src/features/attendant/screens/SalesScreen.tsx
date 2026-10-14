@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, ScreenHeader } from '../ui'
-import { FUEL_META, PAYMENT_META, PRODUCTION_PUMPS, getStationPumps } from '../../../core/domain/config'
+import { FUEL_META, PAYMENT_META, PRODUCTION_PUMPS, findPumpByIdOrName, getStationPumps } from '../../../core/domain/config'
 import { FALLBACK_UNIT_PRICES, resolveUnitPrice, saleAmount } from '../../../core/domain/rules'
 import { transactionRepo } from '../../../core/infra/repositories'
 import { productService } from '../../../core/services/productService'
@@ -40,18 +40,62 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   const isDark = theme === 'dark'
 
   const pump = useMemo(
-    () => getStationPumps(activeShift?.stationId).find(p => p.id === activeShift?.pumpId) ?? PRODUCTION_PUMPS[0],
-    [activeShift?.pumpId, activeShift?.stationId],
+    () =>
+      findPumpByIdOrName(
+        getStationPumps(activeShift?.stationId || attendant?.stationId),
+        activeShift?.pumpId,
+        activeShift?.pumpName,
+      ) ?? PRODUCTION_PUMPS[0],
+    [activeShift?.pumpId, activeShift?.pumpName, activeShift?.stationId, attendant?.stationId],
   )
+
+  // Standardized pump fuels: always derived from the selected pump and active shift
+  const pumpFuels = useMemo<FuelCode[]>(() => {
+    if (pump?.fuels && pump.fuels.length > 0) {
+      return pump.fuels
+    }
+    if (activeShift?.openingReadings && activeShift.openingReadings.length > 0) {
+      const fuels = Array.from(new Set(activeShift.openingReadings.map(r => r.fuelCode as FuelCode))).filter(Boolean)
+      if (fuels.length > 0) return fuels
+    }
+    if (activeShift?.sales && activeShift.sales.length > 0) {
+      const fuels = Array.from(new Set(activeShift.sales.map(s => s.fuelCode as FuelCode))).filter(Boolean)
+      if (fuels.length > 0) return fuels
+    }
+    return PRODUCTION_PUMPS[0].fuels
+  }, [pump, activeShift?.openingReadings, activeShift?.sales])
 
   // Dynamic products and prices loaded from OMC / ProductService
   const [activeProducts, setActiveProducts] = useState<Product[]>([])
   const [productsLoading, setProductsLoading] = useState(true)
-  const [fuelCode, setFuelCode] = useState<FuelCode>(pump.fuels[0])
+  const [fuelCode, setFuelCode] = useState<FuelCode>(() => pumpFuels[0] || 'AGO')
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState<PaymentMethod>('CASH')
   const [saving, setSaving] = useState(false)
   const [transactions, setTransactions] = useState<ShiftTransaction[]>([])
+
+  // Ensure selected fuelCode always belongs to the pump
+  useEffect(() => {
+    if (pumpFuels.length > 0 && !pumpFuels.includes(fuelCode)) {
+      setFuelCode(pumpFuels[0])
+    }
+  }, [pumpFuels, fuelCode])
+
+  // Build strictly standardized fuel options matching this pump with OMC live prices
+  const fuelOptions = useMemo(() => {
+    return pumpFuels.map(fCode => {
+      const prod = activeProducts.find(p => p.code.toUpperCase() === fCode.toUpperCase())
+      const unitPrice = prod?.unitPrice ?? FALLBACK_UNIT_PRICES[fCode] ?? FALLBACK_UNIT_PRICES.PMS
+      const color = prod?.color || FUEL_META[fCode]?.color || '#22c55e'
+      const name = prod?.name || FUEL_META[fCode]?.label || fCode
+      return {
+        code: fCode,
+        name,
+        unitPrice,
+        color,
+      }
+    })
+  }, [pumpFuels, activeProducts])
 
   // Bottom transactions drawer state
   const [isTransactionsSheetOpen, setIsTransactionsSheetOpen] = useState(false)
@@ -59,13 +103,13 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   // Edit transaction modal state
   const [editingTx, setEditingTx] = useState<ShiftTransaction | null>(null)
   const [editLitres, setEditLitres] = useState('')
-  const [editFuelCode, setEditFuelCode] = useState<FuelCode>('PMS')
+  const [editFuelCode, setEditFuelCode] = useState<FuelCode>(() => pumpFuels[0] || 'AGO')
   const [editMethod, setEditMethod] = useState<PaymentMethod>('CASH')
   const [editSaving, setEditSaving] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
   const [recordError, setRecordError] = useState<string | null>(null)
 
-  // Load products for the attendant's company
+  // Load products for the attendant's company (for live pricing)
   useEffect(() => {
     let cancelled = false
     setProductsLoading(true)
@@ -73,14 +117,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
       .listActiveProducts(attendant?.companyId)
       .then(prods => {
         if (!cancelled) {
-          // Only show products that also have a nozzle configured on this pump
-          const pumpFuels = new Set(pump.fuels)
-          const visible = prods.filter(p => pumpFuels.has(p.code as FuelCode))
-          setActiveProducts(visible)
-          // Reset selected fuel if it was removed
-          if (visible.length > 0 && !visible.some(p => p.code === fuelCode)) {
-            setFuelCode(visible[0].code)
-          }
+          setActiveProducts(prods || [])
           setProductsLoading(false)
         }
       })
@@ -90,7 +127,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
     return () => {
       cancelled = true
     }
-  }, [attendant?.companyId, pump.fuels.join(',')])
+  }, [attendant?.companyId])
 
   // Load transactions for the active shift
   useEffect(() => {
@@ -122,8 +159,8 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   }
 
   // Determine current unit price for selected fuelCode
-  const matchedProduct = activeProducts.find(p => p.code === fuelCode)
-  const unitPrice = resolveUnitPrice(activeProducts, fuelCode)
+  const matchedProduct = fuelOptions.find(p => p.code === fuelCode)
+  const unitPrice = matchedProduct?.unitPrice ?? resolveUnitPrice(activeProducts, fuelCode)
 
   const litresNum = Number(litres) || 0
   const amount = saleAmount(litresNum, unitPrice)
@@ -163,7 +200,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
       return
     }
 
-    const editPrice = resolveUnitPrice(activeProducts, editFuelCode)
+    const editPrice = fuelOptions.find(p => p.code === editFuelCode)?.unitPrice ?? resolveUnitPrice(activeProducts, editFuelCode)
 
     setEditSaving(true)
     setEditError(null)
@@ -236,19 +273,18 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
             <span className="text-[10px] text-slate-500 font-mono">OMC Live Pricing</span>
           </div>
           <div className="flex flex-wrap gap-2">
-            {productsLoading ? (
+            {productsLoading && fuelOptions.length === 0 ? (
               <span className="text-xs text-slate-500 italic flex items-center gap-1.5">
                 <span className="w-3 h-3 border-2 border-slate-700 border-t-orange-500 rounded-full animate-spin" />
                 Loading products…
               </span>
-            ) : activeProducts.length === 0 ? (
+            ) : fuelOptions.length === 0 ? (
               <span className="text-xs text-rose-400 italic">
                 No fuel products configured for this pump. Contact your supervisor.
               </span>
             ) : (
-              activeProducts.map(p => {
+              fuelOptions.map(p => {
                 const active = p.code === fuelCode
-                const color = p.color || FUEL_META[p.code as FuelCode]?.color || '#22c55e'
                 return (
                   <button
                     key={p.code}
@@ -265,7 +301,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
                         : 'border-slate-200 bg-white text-slate-700 hover:text-slate-900'
                     }`}
                   >
-                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+                    <span className="w-2 h-2 rounded-full" style={{ backgroundColor: p.color }} />
                     <span>{p.code}</span>
                     <span className="text-slate-500 font-mono text-[10px]">
                       @ GHS {p.unitPrice.toFixed(2)}
@@ -665,15 +701,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
                   Fuel Product
                 </label>
                 <div className="grid grid-cols-2 gap-2">
-                  {(activeProducts.length > 0
-                    ? activeProducts
-                    : pump.fuels.map(f => ({
-                        code: f,
-                        name: f,
-                        unitPrice: FALLBACK_UNIT_PRICES[f] ?? FALLBACK_UNIT_PRICES.PMS,
-                        color: FUEL_META[f]?.color || '#22c55e',
-                      }))
-                  ).map(p => {
+                  {fuelOptions.map(p => {
                     const active = p.code === editFuelCode
                     return (
                       <button
@@ -745,7 +773,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
               {/* Recomputed Amount Preview — uses the exact same price and
                   rounding as the save path, so what is shown is what is stored. */}
               {(() => {
-                const price = resolveUnitPrice(activeProducts, editFuelCode)
+                const price = fuelOptions.find(p => p.code === editFuelCode)?.unitPrice ?? resolveUnitPrice(activeProducts, editFuelCode)
                 const recomputed = saleAmount(Number(editLitres) || 0, price)
                 return (
                   <div className={`p-3 rounded-xl border flex items-center justify-between ${

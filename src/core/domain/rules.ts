@@ -138,18 +138,24 @@ export function validateClosingReadings(openings: MeterReading[], closings: Mete
 /**
  * Computes fuel sales (litres + amounts) from opening & closing readings given unit prices.
  */
+/**
+ * Computes fuel sales (litres + amounts) from opening & closing readings given unit prices.
+ */
 export function computeFuelSales(
   openings: MeterReading[],
   closings: MeterReading[],
   prices: Record<FuelCode, number>,
 ): FuelSale[] {
-  return ALL_FUEL_CODES.map(fuelCode => {
+  const fuelList = openings && openings.length > 0
+    ? Array.from(new Set(openings.map(o => o.fuelCode)))
+    : ALL_FUEL_CODES
+  return fuelList.map(fuelCode => {
     const opening = openings.find(o => o.fuelCode === fuelCode)
     const closing = closings.find(o => o.fuelCode === fuelCode)
     const litres = opening && closing ? roundLitres(Math.max(0, closing.value - opening.value)) : 0
-    const price = prices[fuelCode] ?? 0
+    const price = prices[fuelCode] ?? resolveUnitPrice([], fuelCode)
     return { fuelCode, litres, amount: saleAmount(litres, price), unitPrice: price }
-  }).filter(sale => sale.litres > 0 || sale.unitPrice > 0)
+  })
 }
 
 /**
@@ -190,15 +196,25 @@ export function finalizeClosedShift(
   closings: MeterReading[],
   prices: Record<FuelCode, number>,
   notes: string | null,
+  remittance?: Partial<PaymentsBreakdown>,
 ): Shift {
   validateClosingReadings(shift.openingReadings, closings)
   const sales = computeFuelSales(shift.openingReadings, closings, prices)
   const expectedTotal = sumSales(sales)
-  const actualTotal = sumPayments(shift.payments)
+  const payments: PaymentsBreakdown = remittance
+    ? {
+        CASH: roundMoney(remittance.CASH ?? 0),
+        MOMO: roundMoney(remittance.MOMO ?? 0),
+        VOUCHER: roundMoney(remittance.VOUCHER ?? 0),
+        CREDIT: roundMoney(remittance.CREDIT ?? 0),
+      }
+    : shift.payments
+  const actualTotal = sumPayments(payments)
   return {
     ...shift,
     closingReadings: closings,
     sales,
+    payments,
     expectedTotal,
     actualTotal,
     variance: roundMoney(actualTotal - expectedTotal),

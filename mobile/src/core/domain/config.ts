@@ -16,10 +16,10 @@ export const PRODUCTION_STATION = {
 }
 
 export const PRODUCTION_PUMPS = [
-  { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] as FuelCode[] },
+  { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO'] as FuelCode[] },
   { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO'] as FuelCode[] },
   { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO'] as FuelCode[] },
-  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] as FuelCode[] },
+  { id: 'pump-4', name: 'Pump 4', fuels: ['AGO'] as FuelCode[] },
 ]
 
 export const FUEL_META: Record<FuelCode, { label: string; shortLabel: string; color: string }> = {

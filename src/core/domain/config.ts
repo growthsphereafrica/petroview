@@ -46,25 +46,90 @@ export const PRODUCTION_STATION: ProductionStationConfig = {
 }
 
 export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
-  { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
-  { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
-  { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
-  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO', 'DPK', 'KERO'] },
+  { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO'] },
+  { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO'] },
+  { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO'] },
+  { id: 'pump-4', name: 'Pump 4', fuels: ['AGO'] },
 ]
 
+const PUMPS_STORAGE_KEY = 'pv_dynamic_pumps_cache'
 const dynamicPumpsMap = new Map<string, ProductionPumpConfig[]>()
+
+function readCachedPumps(): Record<string, ProductionPumpConfig[]> {
+  try {
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(PUMPS_STORAGE_KEY) : null
+    if (!raw) return {}
+    return JSON.parse(raw) || {}
+  } catch {
+    return {}
+  }
+}
+
+function writeCachedPumps(stationId: string, pumps: ProductionPumpConfig[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    const cache = readCachedPumps()
+    cache[stationId] = pumps
+    cache[stationId.toLowerCase()] = pumps
+    localStorage.setItem(PUMPS_STORAGE_KEY, JSON.stringify(cache))
+  } catch {
+    // quota exceeded / non-fatal
+  }
+}
 
 export function registerStationPumps(stationId: string, pumps: ProductionPumpConfig[]): void {
   if (stationId && Array.isArray(pumps) && pumps.length > 0) {
     dynamicPumpsMap.set(stationId, pumps)
+    dynamicPumpsMap.set(stationId.toLowerCase(), pumps)
+    writeCachedPumps(stationId, pumps)
   }
 }
 
 export function getStationPumps(stationId?: string): ProductionPumpConfig[] {
-  if (stationId && dynamicPumpsMap.has(stationId)) {
-    return dynamicPumpsMap.get(stationId)!
+  if (stationId) {
+    const norm = stationId.trim()
+    if (dynamicPumpsMap.has(norm)) return dynamicPumpsMap.get(norm)!
+    if (dynamicPumpsMap.has(norm.toLowerCase())) return dynamicPumpsMap.get(norm.toLowerCase())!
+    const cache = readCachedPumps()
+    if (cache[norm]) {
+      dynamicPumpsMap.set(norm, cache[norm])
+      return cache[norm]
+    }
+    if (cache[norm.toLowerCase()]) {
+      dynamicPumpsMap.set(norm, cache[norm.toLowerCase()])
+      return cache[norm.toLowerCase()]
+    }
+  }
+  const cache = readCachedPumps()
+  const cachedKeys = Object.keys(cache)
+  if (cachedKeys.length > 0 && cache[cachedKeys[0]]?.length > 0) {
+    return cache[cachedKeys[0]]
   }
   return PRODUCTION_PUMPS
+}
+
+export function findPumpByIdOrName(
+  pumps: ProductionPumpConfig[],
+  pumpId?: string | null,
+  pumpName?: string | null,
+): ProductionPumpConfig | undefined {
+  if (!pumps || pumps.length === 0) return undefined
+  if (pumpId) {
+    const exact = pumps.find(p => p.id === pumpId)
+    if (exact) return exact
+  }
+  if (pumpName) {
+    const byName = pumps.find(p => p.name.trim().toLowerCase() === pumpName.trim().toLowerCase())
+    if (byName) return byName
+  }
+  if (pumpId) {
+    const num = pumpId.match(/\d+$/)?.[0]
+    if (num) {
+      const byNum = pumps.find(p => p.id.endsWith(`-${num}`) || p.name.toLowerCase() === `pump ${num}` || p.id === `pump-${num}`)
+      if (byNum) return byNum
+    }
+  }
+  return undefined
 }
 
 export const GHANA_REGIONS = [

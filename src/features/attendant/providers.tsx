@@ -128,7 +128,7 @@ interface ShiftContextValue {
   recordSale: (input: { fuelCode: Shift['sales'][number]['fuelCode']; litres: number; method: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => Promise<void>
   updateSale: (txId: string, updates: { fuelCode?: Shift['sales'][number]['fuelCode']; litres?: number; method?: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => Promise<void>
   deleteSale: (txId: string) => Promise<void>
-  closeShift: (input: { closingReadings: Shift['closingReadings']; notes?: string }) => Promise<void>
+  closeShift: (input: { closingReadings: Shift['closingReadings']; notes?: string; remittance?: Partial<Shift['payments']> }) => Promise<void>
   refresh: () => Promise<void>
   pushSync: () => Promise<void>
   pendingCount: number
@@ -272,12 +272,12 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
   )
 
   const closeShift = useCallback(
-    async (input: { closingReadings: Shift['closingReadings']; notes?: string }) => {
+    async (input: { closingReadings: Shift['closingReadings']; notes?: string; remittance?: Partial<Shift['payments']> }) => {
       if (!activeShift) {
         notify('No open shift to close.', 'error')
         throw new DomainError('SHIFT_NOT_OPEN', 'No open shift.')
       }
-      const closed = await shiftService.closeShift(activeShift, input.closingReadings, input.notes ?? null)
+      const closed = await shiftService.closeShift(activeShift, input.closingReadings, input.notes ?? null, input.remittance)
       setActiveShift(null)
       setShifts(prev => prev.map(s => (s.id === closed.id ? closed : s)))
       await refresh()

@@ -39,6 +39,7 @@ const Splash: React.FC = () => (
 const ShiftNavigator: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('dashboard')
   const [pendingPumpId, setPendingPumpId] = useState<string | null>(null)
+  const { attendant } = useAttendantSession()
   const { activeShift, openShift, toast, dismissToast } = useShift()
   const go = (s: Screen) => setScreen(s)
 
@@ -74,6 +75,7 @@ const ShiftNavigator: React.FC = () => {
       {screen === 'opening_readings' && pendingPumpId && (
         <MeterReadingsScreen
           pumpId={pendingPumpId}
+          stationId={attendant?.stationId}
           mode="opening"
           onBack={() => go('start_shift')}
           onSave={values => void handleOpeningSaved(values)}
@@ -89,7 +91,7 @@ const ShiftNavigator: React.FC = () => {
       {screen === 'receipts' && activeShift && <ReceiptCaptureScreen onBack={() => go('sales')} />}
 
       {screen === 'closing' && activeShift && (
-        <ClosingReadingsScreen onBack={() => go('sales')} onClosed={handleClosed} />
+        <ClosingReadingsScreen onBack={() => go('dashboard')} onClosed={handleClosed} />
       )}
 
       {screen === 'summary' && <ShiftSummaryScreen onBack={() => go('dashboard')} onDone={() => go('dashboard')} />}

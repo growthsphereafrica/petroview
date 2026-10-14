@@ -41,3 +41,6 @@ backend/data/
 *.njsproj
 *.sln
 *.sw?
+.claude/
+__pycache__/
+*.pyc

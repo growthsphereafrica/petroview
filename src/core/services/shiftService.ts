@@ -5,7 +5,7 @@
  */
 
 import { DomainError } from '../domain/errors'
-import { PRODUCTION_PUMPS, PRODUCTION_STATION, getStationPumps, getStationName } from '../domain/config'
+import { PRODUCTION_PUMPS, PRODUCTION_STATION, findPumpByIdOrName, getStationPumps, getStationName } from '../domain/config'
 import {
   computeFuelSales,
   emptyPayments,
@@ -63,9 +63,9 @@ export class ShiftService {
     validateReadingsSet(input.openingReadings)
 
     const stationPumps = getStationPumps(input.attendant.stationId)
-    const pump = stationPumps.find(p => p.id === input.pumpId) ||
-      PRODUCTION_PUMPS.find(p => p.id === input.pumpId) ||
-      { id: input.pumpId, name: `Pump ${input.pumpId.replace(/\D/g, '') || '1'}`, fuels: ['PMS', 'AGO', 'DPK', 'KERO'] as FuelCode[] }
+    const pump = findPumpByIdOrName(stationPumps, input.pumpId) ||
+      findPumpByIdOrName(PRODUCTION_PUMPS, input.pumpId) ||
+      { id: input.pumpId, name: `Pump ${input.pumpId.replace(/\D/g, '') || '1'}`, fuels: ['PMS', 'AGO'] as FuelCode[] }
 
     const existing = await shiftRepo.getActiveForAttendant(input.attendant.id)
     if (existing) {
@@ -382,13 +382,18 @@ export class ShiftService {
     return Array.from(map.values())
   }
 
-  async closeShift(shift: Shift, closingReadings: MeterReading[], notes: string | null): Promise<Shift> {
+  async closeShift(
+    shift: Shift,
+    closingReadings: MeterReading[],
+    notes: string | null,
+    remittance?: Partial<PaymentsBreakdown>,
+  ): Promise<Shift> {
     if (shift.status !== 'OPEN') {
       throw new DomainError('SHIFT_ALREADY_CLOSED', 'Shift is already closed.', undefined, { shiftId: shift.id })
     }
 
-    const prices = await productService.getFuelPriceMap()
-    const closed = finalizeClosedShift(shift, closingReadings, prices as any, notes)
+    const prices = await productService.getFuelPriceMap(shift.companyId)
+    const closed = finalizeClosedShift(shift, closingReadings, prices as any, notes, remittance)
     await shiftRepo.upsert(closed)
     liveSyncBus.publish({ table: 'SHIFTS', reason: 'UPDATE', key: closed.id })
 

@@ -85,31 +85,28 @@ export const DashboardScreen: React.FC<{
                 {activeShift.pumpName} · started {formatTimeOnly(activeShift.openedAt)}
               </p>
             </div>
-            <div className="grid grid-cols-3 divide-x divide-slate-800 bg-slate-900/90">
-              <div className="px-3 py-3 text-center">
-                <p className="text-[9px] uppercase text-slate-500 font-bold">Collected</p>
-                <p className="text-sm font-black text-orange-400">{formatGHS(activeShift.actualTotal, { noPrefix: true })}</p>
+            <div className="p-4 bg-slate-900/95 flex flex-col gap-3">
+              <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2.5">
+                <span className="text-slate-400 font-medium">Assigned Nozzles:</span>
+                <span className="font-mono font-bold text-white uppercase tracking-wider">
+                  {activeShift.openingReadings.map(o => o.fuelCode).join(' · ')}
+                </span>
               </div>
-              <div className="px-3 py-3 text-center">
-                <p className="text-[9px] uppercase text-slate-500 font-bold">Transactions</p>
-                <p className="text-sm font-black text-white">{activeShift.sales.reduce((a, s) => a + s.litres, 0).toFixed(2)}L</p>
-              </div>
-              <div className="px-3 py-3 text-center">
-                <p className="text-[9px] uppercase text-slate-500 font-bold">Variance</p>
-                <p className="text-sm font-black text-amber-400">{formatGHS(activeShift.variance, { noPrefix: true })}</p>
-              </div>
+              <p className="text-[11px] text-slate-400 leading-snug">
+                Shift currently active. Dispense fuel to vehicles, then enter your closing pump readings to calculate total litres and cash at hand.
+              </p>
             </div>
             <button
-              onClick={onGoToTransactions}
-              className="w-full px-4 py-3 bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-extrabold flex items-center justify-center gap-2 transition shadow-md"
+              onClick={onGoToClose}
+              className="w-full px-4 py-3.5 bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg active:scale-[0.99]"
             >
-              <PlusCircle className="w-4 h-4" /> Record Sale
+              <Flame className="w-4 h-4 text-amber-200" /> End Shift & Enter Closing Meters
             </button>
             <button
-              onClick={onGoToClose}
-              className="w-full px-4 py-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 text-xs font-bold flex items-center justify-center gap-2 transition border-t border-slate-800"
+              onClick={onGoToTransactions}
+              className="w-full px-4 py-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition border-t border-slate-800/80"
             >
-              Close Shift & End
+              <PlusCircle className="w-3.5 h-3.5" /> Optional: Record Individual Customer Sale
             </button>
           </Card>
         ) : (

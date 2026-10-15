@@ -211,12 +211,15 @@ export interface Shift {
   closingReadings: MeterReading[]
   sales: FuelSale[]
   expectedTotal: number
+  salesTotal?: number
   payments: PaymentsBreakdown
   actualTotal: number
   variance: number
   assignedNozzles?: string[]
   notes: string | null
   reviewerNotes: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
   syncStatus: SyncStatus
   createdAt: string
   updatedAt: string

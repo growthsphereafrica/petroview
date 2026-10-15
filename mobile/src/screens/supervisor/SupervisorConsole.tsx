@@ -505,7 +505,7 @@ const ShiftDetailModal: React.FC<{
                     <Text style={{ color: colors.text, fontWeight: '800', fontSize: 12 }}>
                       {formatGHS(n.amount)}
                     </Text>
-                  </div>
+                  </View>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ color: colors.textDim, fontSize: 10 }}>
                       Open: <Text style={{ color: colors.text }}>{n.opening.toFixed(2)}</Text> → Close: <Text style={{ color: colors.text }}>{n.closing > 0 ? n.closing.toFixed(2) : '—'}</Text>

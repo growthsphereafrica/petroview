@@ -282,10 +282,16 @@ export const CorrectRejectedShiftModal: React.FC<CorrectRejectedShiftModalProps>
 
             {/* Manager Rejection Feedback Banner */}
             <View style={styles.rejectionBanner}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                <AlertTriangle size={15} color={colors.rose} />
-                <Text style={styles.rejectionHeaderTitle}>MANAGER REJECTION FEEDBACK</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <AlertTriangle size={15} color={colors.rose} />
+                  <Text style={styles.rejectionHeaderTitle}>MANAGER REJECTION FEEDBACK</Text>
+                </View>
+                <View style={{ backgroundColor: 'rgba(244,63,94,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                  <Text style={{ color: colors.rose, fontSize: 9, fontWeight: '800' }}>REJECTED</Text>
+                </View>
               </View>
+
               <Text style={styles.rejectionBody}>
                 {shift.reviewNotes || 'Entries were rejected by the manager. Please recheck pump, nozzles, meter readings, and cash breakdown.'}
               </Text>
@@ -294,6 +300,26 @@ export const CorrectRejectedShiftModal: React.FC<CorrectRejectedShiftModalProps>
                   Reviewed by {shift.reviewedBy} {shift.reviewedAt ? `· ${formatDateTime(shift.reviewedAt)}` : ''}
                 </Text>
               )}
+
+              {/* Previous Submission Figures */}
+              <View style={styles.prevFiguresRow}>
+                <View style={styles.prevFigureCol}>
+                  <Text style={styles.prevFigureLabel}>Previous Expected</Text>
+                  <Text style={styles.prevFigureVal}>{formatGHS(shift.salesTotal || shift.expectedTotal || 0)}</Text>
+                </View>
+                <View style={styles.prevFigureDivider} />
+                <View style={styles.prevFigureCol}>
+                  <Text style={styles.prevFigureLabel}>Previous Remitted</Text>
+                  <Text style={[styles.prevFigureVal, { color: colors.amber }]}>{formatGHS(shift.actualTotal)}</Text>
+                </View>
+                <View style={styles.prevFigureDivider} />
+                <View style={styles.prevFigureCol}>
+                  <Text style={styles.prevFigureLabel}>Discrepancy</Text>
+                  <Text style={[styles.prevFigureVal, { color: (shift.variance || 0) < 0 ? colors.rose : colors.emerald }]}>
+                    {formatGHS(shift.variance || 0)}
+                  </Text>
+                </View>
+              </View>
             </View>
 
             {error && (
@@ -604,6 +630,39 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginTop: 6,
     fontStyle: 'italic',
+  },
+  prevFiguresRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(15,23,42,0.6)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(239,68,68,0.2)',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 10,
+  },
+  prevFigureCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  prevFigureLabel: {
+    color: colors.textDim,
+    fontSize: 9,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  prevFigureVal: {
+    color: colors.text,
+    fontSize: 11,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  prevFigureDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: 'rgba(148,163,184,0.2)',
   },
   errorBanner: {
     backgroundColor: 'rgba(239, 68, 68, 0.15)',

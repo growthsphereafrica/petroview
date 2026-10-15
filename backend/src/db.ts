@@ -79,6 +79,8 @@ export interface ShiftRow {
   variance: number
   notes: string | null
   reviewerNotes: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
   syncStatus: SyncStatus
   createdAt: string
   updatedAt: string
@@ -106,6 +108,8 @@ export interface Shift {
   assignedNozzles?: string[]
   notes: string | null
   reviewerNotes: string | null
+  reviewedBy?: string | null
+  reviewedAt?: string | null
   syncStatus: SyncStatus
   createdAt: string
   updatedAt: string
@@ -250,6 +254,8 @@ CREATE TABLE IF NOT EXISTS shifts (
   variance REAL NOT NULL,
   notes TEXT,
   reviewerNotes TEXT,
+  reviewedBy TEXT,
+  reviewedAt TEXT,
   syncStatus TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -414,6 +420,8 @@ function migrateLegacyTables(): void {
       companyId: 'TEXT',
       companyShortCode: 'TEXT',
       assignedNozzles: 'TEXT',
+      reviewedBy: 'TEXT',
+      reviewedAt: 'TEXT',
     },
     pumps: {
       nozzles: 'TEXT',
@@ -944,6 +952,8 @@ export function deserializeShift(row: ShiftRow): Shift {
     openingReadings,
     closingReadings: JSON.parse(row.closingReadings) as MeterReading[],
     sales: JSON.parse(row.sales) as FuelSale[],
+    reviewedBy: row.reviewedBy ?? null,
+    reviewedAt: row.reviewedAt ?? null,
   }
 }
 

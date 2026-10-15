@@ -7,7 +7,7 @@ import React from 'react'
 import { AlertOctagon, CalendarClock, Flame, LogOut, MessageSquare, PlusCircle, RefreshCw, RotateCcw, Settings, Wifi } from 'lucide-react'
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, StatusBar, TappableRow } from '../ui'
-import { formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
+import { formatDateTime, formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
 import { getStationName } from '../../../core/domain/config'
 import type { Shift } from '../../../core/domain/types'
 
@@ -97,19 +97,47 @@ export const DashboardScreen: React.FC<{
               </span>
             </div>
 
-            {rejectedShift.reviewerNotes && (
-              <div className="rounded-xl bg-slate-950/80 border border-rose-500/30 p-3">
-                <p className="text-[10px] uppercase font-bold text-rose-400 flex items-center gap-1 mb-1">
-                  <MessageSquare className="w-3.5 h-3.5" /> Manager Feedback / Reason:
+            {/* Manager Feedback */}
+            <div className="rounded-xl bg-slate-950/80 border border-rose-500/30 p-3">
+              <p className="text-[10px] uppercase font-bold text-rose-400 flex items-center gap-1 mb-1">
+                <MessageSquare className="w-3.5 h-3.5" /> Manager Feedback / Reason:
+              </p>
+              <p className="text-xs text-rose-100 font-medium italic leading-relaxed">
+                "{rejectedShift.reviewerNotes || 'Manager rejected your sales submission. Please review your meter readings and cash entries.'}"
+              </p>
+              {rejectedShift.reviewedBy && (
+                <p className="text-[10px] text-rose-300/80 mt-1.5">
+                  Reviewed by {rejectedShift.reviewedBy} {rejectedShift.reviewedAt ? `· ${formatDateTime(rejectedShift.reviewedAt)}` : ''}
                 </p>
-                <p className="text-xs text-rose-100 font-medium italic leading-relaxed">
-                  "{rejectedShift.reviewerNotes}"
+              )}
+            </div>
+
+            {/* Previous Submission Figures */}
+            <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-2.5 flex items-center justify-between text-center">
+              <div>
+                <p className="text-[9px] uppercase font-bold text-slate-400">Expected</p>
+                <p className="text-xs font-black text-white mt-0.5">
+                  {formatGHS(rejectedShift.expectedTotal || rejectedShift.salesTotal)}
                 </p>
               </div>
-            )}
+              <div className="w-px h-6 bg-slate-800" />
+              <div>
+                <p className="text-[9px] uppercase font-bold text-slate-400">Remitted</p>
+                <p className="text-xs font-black text-amber-300 mt-0.5">
+                  {formatGHS(rejectedShift.actualTotal)}
+                </p>
+              </div>
+              <div className="w-px h-6 bg-slate-800" />
+              <div>
+                <p className="text-[9px] uppercase font-bold text-slate-400">Discrepancy</p>
+                <p className={`text-xs font-black mt-0.5 ${rejectedShift.variance < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {formatGHS(rejectedShift.variance)}
+                </p>
+              </div>
+            </div>
 
             <p className="text-[11px] text-slate-300 leading-snug">
-              Your sales entries for this shift were rejected. Please review the manager's feedback, verify your pump & nozzle selection, and enter the corrected opening/closing figures to resubmit.
+              Your sales entries for this shift were rejected. You cannot start a new shift until you correct your pump/nozzles, meter readings, and cash figures and resubmit.
             </p>
 
             <button
@@ -158,6 +186,26 @@ export const DashboardScreen: React.FC<{
               className="w-full px-4 py-3.5 bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg active:scale-[0.99]"
             >
               <Flame className="w-4 h-4 text-amber-200" /> End Shift & Enter Closing Meters
+            </button>
+          </Card>
+        ) : rejectedShift ? (
+          <Card className="p-5 border-rose-500/30 bg-gradient-to-b from-rose-950/30 to-slate-900/90 shadow-lg shadow-rose-950/20">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-500/20 border border-rose-500/30 flex items-center justify-center shrink-0">
+                <AlertOctagon className="w-5 h-5 text-rose-400" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-sm font-extrabold text-white">New Shift Blocked</h3>
+                <p className="text-[11px] text-slate-400 leading-snug mt-1">
+                  You have a rejected shift ({rejectedShift.number}) awaiting your corrections. You must correct and resubmit it before starting any new shift.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => onGoToCorrectShift ? onGoToCorrectShift(rejectedShift) : onGoToClose()}
+              className="mt-4 w-full rounded-xl bg-gradient-to-r from-rose-600 via-orange-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white py-3 text-sm font-extrabold flex items-center justify-center gap-2 transition shadow-lg shadow-rose-950/50 border border-rose-400/30 active:scale-[0.98]"
+            >
+              <RotateCcw className="w-4 h-4" /> Resolve Shift #{rejectedShift.number} First
             </button>
           </Card>
         ) : (

@@ -16,6 +16,7 @@ import {
   addAudit,
 } from '../infra/repositories'
 import { mobileProductService } from './productService'
+import { pumpNameFor } from '../infra/cloudApi'
 
 export interface OpenShiftInput {
   attendant: Attendant
@@ -346,7 +347,7 @@ export class ShiftService {
     const resubmitted: Shift = {
       ...shift,
       pumpId: workingPumpId,
-      pumpName: pump.name,
+      pumpName: shift.pumpName || pumpNameFor(workingPumpId),
       assignedNozzles: Object.values(workingOpenings).map((r: any) => r.nozzleLabel || (r.nozzleIndex ? `Nozzle ${r.nozzleIndex}` : r.fuelCode)),
       openingReadings: workingOpenings,
       closedAt: now,

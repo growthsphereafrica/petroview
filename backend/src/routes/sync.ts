@@ -265,9 +265,9 @@ function resolveAttendant(value: unknown, station: StationScope): string {
 }
 
 function canAccessShift(session: SessionClaims, shift: { stationId: string; attendantId: string; companyId?: string | null }): boolean {
+  if (session.role === 'attendant') return shift.attendantId === session.userId
   const station = resolveStation(shift.stationId)
   if (!station || !canAccessStation(session, station)) return false
-  if (session.role === 'attendant') return shift.attendantId === session.userId
   return true
 }
 
@@ -874,7 +874,7 @@ syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor', 'h
 
   const notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 2000) : null
   const reviewResult = db.transaction(() => {
-    const result = db.prepare("UPDATE shifts SET status = ?, reviewerNotes = ?, syncStatus = 'SYNCED', updatedAt = ? WHERE id = ? AND status = 'CLOSED'").run(verdict, notes, now, shift.id)
+    const result = db.prepare("UPDATE shifts SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ? WHERE id = ? AND status = 'CLOSED'").run(verdict, notes, session.fullName || session.userId, now, now, shift.id)
     if (result.changes !== 1) return false
     db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
       newToken(), verdict === 'APPROVED' ? 'REVIEW_APPROVED' : 'REJECTED', session.userId, session.fullName, session.role.toUpperCase(), shift.id, `Shift ${shift.number}`, notes, now, JSON.stringify({ companyId: shift.companyId ?? null, stationId: shift.stationId }),

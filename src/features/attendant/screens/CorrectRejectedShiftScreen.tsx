@@ -39,7 +39,7 @@ import {
 import { resolveUnitPrice, roundLitres, roundMoney, saleAmount } from '../../../core/domain/rules'
 import { productService } from '../../../core/services/productService'
 import { backendGetPumps } from '../../../services/backendApiService'
-import { formatGHS, formatLitres } from '../../../utils/currencyFormatter'
+import { formatDateTime, formatGHS, formatLitres } from '../../../utils/currencyFormatter'
 import { describeError } from '../../../core/domain/errors'
 import type { FuelCode, MeterReading, PaymentsBreakdown, Shift } from '../../../core/domain/types'
 
@@ -307,23 +307,59 @@ export const CorrectRejectedShiftScreen: React.FC<Props> = ({ shift, onBack, onD
 
       <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col gap-4 max-w-lg w-full mx-auto pb-12">
         {/* Manager Rejection Feedback Box */}
-        <div className="rounded-2xl border-2 border-rose-500/50 bg-gradient-to-b from-rose-950/70 to-slate-900/90 p-4 shadow-lg shadow-rose-950/40 flex flex-col gap-2.5">
-          <div className="flex items-center gap-2 text-rose-400 font-extrabold text-xs uppercase tracking-wide">
-            <AlertOctagon className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>Manager Discrepancy Reason</span>
+        <div className="rounded-2xl border-2 border-rose-500/50 bg-gradient-to-b from-rose-950/70 to-slate-900/90 p-4 shadow-lg shadow-rose-950/40 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-rose-400 font-extrabold text-xs uppercase tracking-wide">
+              <AlertOctagon className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>Manager Discrepancy Reason</span>
+            </div>
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase bg-rose-500/20 text-rose-300 border border-rose-500/30">
+              Shift {shift.number}
+            </span>
           </div>
+
           {shift.reviewerNotes ? (
             <div className="rounded-xl bg-slate-950/80 border border-rose-500/30 p-3">
               <p className="text-xs text-rose-100 italic leading-relaxed font-medium">
                 "{shift.reviewerNotes}"
               </p>
+              {shift.reviewedBy && (
+                <p className="text-[10px] text-rose-300/80 mt-1.5 font-semibold">
+                  Reviewed by {shift.reviewedBy} {shift.reviewedAt ? `· ${formatDateTime(shift.reviewedAt)}` : ''}
+                </p>
+              )}
             </div>
           ) : (
             <p className="text-xs text-rose-200">
               Shift entries were rejected by supervisor. Please correct your pump/nozzle readings and cash figures below.
             </p>
           )}
-          <p className="text-[11px] text-slate-300">
+
+          {/* Previous Submission Figures */}
+          <div className="rounded-xl bg-slate-950/60 border border-slate-800 p-2.5 flex items-center justify-between text-center">
+            <div>
+              <p className="text-[9px] uppercase font-bold text-slate-400">Previous Expected</p>
+              <p className="text-xs font-black text-white mt-0.5">
+                {formatGHS(shift.expectedTotal || shift.salesTotal)}
+              </p>
+            </div>
+            <div className="w-px h-6 bg-slate-800" />
+            <div>
+              <p className="text-[9px] uppercase font-bold text-slate-400">Previous Remitted</p>
+              <p className="text-xs font-black text-amber-300 mt-0.5">
+                {formatGHS(shift.actualTotal)}
+              </p>
+            </div>
+            <div className="w-px h-6 bg-slate-800" />
+            <div>
+              <p className="text-[9px] uppercase font-bold text-slate-400">Discrepancy</p>
+              <p className={`text-xs font-black mt-0.5 ${shift.variance < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+                {formatGHS(shift.variance)}
+              </p>
+            </div>
+          </div>
+
+          <p className="text-[11px] text-slate-300 leading-snug">
             You can re-select your pump dispenser, select operating nozzles, adjust opening/closing figures, and enter your corrected sales breakdown.
           </p>
         </div>

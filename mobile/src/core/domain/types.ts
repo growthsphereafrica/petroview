@@ -160,12 +160,16 @@ export interface Shift {
   payments: PaymentsBreakdown
   readingsTotal: number
   salesTotal: number
+  expectedTotal?: number
   actualTotal: number
   variance: number
   status: ShiftStatus
   reviewNotes: string | null
+  reviewerNotes?: string | null
   reviewedBy: string | null
   reviewedAt: string | null
+  companyId?: string | null
+  companyShortCode?: string | null
   syncQueueKey?: string | null
   syncStatus: SyncStatus
   updatedAt: string

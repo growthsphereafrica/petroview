@@ -44,24 +44,36 @@ const ShiftNavigator: React.FC = () => {
   const [pendingNozzleIndices, setPendingNozzleIndices] = useState<number[] | null>(null)
   const [correctingShift, setCorrectingShift] = useState<Shift | null>(null)
   const { attendant } = useAttendantSession()
-  const { activeShift, shifts, openShift, toast, dismissToast, loading: shiftLoading } = useShift()
-  const go = (s: Screen) => setScreen(s)
+  const { activeShift, shifts, openShift, toast, dismissToast, loading: shiftLoading, refresh } = useShift()
 
-  const hasRejectedShift = shifts.some(s => s.status === 'REJECTED')
+  const rejectedShift = shifts.find(s => s.status === 'REJECTED') || null
+  const hasRejectedShift = Boolean(rejectedShift)
 
-  // When an attendant signs in:
-  // - If they have a rejected shift, show the dashboard with the rejection feedback & correction button
+  const go = (s: Screen) => {
+    if (hasRejectedShift && (s === 'start_shift' || s === 'opening_readings')) {
+      if (rejectedShift) setCorrectingShift(rejectedShift)
+      setScreen('correct_shift')
+      return
+    }
+    setScreen(s)
+  }
+
+  // When an attendant signs in or views portal:
+  // - If they have a rejected shift, that summary must appear on her page as the FIRST thing to do before she can do anything!
   // - If an active shift is already running, show the active shift dashboard with closing option ('dashboard')
   // - If no active or rejected shift, the first thing they see is to select pump & nozzle ('start_shift')
   useEffect(() => {
     if (!shiftLoading) {
-      if (activeShift || hasRejectedShift) {
+      if (rejectedShift) {
+        setCorrectingShift(rejectedShift)
+        setScreen('correct_shift')
+      } else if (activeShift) {
         setScreen(prev => (prev === 'start_shift' ? 'dashboard' : prev))
       } else {
         setScreen(prev => (prev === 'dashboard' ? 'start_shift' : prev))
       }
     }
-  }, [shiftLoading, activeShift, hasRejectedShift])
+  }, [shiftLoading, activeShift, rejectedShift])
 
   const handleStartShiftNext = (pumpId: string, nozzleIndices: number[]) => {
     setPendingPumpId(pumpId)

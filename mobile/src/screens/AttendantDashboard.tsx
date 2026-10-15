@@ -7,6 +7,7 @@ import {
   Pressable,
   Modal,
   ActivityIndicator,
+  Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag, Building2 } from 'lucide-react-native'
@@ -56,7 +57,7 @@ export const AttendantDashboard: React.FC<{
           pendingSyncCount(),
           mobileProductService.getFuelPrices().catch(() => PRODUCTION_STATION.fuelPrices),
           cloudGetPumps(session.stationId, session.companyId).catch(() => null),
-          cloudGetShifts(session.stationId).catch(() => null),
+          cloudGetShifts().catch(() => null),
         ])
 
         if (cloudRes && cloudRes.ok && cloudRes.shifts.length > 0) {
@@ -66,6 +67,7 @@ export const AttendantDashboard: React.FC<{
         }
 
         const allShifts = await listShifts()
+        allShifts.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
         const curShift = allShifts.find(s => s.attendantId === session.userId && s.status === 'OPEN') || null
         const rejShift = allShifts.find(s => s.attendantId === session.userId && s.status === 'REJECTED') || null
 
@@ -73,7 +75,10 @@ export const AttendantDashboard: React.FC<{
           setAttendantId(session.userId)
           setShift(curShift)
           setRejectedShift(rejShift)
-          if (!curShift && !rejShift) {
+          if (rejShift) {
+            setCorrectModal(true)
+            setOpenModal(false)
+          } else if (!curShift) {
             setOpenModal(true)
           }
           setPendingCount(pending)
@@ -103,7 +108,7 @@ export const AttendantDashboard: React.FC<{
     const [pending, pumpsRes, cloudRes] = await Promise.all([
       pendingSyncCount(),
       cloudGetPumps(session.stationId, session.companyId).catch(() => null),
-      cloudGetShifts(session.stationId).catch(() => null),
+      cloudGetShifts().catch(() => null),
     ])
 
     if (cloudRes && cloudRes.ok && cloudRes.shifts.length > 0) {
@@ -113,11 +118,16 @@ export const AttendantDashboard: React.FC<{
     }
 
     const allShifts = await listShifts()
+    allShifts.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
     const active = allShifts.find(s => s.attendantId === attendantId && s.status === 'OPEN') || null
     const rejShift = allShifts.find(s => s.attendantId === attendantId && s.status === 'REJECTED') || null
 
     setShift(active)
     setRejectedShift(rejShift)
+    if (rejShift && !active) {
+      setCorrectModal(true)
+      setOpenModal(false)
+    }
     setPendingCount(pending)
     if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
       const mapped: ProductionPumpConfig[] = pumpsRes.pumps.map(p => ({
@@ -131,6 +141,15 @@ export const AttendantDashboard: React.FC<{
     }
     setLoading(false)
   }, [attendantId, session.stationId, session.companyId])
+
+  // Periodic background check for manager decisions
+  useEffect(() => {
+    if (!attendantId) return
+    const timer = setInterval(() => {
+      void refresh()
+    }, 10_000)
+    return () => clearInterval(timer)
+  }, [attendantId, refresh])
 
   const insets = useSafeAreaInsets()
 
@@ -224,6 +243,26 @@ export const AttendantDashboard: React.FC<{
                 Reviewed by {rejectedShift.reviewedBy} {rejectedShift.reviewedAt ? `· ${formatDateTime(rejectedShift.reviewedAt)}` : ''}
               </Text>
             )}
+
+            {/* Previous Submission Figures */}
+            <View style={styles.rejectionFiguresRow}>
+              <View style={styles.rejectionFigureCol}>
+                <Text style={styles.rejectionFigureLabel}>Previous Expected</Text>
+                <Text style={styles.rejectionFigureVal}>{formatGHS(rejectedShift.salesTotal || rejectedShift.expectedTotal || 0)}</Text>
+              </View>
+              <View style={styles.rejectionFigureDivider} />
+              <View style={styles.rejectionFigureCol}>
+                <Text style={styles.rejectionFigureLabel}>Previous Remitted</Text>
+                <Text style={[styles.rejectionFigureVal, { color: colors.amber }]}>{formatGHS(rejectedShift.actualTotal)}</Text>
+              </View>
+              <View style={styles.rejectionFigureDivider} />
+              <View style={styles.rejectionFigureCol}>
+                <Text style={styles.rejectionFigureLabel}>Discrepancy</Text>
+                <Text style={[styles.rejectionFigureVal, { color: (rejectedShift.variance || 0) < 0 ? colors.rose : colors.emerald }]}>
+                  {formatGHS(rejectedShift.variance || 0)}
+                </Text>
+              </View>
+            </View>
 
             <View style={styles.rejectionActionRow}>
               <PrimaryButton
@@ -386,7 +425,15 @@ export const AttendantDashboard: React.FC<{
 
           <View style={styles.shiftActions}>
             {!shift ? (
-              <PrimaryButton title="Open Shift & Pick Nozzles" onPress={() => setOpenModal(true)} tone="emerald" />
+              rejectedShift ? (
+                <PrimaryButton
+                  title="⚠️ New Shift Locked — Correct Shift First"
+                  onPress={() => setCorrectModal(true)}
+                  tone="rose"
+                />
+              ) : (
+                <PrimaryButton title="Open Shift & Pick Nozzles" onPress={() => setOpenModal(true)} tone="emerald" />
+              )
             ) : (
               <>
                 <PrimaryButton
@@ -437,9 +484,15 @@ export const AttendantDashboard: React.FC<{
         visible={openModal}
         pumps={stationPumps}
         stationName={session.stationName}
-        companyName={session.companyName || session.companyShortCode}
+        companyName={session.companyName || session.companyShortCode || undefined}
         onClose={() => setOpenModal(false)}
         onConfirm={async (pumpId, openingReadings) => {
+          if (rejectedShift) {
+            setOpenModal(false)
+            setCorrectModal(true)
+            Alert.alert('Shift Action Required', `Shift ${rejectedShift.number} was rejected by the manager. You must correct and resubmit it before starting a new shift.`)
+            return
+          }
           try {
             setOpenModal(false)
             setError(null)
@@ -1474,5 +1527,10 @@ const styles = StyleSheet.create({
   rejectionBadgeText: { color: colors.rose, fontSize: 10, fontWeight: '800' },
   rejectionAlertMsg: { color: colors.text, fontSize: 13, lineHeight: 18, marginTop: 4 },
   rejectionAlertMeta: { color: colors.textDim, fontSize: 11, marginTop: 6, fontStyle: 'italic' },
+  rejectionFiguresRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: 'rgba(15,23,42,0.6)', borderRadius: 8, borderWidth: 1, borderColor: 'rgba(239,68,68,0.25)', paddingVertical: 8, paddingHorizontal: 10, marginTop: 10 },
+  rejectionFigureCol: { flex: 1, alignItems: 'center' },
+  rejectionFigureLabel: { color: colors.textDim, fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
+  rejectionFigureVal: { color: colors.text, fontSize: 11, fontWeight: '900', marginTop: 2 },
+  rejectionFigureDivider: { width: 1, height: 18, backgroundColor: 'rgba(148,163,184,0.2)' },
   rejectionActionRow: { marginTop: 12 },
 })

@@ -22,7 +22,7 @@ function stationBelongsToCompany(stationId: string, companyId: string | null): b
 function canAccessShift(session: SessionClaims, shift: ScopedShiftRow): boolean {
   if (session.role === 'superadmin') return true
   if (session.role === 'supervisor') return Boolean(session.stationId && shift.stationId === session.stationId)
-  if (session.role === 'attendant') return Boolean(session.stationId && shift.stationId === session.stationId && shift.attendantId === session.userId)
+  if (session.role === 'attendant') return shift.attendantId === session.userId
   return Boolean(session.companyId && (shift.companyId === session.companyId || stationBelongsToCompany(shift.stationId, session.companyId)))
 }
 
@@ -73,21 +73,14 @@ shiftsRouter.get('/', authenticate, (req: AuthRequest, res) => {
     }
     companyId = session.companyId
   } else if (session.role === 'attendant') {
-    if (!session.stationId) {
-      res.status(403).json({ error: 'FORBIDDEN', message: 'Your account is not assigned to a station.' })
-      return
-    }
-    if (stationId && stationId !== 'ALL' && stationId !== session.stationId) {
+    // An attendant must ALWAYS be able to view their own shifts to check status and handle rejections
+    attendantId = session.userId
+    companyId = null
+    if (stationId && stationId !== 'ALL' && session.stationId && stationId !== session.stationId) {
       res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot view another station.' })
       return
     }
-    if (attendantId && attendantId !== session.userId) {
-      res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot view another attendant record.' })
-      return
-    }
-    stationId = session.stationId
-    companyId = null
-    attendantId = session.userId
+    stationId = null
   } else {
     stationId = stationId === 'ALL' ? null : stationId
     companyId = companyId === 'ALL' ? null : companyId
@@ -175,11 +168,12 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
   }
   const reviewerNotes = typeof body.reviewerNotes === 'string' ? body.reviewerNotes.trim().slice(0, 1000) : null
   const now = new Date().toISOString()
+  const reviewerName = sessionOf(req).fullName || sessionOf(req).userId
   const applied = db.prepare(`
     UPDATE shifts
-    SET status = ?, reviewerNotes = ?, syncStatus = 'SYNCED', updatedAt = ?
+    SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ?
     WHERE id = ? AND status = 'CLOSED'
-  `).run(status, reviewerNotes, now, shift.id)
+  `).run(status, reviewerNotes, reviewerName, now, now, shift.id)
   if (applied.changes === 0) {
     res.status(409).json({ error: 'INVALID_STATE', message: 'This shift was already reviewed.' })
     return

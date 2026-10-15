@@ -7,9 +7,9 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { shiftService } from '../../core/services/shiftService'
 import { syncService } from '../../core/services/syncService'
 import { describeError, DomainError } from '../../core/domain/errors'
-import { backendLogout } from '../../services/backendApiService'
+import { backendLogout, backendGetShifts } from '../../services/backendApiService'
 import { prodDb } from '../../core/infra/db'
-import { attendantRepo } from '../../core/infra/repositories'
+import { attendantRepo, shiftRepo } from '../../core/infra/repositories'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { formatGHS } from '../../utils/currencyFormatter'
 import { loadUnifiedSession, clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
@@ -169,6 +169,20 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       return
     }
     try {
+      // 1. Fetch remote shifts from backend to get supervisor review decisions (REJECTED/APPROVED)
+      try {
+        const remote = await backendGetShifts()
+        if (remote && Array.isArray(remote.shifts)) {
+          for (const s of remote.shifts) {
+            if (s && s.id) {
+              await shiftRepo.upsert(s as unknown as Shift)
+            }
+          }
+        }
+      } catch (cloudErr) {
+        // Offline / network failure: gracefully fall back to local IndexedDB
+      }
+
       const [current, history] = await Promise.all([
         shiftService.getActiveShift(attendant.id),
         shiftService.listShifts(attendant.id),
@@ -195,6 +209,17 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       void refresh()
     }, [refresh]),
   )
+
+  // Polling & focus auto-refresh: fetch any supervisor rejection/approval in real time
+  useEffect(() => {
+    const handleFocus = () => { void refresh() }
+    window.addEventListener('focus', handleFocus)
+    const timer = window.setInterval(() => { void refresh() }, 10_000)
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      window.clearInterval(timer)
+    }
+  }, [refresh])
 
   // Background auto-sync: push pending records periodically when online.
   useEffect(() => {

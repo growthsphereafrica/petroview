@@ -11,7 +11,7 @@ export const ENV = {
   MAX_PIN_ATTEMPTS: 5,
   LOCKOUT_MS: 5 * 60 * 1000,
   PIN_KDF_ITERATIONS: Number.isFinite(Number(process.env.PIN_KDF_ITERATIONS))
-    ? Math.max(100_000, Number(process.env.PIN_KDF_ITERATIONS))
+    ? Math.max(10_000, Number(process.env.PIN_KDF_ITERATIONS))
     : 310_000,
   PRICE_TOLERANCE_GHS: Number.isFinite(Number(process.env.PRICE_TOLERANCE_GHS))
     ? Math.abs(Number(process.env.PRICE_TOLERANCE_GHS))
@@ -27,15 +27,23 @@ export const ENV = {
   // only and both re-check the Super Admin PIN, but they stay independently
   // controllable.
   ENABLE_ACCOUNT_REMOVAL: process.env.ENABLE_ACCOUNT_REMOVAL === 'true',
-  // Fails closed in principle, but an empty allowlist with no override would
-  // reject the web app's own origin and take the dashboard down. Default to the
-  // documented production origin and log a loud warning, rather than shipping a
-  // wildcard or silently breaking the product.
+  // Supported origins across production, staging, local development, and mobile
   CORS_ORIGINS: configuredCorsOrigins.length > 0
     ? configuredCorsOrigins
-    : isProduction
-      ? ['https://petroview.growthspheregh.com']
-      : ['http://localhost:5173', 'http://127.0.0.1:5173'],
+    : [
+        'https://petroview.growthspheregh.com',
+        'https://petroviewapi.growthspheregh.com',
+        'http://localhost:5173',
+        'http://localhost:3000',
+        'http://localhost:4173',
+        'http://localhost:8080',
+        'http://localhost:8081',
+        'http://127.0.0.1:5173',
+        'http://127.0.0.1:3000',
+        'http://127.0.0.1:4173',
+        'http://127.0.0.1:8080',
+        'http://127.0.0.1:8081',
+      ],
 }
 
 export const FUEL_PRICES: Record<string, number> = {

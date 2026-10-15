@@ -587,12 +587,16 @@ export const AttendantDashboard: React.FC<{
           try {
             setCloseModal(false)
             if (!shift) return
+            const targetShiftId = shift.id
+            setShift(null)
             await shiftService.closeShift({
-              shiftId: shift.id,
+              shiftId: targetShiftId,
               closingReadings,
               remittance,
               notes,
             })
+            setSuccessBanner('Closing shift submitted directly to manager for review.')
+            setTimeout(() => setSuccessBanner(null), 6000)
             try { await syncNow() } catch {}
             await refresh()
           } catch (e) {

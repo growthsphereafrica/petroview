@@ -339,9 +339,24 @@ export const syncQueueRepo = {
     const rows = await prodDb.syncQueue
       .filter(q => (q.status === 'PENDING' || q.status === 'FAILED') && (forceAll || q.nextRetryAt === null || new Date(q.nextRetryAt).getTime() <= Date.now()))
       .toArray()
-    const priority = (item: SyncQueueItem) => item.entityType === 'SHIFT' ? 0 : 1
+    if (rows.length === 0) return []
+
+    const shiftIds = rows.filter(r => r.entityType === 'SHIFT').map(r => r.entityId)
+    const shifts = shiftIds.length > 0 ? await prodDb.shifts.where('id').anyOf(shiftIds).toArray() : []
+    const closedShiftIds = new Set(shifts.filter(s => s.status === 'CLOSED').map(s => s.id))
+
+    // Priority ordering:
+    // 0: OPEN SHIFTS (must exist on server before transactions can attach)
+    // 1: TRANSACTIONS / RECEIPTS / EXPENSES (must be synced before closed shift so assertShiftLedger finds them)
+    // 2: CLOSED SHIFTS (validates against transactions on backend)
+    const priority = (item: SyncQueueItem) => {
+      if (item.entityType === 'SHIFT') {
+        return closedShiftIds.has(item.entityId) ? 2 : 0
+      }
+      return 1
+    }
+
     return rows.sort((a, b) => {
-      // SHIFTS must ALWAYS be synced before TRANSACTIONS so referenced shifts exist on the server
       const pDiff = priority(a) - priority(b)
       if (pDiff !== 0) return pDiff
       const created = new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()

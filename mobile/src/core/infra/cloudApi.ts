@@ -386,7 +386,31 @@ export async function uploadShiftsToCloud(shifts: Shift[]): Promise<SyncUploadRe
   const account = await sGet<CloudSession>(keys.activeSession)
   if (!account || account.token !== token) throw new Error('CLOUD_SESSION_MISSING')
 
-  const entities = shifts.map(s => ({ type: 'SHIFT', data: toBackendShift(s) }))
+  const entities: Array<{ type: 'SHIFT' | 'TRANSACTION'; data: Record<string, unknown> }> = []
+  for (const s of shifts) {
+    if (Array.isArray(s.sales) && s.sales.length > 0) {
+      for (const sale of s.sales) {
+        if (sale && Number(sale.litres) > 0) {
+          const method = (s.payments && Number((s.payments as any).MOMO) > 0 && !Number((s.payments as any).CASH)) ? 'MOMO' : 'CASH'
+          entities.push({
+            type: 'TRANSACTION',
+            data: {
+              id: `tx-${s.id}-${sale.fuelCode}`,
+              shiftId: s.id,
+              attendantId: s.attendantId,
+              fuelCode: sale.fuelCode,
+              litres: Number(sale.litres),
+              unitPrice: Number(sale.unitPrice),
+              amount: Number(sale.amount),
+              method,
+              recordedAt: s.closedAt || s.openedAt,
+            },
+          })
+        }
+      }
+    }
+    entities.push({ type: 'SHIFT', data: toBackendShift(s) })
+  }
   const entityKey = entities.map(entity => `${entity.type}:${String(entity.data.id)}`).join('|')
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

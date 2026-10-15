@@ -319,7 +319,10 @@ export const UnifiedLoginScreen: React.FC<{
       })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      setLoginError(msg)
+      const userMsg = msg === 'BACKEND_UNREACHABLE'
+        ? 'Unable to connect to PetroView server. Please check your network and try again.'
+        : msg
+      setLoginError(userMsg)
       if (msg.toLowerCase().includes('pending') || msg.toLowerCase().includes('pending approval')) {
         setIsPendingApproval(true)
       }

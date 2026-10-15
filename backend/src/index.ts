@@ -26,14 +26,28 @@ app.set('trust proxy', 1)
 
 app.use(helmet())
 
+const isAllowedCorsOrigin = (origin?: string): boolean => {
+  if (!origin) return true
+  if (ENV.CORS_ORIGINS.includes(origin)) return true
+  // Allow any localhost and 127.0.0.1 port (for dev, expo, preview, emulators)
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
+  // Allow all GrowthSphere official domains and subdomains
+  if (/^https:\/\/([a-z0-9-]+\.)?growthspheregh\.com(:\d+)?$/i.test(origin)) return true
+  // Allow Capacitor, Electron, Ionic, and Expo native schemes
+  if (origin.startsWith('capacitor://') || origin.startsWith('exp://') || origin.startsWith('ionic://') || origin === 'null') return true
+  return false
+}
+
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || ENV.CORS_ORIGINS.includes(origin)) {
+    if (isAllowedCorsOrigin(origin)) {
       callback(null, true)
       return
     }
-    callback(new Error('CORS origin is not allowed.'))
+    // Return null, false to reject gracefully instead of throwing 500
+    callback(null, false)
   },
+  credentials: true,
 }))
 
 const rateLimitHandler = (_req: express.Request, res: express.Response) => {

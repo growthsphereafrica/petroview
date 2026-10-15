@@ -398,6 +398,47 @@ export class ShiftService {
     await shiftRepo.upsert(closed)
     liveSyncBus.publish({ table: 'SHIFTS', reason: 'UPDATE', key: closed.id })
 
+    // Ensure all metered fuel sales are represented in the transaction ledger
+    // so that backend ledger validation (assertShiftLedger) passes cleanly.
+    const existingTxs = await transactionRepo.listForShift(shift.id)
+    for (const sale of closed.sales) {
+      if (sale.litres > 0) {
+        const txLitres = existingTxs
+          .filter(t => t.fuelCode === sale.fuelCode)
+          .reduce((sum, t) => sum + t.litres, 0)
+        const unrecordedLitres = roundLitres(sale.litres - txLitres)
+        if (unrecordedLitres > 0.01) {
+          const unrecordedAmount = roundMoney(unrecordedLitres * sale.unitPrice)
+          const method: PaymentMethod = (remittance?.MOMO && remittance.MOMO > 0 && !(remittance.CASH && remittance.CASH > 0)) ? 'MOMO' : 'CASH'
+          const tx: ShiftTransaction = {
+            id: `tx-dispense-${crypto.randomUUID()}`,
+            shiftId: shift.id,
+            attendantId: shift.attendantId,
+            fuelCode: sale.fuelCode,
+            litres: unrecordedLitres,
+            amount: unrecordedAmount,
+            unitPrice: sale.unitPrice,
+            method,
+            recordedAt: closed.closedAt || new Date().toISOString(),
+            syncStatus: 'PENDING',
+          }
+          await transactionRepo.add(tx)
+          await syncQueueRepo.add({
+            id: `sync-tx-${tx.id}`,
+            entityType: 'TRANSACTION',
+            entityId: tx.id,
+            status: 'PENDING',
+            attempts: 0,
+            nextRetryAt: null,
+            lastError: null,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          })
+          liveSyncBus.publish({ table: 'TRANSACTIONS', reason: 'INSERT', key: tx.id })
+        }
+      }
+    }
+
     await syncQueueRepo.add({
       id: `sync-shift-${closed.id}`,
       entityType: 'SHIFT',

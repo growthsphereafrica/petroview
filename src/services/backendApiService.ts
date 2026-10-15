@@ -59,10 +59,30 @@ async function apiCall<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = getStoredCloudToken()
   if (token) headers.Authorization = `Bearer ${token}`
 
-  let resp: Response
-  try {
-    resp = await fetch(`${base}${path}`, { ...options, headers })
-  } catch {
+  let resp: Response | null = null
+  let lastErr: unknown = null
+
+  // Try up to 2 times for transient network dips
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 15_000)
+    try {
+      resp = await fetch(`${base}${path}`, { ...options, headers, signal: controller.signal })
+      clearTimeout(timer)
+      break
+    } catch (err) {
+      clearTimeout(timer)
+      lastErr = err
+      if (attempt === 0) {
+        await new Promise(r => setTimeout(r, 400))
+      }
+    }
+  }
+
+  if (!resp) {
+    if (lastErr && typeof lastErr === 'object' && (lastErr as { name?: string }).name === 'AbortError') {
+      throw new Error('Connection timed out. Please check your internet connectivity and try again.')
+    }
     throw new Error('BACKEND_UNREACHABLE')
   }
 

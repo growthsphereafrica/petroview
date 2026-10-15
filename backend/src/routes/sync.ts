@@ -36,16 +36,18 @@ const MAX_RECEIPT_IMAGE_CHARS = 2_000_000
 const upsertShift = db.prepare(`
   INSERT INTO shifts (
     id, number, attendantId, attendantName, pumpId, pumpName, stationId, stationName,
-    companyId, companyShortCode,
+    companyId, companyShortCode, assignedNozzles,
     status, openedAt, closedAt, openingReadings, closingReadings, sales,
     expectedTotal, payments, actualTotal, variance, notes, reviewerNotes, syncStatus, createdAt, updatedAt
   ) VALUES (
     @id, @number, @attendantId, @attendantName, @pumpId, @pumpName, @stationId, @stationName,
-    @companyId, @companyShortCode,
+    @companyId, @companyShortCode, @assignedNozzles,
     @status, @openedAt, @closedAt, @openingReadings, @closingReadings, @sales,
     @expectedTotal, @payments, @actualTotal, @variance, @notes, @reviewerNotes, 'SYNCED', @createdAt, @updatedAt
   )
   ON CONFLICT(id) DO UPDATE SET
+    pumpName = COALESCE(excluded.pumpName, shifts.pumpName),
+    assignedNozzles = COALESCE(excluded.assignedNozzles, shifts.assignedNozzles),
     status = excluded.status,
     closedAt = excluded.closedAt,
     closingReadings = excluded.closingReadings,
@@ -62,11 +64,11 @@ const upsertShift = db.prepare(`
 const insertShift = db.prepare(`
   INSERT INTO shifts (
     id, number, attendantId, attendantName, pumpId, pumpName, stationId, stationName,
-    companyId, companyShortCode, status, openedAt, closedAt, openingReadings, closingReadings,
+    companyId, companyShortCode, assignedNozzles, status, openedAt, closedAt, openingReadings, closingReadings,
     sales, expectedTotal, payments, actualTotal, variance, notes, reviewerNotes, syncStatus, createdAt, updatedAt
   ) VALUES (
     @id, @number, @attendantId, @attendantName, @pumpId, @pumpName, @stationId, @stationName,
-    @companyId, @companyShortCode, @status, @openedAt, @closedAt, @openingReadings, @closingReadings,
+    @companyId, @companyShortCode, @assignedNozzles, @status, @openedAt, @closedAt, @openingReadings, @closingReadings,
     @sales, @expectedTotal, @payments, @actualTotal, @variance, @notes, @reviewerNotes, 'SYNCED', @createdAt, @updatedAt
   )
 `)
@@ -326,8 +328,10 @@ function validateShiftData(session: SessionClaims, data: Record<string, unknown>
   if (openingReadings.length === 0) throw new Error('openingReadings are required.')
   if (status === 'CLOSED') {
     if (closingReadings.length === 0) throw new Error('closingReadings are required for a closed shift.')
-    if (openingReadings.length !== closingReadings.length) {
-      throw new Error('closingReadings count must match openingReadings count.')
+    const openingCodes = new Set(openingReadings.map(reading => reading.fuelCode))
+    const closingCodes = new Set(closingReadings.map(reading => reading.fuelCode))
+    if (openingCodes.size !== closingCodes.size || [...openingCodes].some(code => !closingCodes.has(code)) || openingReadings.length !== closingReadings.length) {
+      throw new Error('closingReadings must contain the same fuel codes as openingReadings.')
     }
   }
   const rawSales = Array.isArray(data.sales) ? data.sales : salesFromLegacy(data.fuelSales)
@@ -386,18 +390,36 @@ function validateShiftData(session: SessionClaims, data: Record<string, unknown>
     if (!pump) throw new Error('pumpId is not active at the selected station.')
     pumpName = pump.name
   }
+  if (!pumpName && typeof data.pumpName === 'string' && data.pumpName.trim()) {
+    pumpName = data.pumpName.trim()
+  } else if (!pumpName && pumpId) {
+    pumpName = `Pump ${pumpId.replace(/\D/g, '') || '1'}`
+  }
+
   const attendant = db.prepare('SELECT fullName FROM attendants WHERE id = ?').get(attendantId) as { fullName: string } | undefined
+  const attendantName = attendant?.fullName || (typeof data.attendantName === 'string' && data.attendantName.trim() ? data.attendantName.trim() : 'Attendant')
+
+  let assignedNozzles: string | null = null
+  if (Array.isArray(data.assignedNozzles) && data.assignedNozzles.length > 0) {
+    assignedNozzles = JSON.stringify(data.assignedNozzles)
+  } else if (openingReadings.length > 0) {
+    assignedNozzles = JSON.stringify(
+      openingReadings.map((r, i) => r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (i + 1)} (${r.fuelCode})`)
+    )
+  }
+
   return {
     id,
     number,
     attendantId,
-    attendantName: attendant?.fullName || 'Attendant',
+    attendantName,
     pumpId,
-    pumpName,
+    pumpName: pumpName || 'Forecourt Dispenser',
     stationId: station.id,
     stationName: station.name,
     companyId: station.companyId,
     companyShortCode: station.companyShortCode,
+    assignedNozzles,
     status,
     openedAt,
     closedAt,
@@ -598,9 +620,10 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
         if (!existing && shift.status === 'OPEN') {
           const open = db.prepare("SELECT id, number, openedAt FROM shifts WHERE attendantId = ? AND status = 'OPEN' AND id <> ? LIMIT 1").get(shift.attendantId, shift.id) as { id: string; number: string; openedAt: string } | undefined
           if (open) {
-            // If the existing open shift has an older or prior openedAt timestamp, auto-close the stale
+            const timeDiff = new Date(String(shift.openedAt)).getTime() - new Date(open.openedAt).getTime()
+            // If the existing open shift has a significantly older openedAt timestamp (> 1 hour), auto-close the stale
             // previous shift so the attendant's active shift and incoming sales are never permanently stranded.
-            if (new Date(String(shift.openedAt)).getTime() >= new Date(open.openedAt).getTime()) {
+            if (timeDiff > 3600_000) {
               db.prepare(`
                 UPDATE shifts 
                 SET status = 'CLOSED', 

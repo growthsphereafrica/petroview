@@ -5,11 +5,11 @@
  */
 
 import React, { useState } from 'react'
-import { AlertTriangle, CheckCircle2, ShieldCheck, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, Fuel, Gauge, ShieldCheck, User, XCircle } from 'lucide-react'
 import { useSupervisorData } from '../providers'
 import { Badge, BigActionButton, Card, ScreenHeader, StatusBar } from '../../shared/ui'
 import { shiftStatusLabel, shiftStatusTone } from '../util'
-import { getStationById, FUEL_META, PAYMENT_META } from '../../../core/domain/config'
+import { getStationById, FUEL_META, PAYMENT_META, formatShiftNozzles, extractShiftNozzlesList } from '../../../core/domain/config'
 import { describeError } from '../../../core/domain/errors'
 import { formatDateTime, formatGHS, formatLitres } from '../../../utils/currencyFormatter'
 
@@ -70,21 +70,33 @@ export const SupervisorShiftDetailScreen: React.FC<{
             </div>
             <p className="text-[10px] font-mono text-slate-500">{shift.attendantName}</p>
           </div>
-          <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px]">
+          <dl className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 text-[11px]">
             <div>
-              <dt className="text-slate-500 uppercase text-[9px] font-bold">Attendant</dt>
-              <dd className="text-white font-bold">{shift.attendantName}</dd>
+              <dt className="text-slate-500 uppercase text-[9px] font-bold flex items-center gap-1">
+                <User className="w-3 h-3 text-orange-400" /> Attendant Name
+              </dt>
+              <dd className="text-white font-extrabold text-xs mt-0.5">{shift.attendantName}</dd>
+              <dd className="text-slate-400 font-mono text-[10px]">{shortAttendant(shift.attendantId)}</dd>
             </div>
             <div>
-              <dt className="text-slate-500 uppercase text-[9px] font-bold">Employee</dt>
-              <dd className="text-slate-300 font-mono">{shortAttendant(shift.attendantId)}</dd>
+              <dt className="text-slate-500 uppercase text-[9px] font-bold flex items-center gap-1">
+                <Fuel className="w-3 h-3 text-emerald-400" /> Dispenser Pump
+              </dt>
+              <dd className="text-emerald-300 font-extrabold text-xs mt-0.5">{shift.pumpName || 'Pump'}</dd>
+              <dd className="text-slate-400 text-[10px]">{station.name}</dd>
+            </div>
+            <div className="col-span-2 sm:col-span-1">
+              <dt className="text-slate-500 uppercase text-[9px] font-bold flex items-center gap-1">
+                <Gauge className="w-3 h-3 text-sky-400" /> Operating Nozzles
+              </dt>
+              <dd className="text-sky-300 font-bold text-xs mt-0.5">{formatShiftNozzles(shift)}</dd>
             </div>
             <div>
-              <dt className="text-slate-500 uppercase text-[9px] font-bold">Opened</dt>
+              <dt className="text-slate-500 uppercase text-[9px] font-bold">Shift Opened</dt>
               <dd className="text-slate-300">{formatDateTime(shift.openedAt)}</dd>
             </div>
             <div>
-              <dt className="text-slate-500 uppercase text-[9px] font-bold">Closed</dt>
+              <dt className="text-slate-500 uppercase text-[9px] font-bold">Shift Closed</dt>
               <dd className="text-slate-300">{formatDateTime(shift.closedAt ?? shift.updatedAt)}</dd>
             </div>
           </dl>
@@ -109,6 +121,63 @@ export const SupervisorShiftDetailScreen: React.FC<{
               {r.notes && <span className="block mt-0.5 text-slate-400">{r.notes}</span>}
             </div>
           ))}
+        </Card>
+
+        {/* Forecourt Dispenser & Nozzle Meter Audit */}
+        <Card className="p-4">
+          <div className="flex items-center justify-between mb-2.5">
+            <h4 className="text-[10px] font-bold uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+              <Fuel className="w-3.5 h-3.5 text-emerald-400" /> Dispenser & Nozzle Meter Audit ({shift.pumpName || 'Pump'})
+            </h4>
+            <span className="text-[10px] font-mono text-slate-500">
+              {extractShiftNozzlesList(shift).length} Operating Nozzle{extractShiftNozzlesList(shift).length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            {extractShiftNozzlesList(shift).map(n => {
+              const saleMatch = shift.sales.find(s => s.fuelCode === n.fuelCode)
+              const unitPrice = saleMatch?.unitPrice ?? 14.8
+              const amount = saleMatch?.amount ?? Math.round(n.litres * unitPrice * 100) / 100
+              return (
+                <div key={`${n.nozzleIndex}-${n.fuelCode}`} className="rounded-xl bg-slate-900/90 border border-slate-800 p-3">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="px-2 py-0.5 rounded text-[10px] font-black text-white"
+                        style={{ backgroundColor: FUEL_META[n.fuelCode]?.color ?? '#334155' }}
+                      >
+                        {n.fuelCode}
+                      </span>
+                      <span className="text-xs font-bold text-white">{n.nozzleLabel}</span>
+                    </div>
+                    <span className="text-xs font-mono font-black text-emerald-400">
+                      {formatGHS(amount)}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] pt-1.5 border-t border-slate-800/80">
+                    <div>
+                      <span className="text-slate-500 block uppercase font-bold text-[8px]">Opening Meter</span>
+                      <span className="font-mono text-slate-300 font-bold">{n.openingValue.toFixed(2)}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block uppercase font-bold text-[8px]">Closing Meter</span>
+                      <span className="font-mono text-slate-300 font-bold">{n.closingValue > 0 ? n.closingValue.toFixed(2) : '—'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block uppercase font-bold text-[8px]">Volume Dispensed</span>
+                      <span className="font-mono text-emerald-400 font-extrabold">{formatLitres(n.litres)} L</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block uppercase font-bold text-[8px]">Rate</span>
+                      <span className="font-mono text-slate-400">GHS {unitPrice.toFixed(2)}/L</span>
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
         </Card>
 
         {/* Sales breakdown */}

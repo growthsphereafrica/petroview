@@ -86,11 +86,15 @@ export class ShiftService {
     const shift: Shift = {
       id: uid('shift'),
       number: `SH-${Date.now().toString().slice(-6)}`,
-      stationId: PRODUCTION_STATION.id,
-      stationName: PRODUCTION_STATION.name,
+      stationId: attendant.stationId || PRODUCTION_STATION.id,
+      stationName: (attendant as any).stationName || PRODUCTION_STATION.name,
+      companyId: attendant.companyId,
+      companyShortCode: attendant.companyShortCode,
       attendantId: attendant.id,
       attendantName: attendant.fullName,
       pumpId,
+      pumpName: pump.name,
+      assignedNozzles: Object.values(readings).map(r => r.nozzleLabel || (r.nozzleIndex ? `Nozzle ${r.nozzleIndex}` : r.fuelCode)),
       openedAt: now,
       closedAt: null,
       openingReadings: readings as never,
@@ -342,6 +346,8 @@ export class ShiftService {
     const resubmitted: Shift = {
       ...shift,
       pumpId: workingPumpId,
+      pumpName: pump.name,
+      assignedNozzles: Object.values(workingOpenings).map((r: any) => r.nozzleLabel || (r.nozzleIndex ? `Nozzle ${r.nozzleIndex}` : r.fuelCode)),
       openingReadings: workingOpenings,
       closedAt: now,
       closingReadings: closing as never,
@@ -365,6 +371,8 @@ export class ShiftService {
       const { cloudResubmitShift } = await import('../infra/cloudApi')
       await cloudResubmitShift(resubmitted.id, {
         pumpId: resubmitted.pumpId,
+        pumpName: resubmitted.pumpName,
+        assignedNozzles: resubmitted.assignedNozzles,
         openingReadings: Object.values(resubmitted.openingReadings ?? {}),
         closingReadings: Object.values(resubmitted.closingReadings ?? {}),
         sales: resubmitted.sales,

@@ -150,6 +150,8 @@ export interface Shift {
   attendantId: string
   attendantName: string
   pumpId: string
+  pumpName?: string
+  assignedNozzles?: string[]
   openedAt: string
   closedAt: string | null
   openingReadings: Record<string, MeterReading>

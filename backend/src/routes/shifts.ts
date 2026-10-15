@@ -269,10 +269,20 @@ shiftsRouter.post('/:id/resubmit', authenticate, (req: AuthRequest, res) => {
   const userNotes = typeof body.notes === 'string' ? body.notes.trim() : ''
   const combinedNotes = userNotes ? `[Corrected & Resubmitted] ${userNotes}` : (shift.notes ? `${shift.notes} [Resubmitted with corrections]` : '[Resubmitted with corrections]')
 
+  let assignedNozzlesStr = shift.assignedNozzles
+  if (Array.isArray((body as any).assignedNozzles)) {
+    assignedNozzlesStr = JSON.stringify((body as any).assignedNozzles)
+  } else if (body.openingReadings && Array.isArray(body.openingReadings)) {
+    assignedNozzlesStr = JSON.stringify(
+      (body.openingReadings as any[]).map((r, i) => r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (i + 1)} (${r.fuelCode})`)
+    )
+  }
+
   db.prepare(`
     UPDATE shifts
     SET pumpId = ?,
         pumpName = ?,
+        assignedNozzles = ?,
         openingReadings = ?,
         closingReadings = ?,
         sales = ?,
@@ -288,6 +298,7 @@ shiftsRouter.post('/:id/resubmit', authenticate, (req: AuthRequest, res) => {
   `).run(
     pumpId,
     pumpName,
+    assignedNozzlesStr,
     openingReadingsStr,
     closingReadingsStr,
     salesStr,

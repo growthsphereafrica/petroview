@@ -67,6 +67,7 @@ export interface ShiftRow {
   stationId: string
   stationName: string
   status: ShiftStatus
+  assignedNozzles?: string | null
   openedAt: string
   closedAt: string | null
   openingReadings: string
@@ -102,6 +103,7 @@ export interface Shift {
   payments: PaymentsBreakdown
   actualTotal: number
   variance: number
+  assignedNozzles?: string[]
   notes: string | null
   reviewerNotes: string | null
   syncStatus: SyncStatus
@@ -921,12 +923,25 @@ export function seedAllProductionData(): void {
 }
 
 export function deserializeShift(row: ShiftRow): Shift {
+  let assignedNozzles: string[] = []
+  if (row.assignedNozzles) {
+    try {
+      const parsed = JSON.parse(row.assignedNozzles)
+      if (Array.isArray(parsed)) assignedNozzles = parsed
+    } catch {}
+  }
+  const openingReadings = JSON.parse(row.openingReadings) as MeterReading[]
+  if (assignedNozzles.length === 0 && openingReadings && openingReadings.length > 0) {
+    assignedNozzles = openingReadings.map((r, i) => r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (i + 1)} (${r.fuelCode})`)
+  }
+
   return {
     ...row,
+    assignedNozzles,
     status: row.status as ShiftStatus,
     syncStatus: row.syncStatus as SyncStatus,
     payments: JSON.parse(row.payments) as PaymentsBreakdown,
-    openingReadings: JSON.parse(row.openingReadings) as MeterReading[],
+    openingReadings,
     closingReadings: JSON.parse(row.closingReadings) as MeterReading[],
     sales: JSON.parse(row.sales) as FuelSale[],
   }

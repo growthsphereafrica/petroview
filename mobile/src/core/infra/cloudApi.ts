@@ -223,7 +223,8 @@ function toBackendShift(shift: Shift) {
     attendantId: shift.attendantId,
     attendantName: shift.attendantName,
     pumpId: shift.pumpId,
-    pumpName: pumpNameFor(shift.pumpId),
+    pumpName: shift.pumpName || pumpNameFor(shift.pumpId),
+    assignedNozzles: shift.assignedNozzles || (shift.openingReadings ? Object.values(shift.openingReadings).map((r: any, idx) => r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (idx + 1)} (${r.fuelCode})`) : []),
     stationId: shift.stationId,
     stationName: shift.stationName,
     status: shift.status,
@@ -323,6 +324,12 @@ export function fromBackendShift(raw: any): Shift {
     attendantId: raw.attendantId,
     attendantName: raw.attendantName || 'Attendant',
     pumpId: raw.pumpId,
+    pumpName: raw.pumpName || pumpNameFor(raw.pumpId),
+    assignedNozzles: Array.isArray(raw.assignedNozzles)
+      ? raw.assignedNozzles
+      : (typeof raw.assignedNozzles === 'string'
+          ? (JSON.parse(raw.assignedNozzles || '[]') || [])
+          : Object.values(openingReadings).map((r: any, idx) => r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (idx + 1)} (${r.fuelCode})`)),
     openedAt: raw.openedAt || raw.createdAt || new Date().toISOString(),
     closedAt: raw.closedAt || null,
     openingReadings,

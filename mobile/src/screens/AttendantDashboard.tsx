@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag } from 'lucide-react-native'
+import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag, Building2 } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
@@ -436,6 +436,8 @@ export const AttendantDashboard: React.FC<{
       <OpenShiftModal
         visible={openModal}
         pumps={stationPumps}
+        stationName={session.stationName}
+        companyName={session.companyName || session.companyShortCode}
         onClose={() => setOpenModal(false)}
         onConfirm={async (pumpId, openingReadings) => {
           try {
@@ -622,12 +624,14 @@ export const AttendantDashboard: React.FC<{
 const OpenShiftModal: React.FC<{
   visible: boolean
   pumps?: ProductionPumpConfig[]
+  stationName?: string
+  companyName?: string
   onClose: () => void
   onConfirm: (
     pumpId: string,
     openingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>,
   ) => Promise<void>
-}> = ({ visible, pumps, onClose, onConfirm }) => {
+}> = ({ visible, pumps, stationName, companyName, onClose, onConfirm }) => {
   const availablePumps = pumps && pumps.length > 0 ? pumps : PRODUCTION_PUMPS
   const [pumpId, setPumpId] = useState(() => availablePumps[0]?.id || 'pump-1')
   const [readings, setReadings] = useState<Record<number, string>>({})
@@ -643,21 +647,29 @@ const OpenShiftModal: React.FC<{
   const selectedPump = availablePumps.find(p => p.id === pumpId) || availablePumps[0] || { id: 'pump-1', name: 'Pump 1', fuels: ['PMS'] }
   const derivedNozzles = React.useMemo(() => deriveNozzlesForPump(selectedPump), [selectedPump])
 
+  // Explicit nozzle selection: do NOT auto-select all nozzles
   const [selectedNozzleIndices, setSelectedNozzleIndices] = useState<number[]>([])
 
-  // Reset selected nozzles when pump changes
+  // Reset selected nozzles to empty when pump changes — attendant must explicitly select nozzle(s)
   useEffect(() => {
-    setSelectedNozzleIndices(derivedNozzles.map(n => n.nozzleIndex))
-  }, [pumpId, derivedNozzles])
+    setSelectedNozzleIndices([])
+  }, [pumpId])
 
   const toggleNozzleIndex = (idx: number) => {
     setSelectedNozzleIndices(prev => {
       if (prev.includes(idx)) {
-        if (prev.length === 1) return prev // keep at least 1 nozzle selected
         return prev.filter(x => x !== idx)
       }
       return [...prev, idx].sort((a, b) => a - b)
     })
+  }
+
+  const toggleAllNozzles = () => {
+    if (selectedNozzleIndices.length === derivedNozzles.length) {
+      setSelectedNozzleIndices([])
+    } else {
+      setSelectedNozzleIndices(derivedNozzles.map(n => n.nozzleIndex))
+    }
   }
 
   useEffect(() => {
@@ -744,6 +756,27 @@ const OpenShiftModal: React.FC<{
       <View style={styles.modalBack}>
         <Card style={[styles.modalCard, { maxHeight: '90%' }]}>
           <ScrollView showsVerticalScrollIndicator={false}>
+            {/* OMC & Branch Header Banner */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 6,
+                backgroundColor: 'rgba(249, 115, 22, 0.1)',
+                borderColor: 'rgba(249, 115, 22, 0.3)',
+                borderWidth: 1,
+                borderRadius: 8,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                marginBottom: 10,
+              }}
+            >
+              <Building2 size={13} color={colors.flame} />
+              <Text style={{ color: colors.flame, fontSize: 11, fontWeight: '800' }} numberOfLines={1}>
+                {companyName || 'OMC'} · {stationName || 'Forecourt Branch'}
+              </Text>
+            </View>
+
             <Text style={styles.modalTitle}>Open Shift & Assign Dispenser</Text>
             <Text style={styles.modalSub}>Select your forecourt dispenser and operating nozzle(s)</Text>
 
@@ -770,11 +803,31 @@ const OpenShiftModal: React.FC<{
             </View>
 
             {/* Nozzle Selector */}
-            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>
-              2. SELECT OPERATING NOZZLE(S)
-            </Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+              <Text style={styles.fieldLabel}>
+                2. SELECT OPERATING NOZZLE(S)
+              </Text>
+              {derivedNozzles.length > 1 && (
+                <Pressable
+                  onPress={toggleAllNozzles}
+                  style={{
+                    backgroundColor: colors.panel2,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 6,
+                  }}
+                >
+                  <Text style={{ color: colors.amber, fontSize: 10, fontWeight: '800' }}>
+                    {selectedNozzleIndices.length === derivedNozzles.length ? 'Deselect All' : 'Select All'}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+
             <Text style={{ color: colors.textDim, fontSize: 11, marginTop: 2, marginBottom: 6 }}>
-              Tap to toggle nozzle(s) if sharing this dispenser with another attendant:
+              Tap to select nozzle(s) you are operating (select 1, multiple, or all):
             </Text>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
               {derivedNozzles.map(noz => {
@@ -808,7 +861,29 @@ const OpenShiftModal: React.FC<{
               })}
             </View>
 
-            {autoFilled && (
+            {/* Warning if no nozzle is selected */}
+            {selectedNozzleIndices.length === 0 && (
+              <View
+                style={{
+                  backgroundColor: 'rgba(234, 179, 8, 0.1)',
+                  borderColor: 'rgba(234, 179, 8, 0.35)',
+                  borderWidth: 1,
+                  borderRadius: 10,
+                  padding: 10,
+                  marginTop: 10,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <Text style={{ fontSize: 13 }}>⚠️</Text>
+                <Text style={{ color: colors.amber, fontSize: 11, fontWeight: '700', flex: 1 }}>
+                  Tap your assigned nozzle(s) above to select them before opening shift.
+                </Text>
+              </View>
+            )}
+
+            {autoFilled && activeNozzles.length > 0 && (
               <View
                 style={{
                   backgroundColor: 'rgba(34, 197, 94, 0.1)',
@@ -829,28 +904,42 @@ const OpenShiftModal: React.FC<{
             <Text style={[styles.fieldLabel, { marginTop: 14 }]}>
               3. ENTER OPENING METER READING(S)
             </Text>
-            <View style={{ marginTop: 6, gap: 10 }}>
-              {activeNozzles.map(noz => {
-                return (
-                  <View key={`nozzle-${noz.nozzleIndex}`} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
-                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 12, marginBottom: 4 }}>
-                      {noz.name.toUpperCase()} OPENING METER
-                    </Text>
-                    <StyledTextInput
-                      value={readings[noz.nozzleIndex] ?? ''}
-                      onChangeText={t => setReadings(prev => ({ ...prev, [noz.nozzleIndex]: t.replace(/[^0-9.]/g, '') }))}
-                      placeholder="Enter opening meter (e.g. 12500.00)"
-                      keyboardType="number-pad"
-                    />
-                  </View>
-                )
-              })}
-            </View>
+            {activeNozzles.length === 0 ? (
+              <View style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 12, marginTop: 6 }}>
+                <Text style={{ color: colors.textFaint, fontSize: 11, fontStyle: 'italic', textAlign: 'center' }}>
+                  No nozzles selected yet. Please select your operating nozzle(s) in step 2 above to enter opening meter readings.
+                </Text>
+              </View>
+            ) : (
+              <View style={{ marginTop: 6, gap: 10 }}>
+                {activeNozzles.map(noz => {
+                  return (
+                    <View key={`nozzle-${noz.nozzleIndex}`} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
+                      <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 12, marginBottom: 4 }}>
+                        {noz.name.toUpperCase()} OPENING METER
+                      </Text>
+                      <StyledTextInput
+                        value={readings[noz.nozzleIndex] ?? ''}
+                        onChangeText={t => setReadings(prev => ({ ...prev, [noz.nozzleIndex]: t.replace(/[^0-9.]/g, '') }))}
+                        placeholder="Enter opening meter (e.g. 12500.00)"
+                        keyboardType="number-pad"
+                      />
+                    </View>
+                  )
+                })}
+              </View>
+            )}
 
             <PrimaryButton
-              title={busy ? 'Starting Shift…' : `Confirm & Start Shift (${activeNozzles.length} Nozzle${activeNozzles.length > 1 ? 's' : ''})`}
+              title={
+                busy
+                  ? 'Starting Shift…'
+                  : selectedNozzleIndices.length === 0
+                  ? 'Select Nozzle(s) to Continue'
+                  : `Confirm & Start Shift (${activeNozzles.length} Nozzle${activeNozzles.length > 1 ? 's' : ''})`
+              }
               onPress={async () => {
-                if (!allFilled) return
+                if (!allFilled || selectedNozzleIndices.length === 0) return
                 setBusy(true)
                 const out: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
                 activeNozzles.forEach((noz) => {
@@ -865,7 +954,7 @@ const OpenShiftModal: React.FC<{
                 await onConfirm(pumpId, out)
                 setBusy(false)
               }}
-              disabled={!allFilled || busy}
+              disabled={!allFilled || selectedNozzleIndices.length === 0 || busy}
               tone="emerald"
               style={{ marginTop: 18 }}
             />

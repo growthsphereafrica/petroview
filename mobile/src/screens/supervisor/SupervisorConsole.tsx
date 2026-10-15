@@ -25,7 +25,7 @@ import { FuelPricesTab } from './FuelPricesTab'
 import { ExpensesSheet } from './ExpensesSheet'
 import { supervisorService } from '../../core/services/supervisorService'
 import { cloudGetTankReadings, cloudGetPumps, pumpNameFor } from '../../core/infra/cloudApi'
-import { registerStationPumps } from '../../core/domain/config'
+import { registerStationPumps, formatShiftNozzles, extractShiftNozzlesList } from '../../core/domain/config'
 import type { Shift, Attendant } from '../../core/domain/types'
 import { formatGHS, formatLitres, formatDateTime } from '../../shared/currencyFormatter'
 import type { MobileSession } from '../LoginScreen'
@@ -392,8 +392,12 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
                   </View>
                 )}
               </View>
-              <Text style={styles.rowSub}>{s.attendantName} · {pumpNameFor(s.pumpId)} · {s.stationName}</Text>
-              <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '700' }]}>{formatGHS(s.actualTotal)}</Text>
+              <Text style={[styles.rowSub, { color: colors.text, fontWeight: '700' }]}>Attendant: {s.attendantName}</Text>
+              <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '600', marginTop: 1 }]}>
+                {s.pumpName || pumpNameFor(s.pumpId)} · Nozzles: {formatShiftNozzles(s)}
+              </Text>
+              <Text style={[styles.rowSub, { fontSize: 10, color: colors.textDim }]}>{s.stationName}</Text>
+              <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '800', marginTop: 2 }]}>{formatGHS(s.actualTotal)}</Text>
             </View>
             <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
           </Pressable>
@@ -431,19 +435,20 @@ const ShiftDetailModal: React.FC<{
   const [mode, setMode] = useState<'idle' | 'approve' | 'reject'>('idle')
   const [rejectNote, setRejectNote] = useState('')
 
-  // Compute Nozzle Breakdown
-  const fuels = shift.openingReadings
-    ? Object.keys(shift.openingReadings)
-    : shift.sales.map(s => s.fuelCode)
-
-  const nozzleAudit = fuels.map(fuel => {
-    const opening = shift.openingReadings?.[fuel]?.value ?? 0
-    const closing = shift.closingReadings?.[fuel]?.value ?? 0
-    const saleMatch = shift.sales.find(s => s.fuelCode === fuel)
-    const litres = saleMatch?.litres ?? (closing >= opening && closing > 0 ? closing - opening : 0)
-    const unitPrice = saleMatch?.unitPrice ?? 14.80
-    const amount = saleMatch?.amount ?? litres * unitPrice
-    return { fuel, opening, closing, litres, unitPrice, amount }
+  // Compute Nozzle Breakdown using robust extractShiftNozzlesList
+  const nozzleAudit = extractShiftNozzlesList(shift).map(n => {
+    const saleMatch = shift.sales.find(s => s.fuelCode === n.fuelCode)
+    const unitPrice = saleMatch?.unitPrice ?? (n.fuelCode === 'AGO' ? 15.20 : 14.80)
+    const amount = saleMatch?.amount ?? Math.round(n.litres * unitPrice * 100) / 100
+    return {
+      fuel: n.fuelCode,
+      label: n.nozzleLabel,
+      opening: n.openingValue,
+      closing: n.closingValue,
+      litres: n.litres,
+      unitPrice,
+      amount,
+    }
   })
 
   const totalVol = shift.sales.length > 0
@@ -459,8 +464,14 @@ const ShiftDetailModal: React.FC<{
             <View style={styles.cardHeader}>
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.modalTitle}>{shift.number}</Text>
-                <Text style={styles.modalSub}>
-                  {shift.attendantName} · {shift.stationName} · {pumpNameFor(shift.pumpId)}
+                <Text style={[styles.modalSub, { color: colors.text, fontWeight: '800', marginTop: 2 }]}>
+                  Attendant: {shift.attendantName}
+                </Text>
+                <Text style={[styles.modalSub, { color: colors.emerald, fontWeight: '600', marginTop: 1 }]}>
+                  Dispenser: {shift.pumpName || pumpNameFor(shift.pumpId)} · Nozzles: {formatShiftNozzles(shift)}
+                </Text>
+                <Text style={[styles.modalSub, { fontSize: 10, color: colors.textDim }]}>
+                  {shift.stationName}
                 </Text>
               </View>
               <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
@@ -485,16 +496,16 @@ const ShiftDetailModal: React.FC<{
             </View>
 
             {/* Forecourt Meter Audit */}
-            <Text style={styles.subSectionTitle}>FORECOURT METER AUDIT</Text>
+            <Text style={styles.subSectionTitle}>FORECOURT DISPENSER & NOZZLE AUDIT ({shift.pumpName || pumpNameFor(shift.pumpId)})</Text>
             <View style={{ gap: 8, marginBottom: 12 }}>
               {nozzleAudit.map(n => (
-                <View key={n.fuel} style={styles.nozzleBox}>
+                <View key={`${n.fuel}-${n.label}`} style={styles.nozzleBox}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{n.fuel} Nozzle</Text>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{n.label}</Text>
                     <Text style={{ color: colors.text, fontWeight: '800', fontSize: 12 }}>
                       {formatGHS(n.amount)}
                     </Text>
-                  </View>
+                  </div>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
                     <Text style={{ color: colors.textDim, fontSize: 10 }}>
                       Open: <Text style={{ color: colors.text }}>{n.opening.toFixed(2)}</Text> → Close: <Text style={{ color: colors.text }}>{n.closing > 0 ? n.closing.toFixed(2) : '—'}</Text>

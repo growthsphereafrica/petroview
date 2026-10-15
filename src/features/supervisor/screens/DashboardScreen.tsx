@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react'
 import { Building2, ClipboardCheck, DollarSign, Droplets, Flame, Fuel, History, LogOut, Receipt, RefreshCw, Settings, ShieldAlert, TrendingDown, Users, Wifi } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
-import { getStationName, PRODUCTION_STATIONS, getStationById } from '../../../core/domain/config'
+import { getStationName, PRODUCTION_STATIONS, getStationById, formatShiftNozzles } from '../../../core/domain/config'
 import { Badge, Card, StatusBar, TappableRow } from '../../shared/ui'
 import { formatGHS, formatLitres, formatTimeOnly } from '../../../utils/currencyFormatter'
 import { backendRecordTankReadings, backendGetTankReadings } from '../../../services/backendApiService'
@@ -288,7 +288,7 @@ export const SupervisorDashboardScreen: React.FC<{
                   key={s.id}
                   icon={<ClipboardCheck className="w-4 h-4" />}
                   title={`${s.number} · ${s.attendantName}`}
-                  subtitle={`${getStationById(s.stationId).name} · ${s.pumpName} · ${formatTimeOnly(s.openedAt)}`}
+                  subtitle={`${s.pumpName || 'Pump'} · Nozzles: ${formatShiftNozzles(s)} · ${formatTimeOnly(s.openedAt)}`}
                   value={formatGHS(s.actualTotal)}
                   onClick={() => onOpenShift(s.id)}
                   accent="#F97316"

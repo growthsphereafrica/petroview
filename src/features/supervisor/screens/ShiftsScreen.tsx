@@ -4,10 +4,11 @@
  */
 
 import React, { useMemo, useState } from 'react'
-import { ClipboardCheck } from 'lucide-react'
+import { ClipboardCheck, Fuel, Gauge, User, ChevronRight } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
-import { Card, ScreenHeader, StatusBar, TappableRow } from '../../shared/ui'
-import { PRODUCTION_STATIONS, getStationById, getStationName } from '../../../core/domain/config'
+import { Badge, Card, ScreenHeader, StatusBar } from '../../shared/ui'
+import { shiftStatusLabel, shiftStatusTone } from '../util'
+import { PRODUCTION_STATIONS, getStationById, getStationName, formatShiftNozzles } from '../../../core/domain/config'
 import { formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
 import type { ShiftStatus } from '../../../core/domain/types'
 
@@ -121,15 +122,59 @@ export const SupervisorShiftsScreen: React.FC<{
         ) : (
           <Card className="divide-y divide-slate-800/70 overflow-hidden">
             {filtered.map(s => (
-              <TappableRow
+              <div
                 key={s.id}
-                icon={<ClipboardCheck className="w-4 h-4" />}
-                title={`${s.number} · ${s.attendantName}`}
-                subtitle={`${getStationById(s.stationId).name} · ${s.pumpName} · ${formatTimeOnly(s.openedAt)}`}
-                value={formatGHS(s.actualTotal)}
                 onClick={() => onOpenShift(s.id)}
-                accent="#F97316"
-              />
+                className="p-3.5 sm:p-4 hover:bg-slate-800/40 transition cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+              >
+                <div className="flex items-start gap-3 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center shrink-0 mt-0.5">
+                    <ClipboardCheck className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-extrabold text-white">{s.number}</span>
+                      <Badge tone={shiftStatusTone(s.status)}>{shiftStatusLabel(s.status)}</Badge>
+                      {s.notes && s.notes.includes('Resubmitted') && (
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                          🔄 Resubmitted
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Attendant & Dispenser Pump & Nozzle Details */}
+                    <div className="flex items-center gap-1.5 mt-1.5 flex-wrap text-[11px]">
+                      <span className="inline-flex items-center gap-1 text-slate-200 font-bold bg-slate-800 px-2 py-0.5 rounded-md border border-slate-700">
+                        <User className="w-3 h-3 text-orange-400" />
+                        <span>Attendant: {s.attendantName}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-emerald-300 font-semibold bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-800/40">
+                        <Fuel className="w-3 h-3 text-emerald-400" />
+                        <span>{s.pumpName || 'Pump'}</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-sky-300 font-semibold bg-sky-950/40 px-2 py-0.5 rounded-md border border-sky-800/40">
+                        <Gauge className="w-3 h-3 text-sky-400" />
+                        <span>Nozzles: {formatShiftNozzles(s)}</span>
+                      </span>
+                    </div>
+
+                    <p className="text-[10px] text-slate-500 mt-1">
+                      {getStationById(s.stationId).name} · Opened {formatTimeOnly(s.openedAt)}
+                      {s.closedAt ? ` · Closed ${formatTimeOnly(s.closedAt)}` : ''}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between sm:justify-end gap-3 self-end sm:self-center shrink-0">
+                  <div className="text-right">
+                    <span className="block text-sm font-black text-white font-mono">{formatGHS(s.actualTotal)}</span>
+                    <span className={`block text-[10px] font-mono font-bold ${s.variance === 0 ? 'text-emerald-400' : Math.abs(s.variance) < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                      Var: {formatGHS(s.variance, { showSign: true })}
+                    </span>
+                  </div>
+                  <ChevronRight className="w-4 h-4 text-slate-600" />
+                </div>
+              </div>
             ))}
           </Card>
         )}

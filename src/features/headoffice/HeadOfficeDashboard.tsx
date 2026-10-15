@@ -46,6 +46,11 @@ import {
   Plus,
   Receipt,
   TrendingDown,
+  ClipboardCheck,
+  Eye,
+  Gauge,
+  User,
+  X,
 } from 'lucide-react'
 import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../core/services/rollupService'
 import { supervisorService } from '../../core/services/supervisorService'
@@ -55,9 +60,9 @@ import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { shiftStatusLabel, shiftStatusTone } from '../supervisor/util'
 import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS, formatLitres } from '../../utils/currencyFormatter'
-import { PRODUCTION_STATIONS, getStationName } from '../../core/domain/config'
+import { PRODUCTION_STATIONS, getStationName, formatShiftNozzles, extractShiftNozzlesList, FUEL_META, PAYMENT_META } from '../../core/domain/config'
 import { loadUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
-import type { Attendant, Supervisor, Product, ProductCategory, StationExpense } from '../../core/domain/types'
+import type { Attendant, Supervisor, Product, ProductCategory, StationExpense, Shift } from '../../core/domain/types'
 import {
   exportReportToPdf,
   exportReportToExcel,
@@ -88,6 +93,7 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
   const [customStartDate, setCustomStartDate] = useState(new Date().toISOString().slice(0, 10))
   const [customEndDate, setCustomEndDate] = useState(new Date().toISOString().slice(0, 10))
   const [refreshing, setRefreshing] = useState(false)
+  const [auditShift, setAuditShift] = useState<Shift | null>(null)
 
   // Products & Fuel Pricing State (scoped to company)
   const [products, setProducts] = useState<Product[]>([])
@@ -1015,6 +1021,89 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 )}
               </Card>
             </div>
+          </div>
+
+          {/* Forecourt Shift Submissions & Dispenser/Nozzle Audit Ledger */}
+          <div className="mt-2">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-400 flex items-center gap-1.5">
+                <Fuel className="w-4 h-4 text-orange-400" />
+                <span>Forecourt Shift Submissions & Dispenser/Nozzle Audit</span>
+              </h4>
+              <span className="text-[10px] text-slate-500 font-mono">
+                Showing latest submissions for {companyName}
+              </span>
+            </div>
+
+            <Card className="divide-y divide-slate-800/70 overflow-hidden">
+              {!summary.recentShifts || summary.recentShifts.length === 0 ? (
+                <div className="p-6 text-center text-xs text-slate-500">
+                  <ClipboardCheck className="w-6 h-6 text-slate-600 mx-auto mb-1.5" />
+                  No forecourt shifts submitted yet in this period.
+                </div>
+              ) : (
+                summary.recentShifts.map(s => (
+                  <div
+                    key={s.id}
+                    onClick={() => setAuditShift(s)}
+                    className="p-3.5 sm:p-4 hover:bg-slate-800/40 transition cursor-pointer flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div className="flex items-start gap-3 min-w-0">
+                      <div className="w-9 h-9 rounded-xl bg-orange-500/10 border border-orange-500/20 text-orange-400 flex items-center justify-center shrink-0 mt-0.5">
+                        <Fuel className="w-4 h-4" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-extrabold text-white">{s.number}</span>
+                          <Badge tone={shiftStatusTone(s.status)}>{shiftStatusLabel(s.status)}</Badge>
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            {s.stationName || getStationName(s.stationId)}
+                          </span>
+                        </div>
+
+                        {/* Attendant, Pump, and Nozzle Visibility for Head Office */}
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap text-[11px]">
+                          <span className="inline-flex items-center gap-1 text-slate-200 font-bold bg-slate-800 px-2 py-0.5 rounded-md border border-slate-700">
+                            <User className="w-3 h-3 text-orange-400" />
+                            <span>Attendant: {s.attendantName}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-emerald-300 font-semibold bg-emerald-950/40 px-2 py-0.5 rounded-md border border-emerald-800/40">
+                            <Fuel className="w-3 h-3 text-emerald-400" />
+                            <span>{s.pumpName || 'Pump'}</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-sky-300 font-semibold bg-sky-950/40 px-2 py-0.5 rounded-md border border-sky-800/40">
+                            <Gauge className="w-3 h-3 text-sky-400" />
+                            <span>Nozzles: {formatShiftNozzles(s)}</span>
+                          </span>
+                        </div>
+
+                        <p className="text-[10px] text-slate-500 mt-1">
+                          Opened {formatDateTime(s.openedAt)}
+                          {s.closedAt ? ` · Closed ${formatDateTime(s.closedAt)}` : ''}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-3 self-end sm:self-center shrink-0">
+                      <div className="text-right">
+                        <span className="block text-sm font-black text-white font-mono">{formatGHS(s.actualTotal)}</span>
+                        <span className={`block text-[10px] font-mono font-bold ${s.variance === 0 ? 'text-emerald-400' : Math.abs(s.variance) < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                          Var: {formatGHS(s.variance, { showSign: true })}
+                        </span>
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setAuditShift(s); }}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition flex items-center gap-1 text-xs font-bold"
+                        title="Audit Nozzle Readings"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-orange-400" />
+                        <span className="hidden sm:inline">Inspect</span>
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </Card>
           </div>
         </div>
       )}
@@ -2145,6 +2234,153 @@ export const ProductionHeadOfficeDashboard: React.FC<{ session?: UnifiedSession 
                 {editStaffBusy ? 'Saving…' : 'Save Changes'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Head Office Shift & Nozzle Audit Modal */}
+      {auditShift && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl p-5 shadow-2xl animate-in fade-in my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+              <div className="flex items-center gap-2">
+                <Fuel className="w-5 h-5 text-orange-400" />
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-extrabold text-white">Shift Audit: {auditShift.number}</h3>
+                    <Badge tone={shiftStatusTone(auditShift.status)}>{shiftStatusLabel(auditShift.status)}</Badge>
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-mono">
+                    {companyName} · {auditShift.stationName || getStationName(auditShift.stationId)}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setAuditShift(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Forecourt Origin Cards */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+                <span className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                  <User className="w-3 h-3 text-orange-400" /> Attendant
+                </span>
+                <p className="text-xs font-black text-white mt-0.5">{auditShift.attendantName}</p>
+                <p className="text-[10px] font-mono text-slate-500">{auditShift.attendantId}</p>
+              </div>
+
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+                <span className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                  <Fuel className="w-3 h-3 text-emerald-400" /> Dispenser Pump
+                </span>
+                <p className="text-xs font-black text-emerald-300 mt-0.5">{auditShift.pumpName || 'Pump'}</p>
+                <p className="text-[10px] text-slate-500">{auditShift.stationName || getStationName(auditShift.stationId)}</p>
+              </div>
+
+              <div className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+                <span className="text-[9px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                  <Gauge className="w-3 h-3 text-sky-400" /> Operating Nozzles
+                </span>
+                <p className="text-xs font-bold text-sky-300 mt-0.5">{formatShiftNozzles(auditShift)}</p>
+                <p className="text-[10px] text-slate-500">
+                  {extractShiftNozzlesList(auditShift).length} active nozzle(s)
+                </p>
+              </div>
+            </div>
+
+            {/* Forecourt Dispenser & Nozzle Meter Audit Table */}
+            <div className="mb-4">
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1">
+                <Gauge className="w-3.5 h-3.5 text-sky-400" />
+                <span>Forecourt Dispenser & Nozzle Meter Audit</span>
+              </h4>
+              <div className="flex flex-col gap-2">
+                {extractShiftNozzlesList(auditShift).map(n => {
+                  const saleMatch = auditShift.sales.find(s => s.fuelCode === n.fuelCode)
+                  const unitPrice = saleMatch?.unitPrice ?? 14.8
+                  const amount = saleMatch?.amount ?? Math.round(n.litres * unitPrice * 100) / 100
+                  return (
+                    <div key={`${n.nozzleIndex}-${n.fuelCode}`} className="rounded-xl bg-slate-950 border border-slate-800 p-3">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="px-2 py-0.5 rounded text-[10px] font-black text-white"
+                            style={{ backgroundColor: FUEL_META[n.fuelCode]?.color ?? '#334155' }}
+                          >
+                            {n.fuelCode}
+                          </span>
+                          <span className="text-xs font-bold text-white">{n.nozzleLabel}</span>
+                        </div>
+                        <span className="text-xs font-mono font-black text-emerald-400">
+                          {formatGHS(amount)}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] pt-1.5 border-t border-slate-800/80">
+                        <div>
+                          <span className="text-slate-500 block uppercase font-bold text-[8px]">Opening Meter</span>
+                          <span className="font-mono text-slate-300 font-bold">{n.openingValue.toFixed(2)}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block uppercase font-bold text-[8px]">Closing Meter</span>
+                          <span className="font-mono text-slate-300 font-bold">{n.closingValue > 0 ? n.closingValue.toFixed(2) : '—'}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block uppercase font-bold text-[8px]">Volume Dispensed</span>
+                          <span className="font-mono text-emerald-400 font-extrabold">{formatLitres(n.litres)} L</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-500 block uppercase font-bold text-[8px]">Rate</span>
+                          <span className="font-mono text-slate-400">GHS {unitPrice.toFixed(2)}/L</span>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* Financial Reconciliation */}
+            <div className="rounded-xl bg-slate-950 border border-slate-800 p-3 mb-4">
+              <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">
+                Payment Remittance & Variance
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Cash</span>
+                  <span className="font-mono text-white font-bold">{formatGHS(auditShift.payments?.CASH ?? 0)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">MoMo</span>
+                  <span className="font-mono text-white font-bold">{formatGHS(auditShift.payments?.MOMO ?? 0)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Voucher / Card</span>
+                  <span className="font-mono text-white font-bold">{formatGHS(auditShift.payments?.VOUCHER ?? 0)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block text-[9px] uppercase font-bold">Credit</span>
+                  <span className="font-mono text-white font-bold">{formatGHS(auditShift.payments?.CREDIT ?? 0)}</span>
+                </div>
+              </div>
+              <div className="mt-2.5 pt-2 border-t border-slate-800 flex items-center justify-between text-xs">
+                <span className="text-slate-400 font-bold">Total Collection: <span className="text-white font-mono">{formatGHS(auditShift.actualTotal)}</span></span>
+                <span className={`font-mono font-black ${auditShift.variance === 0 ? 'text-emerald-400' : Math.abs(auditShift.variance) < 5 ? 'text-amber-400' : 'text-rose-400'}`}>
+                  Variance: {formatGHS(auditShift.variance, { showSign: true })}
+                </span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setAuditShift(null)}
+              className="w-full rounded-xl bg-slate-800 hover:bg-slate-700 text-white py-2 text-xs font-bold transition"
+            >
+              Close Shift Audit
+            </button>
           </div>
         </div>
       )}

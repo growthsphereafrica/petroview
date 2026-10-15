@@ -54,6 +54,90 @@ export function deriveNozzlesForPump(pump: ProductionPumpConfig): PumpNozzleConf
   })
 }
 
+export interface ShiftNozzleDetail {
+  nozzleLabel: string
+  nozzleIndex: number
+  fuelCode: FuelCode
+  openingValue: number
+  closingValue: number
+  litres: number
+}
+
+/**
+ * Returns a human-readable list of nozzles operated in a shift
+ * (e.g. "Nozzle 1 (PMS), Nozzle 2 (AGO)" or "Side 1, Side 2").
+ */
+export function formatShiftNozzles(shift: {
+  assignedNozzles?: string[] | number[]
+  openingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any>
+  closingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any>
+}): string {
+  if (Array.isArray(shift.assignedNozzles) && shift.assignedNozzles.length > 0) {
+    return shift.assignedNozzles.map(String).join(', ')
+  }
+  const getArray = (v: any) => (Array.isArray(v) ? v : (v && typeof v === 'object' ? Object.values(v) : []))
+  const openings = getArray(shift.openingReadings)
+  const closings = getArray(shift.closingReadings)
+  const readings = openings.length > 0 ? openings : closings
+
+  if (!readings || readings.length === 0) return 'Standard'
+  const labels: string[] = []
+  readings.forEach((r: any, idx: number) => {
+    const label = r.nozzleLabel || `Nozzle ${r.nozzleIndex ?? (idx + 1)}${r.fuelCode ? ` (${r.fuelCode})` : ''}`
+    if (!labels.includes(label)) labels.push(label)
+  })
+  return labels.length > 0 ? labels.join(', ') : 'Standard'
+}
+
+/**
+ * Extracts per-nozzle meter reading audit rows for a shift
+ */
+export function extractShiftNozzlesList(shift: {
+  openingReadings?: any
+  closingReadings?: any
+  sales?: any[]
+}): ShiftNozzleDetail[] {
+  const getArray = (v: any) => (Array.isArray(v) ? v : (v && typeof v === 'object' ? Object.values(v) : []))
+  const openings = getArray(shift.openingReadings)
+  const closings = getArray(shift.closingReadings)
+
+  if (openings.length === 0 && closings.length === 0) {
+    if (Array.isArray(shift.sales)) {
+      return shift.sales.map((s: any, idx: number) => ({
+        nozzleLabel: `${s.fuelCode} Nozzle`,
+        nozzleIndex: idx + 1,
+        fuelCode: (s.fuelCode || 'PMS') as FuelCode,
+        openingValue: 0,
+        closingValue: Number(s.litres || 0),
+        litres: Number(s.litres || 0),
+      }))
+    }
+    return []
+  }
+
+  return openings.map((o: any, idx: number) => {
+    const nozzleIndex = o.nozzleIndex ?? (idx + 1)
+    const fuelCode = (o.fuelCode || 'PMS') as FuelCode
+    const nozzleLabel = o.nozzleLabel || `Nozzle ${nozzleIndex} (${fuelCode})`
+    const openVal = Number(o.value || 0)
+    const matchedClosing = closings.find((c: any, cIdx: number) => {
+      if (c.nozzleIndex !== undefined && o.nozzleIndex !== undefined) return c.nozzleIndex === o.nozzleIndex
+      if (c.nozzleLabel && o.nozzleLabel) return c.nozzleLabel === o.nozzleLabel
+      return cIdx === idx
+    })
+    const closeVal = matchedClosing ? Number(matchedClosing.value || 0) : 0
+    const litres = closeVal >= openVal && closeVal > 0 ? Math.round((closeVal - openVal) * 100) / 100 : 0
+    return {
+      nozzleLabel,
+      nozzleIndex,
+      fuelCode,
+      openingValue: openVal,
+      closingValue: closeVal,
+      litres,
+    }
+  })
+}
+
 export interface ProductionStationEntry {
   id: string
   name: string

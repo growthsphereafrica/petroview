@@ -26,11 +26,18 @@ import {
   ChevronRight,
   TrendingUp,
   Tag,
+  ClipboardCheck,
+  User,
+  Gauge,
+  Eye,
+  X,
 } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, Badge, PrimaryButton, StyledTextInput } from '../components/ui'
 import { rollupService, type HqSummary } from '../core/services/rollupService'
-import { getCloudApiBase, getCloudToken } from '../core/infra/cloudApi'
+import { getCloudApiBase, getCloudToken, pumpNameFor } from '../core/infra/cloudApi'
+import { formatShiftNozzles, extractShiftNozzlesList } from '../core/domain/config'
+import type { Shift } from '../core/domain/types'
 import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
 import type { MobileSession } from './LoginScreen'
 
@@ -57,6 +64,7 @@ export const HeadOfficeDashboard: React.FC<{
   const [approvingId, setApprovingId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [selectedAuditShift, setSelectedAuditShift] = useState<Shift | null>(null)
 
   // Pricing State
   const [pricingModal, setPricingModal] = useState(false)
@@ -214,6 +222,52 @@ export const HeadOfficeDashboard: React.FC<{
                     </View>
                   ))}
                 </Card>
+
+                {/* Forecourt Shift Submissions & Dispenser/Nozzle Audit */}
+                <View style={styles.cardHeader}>
+                  <Text style={styles.sectionTitle}>FORECOURT SHIFT SUBMISSIONS & NOZZLE AUDIT</Text>
+                  <Pressable onPress={() => setTab('audit')}>
+                    <Text style={styles.linkText}>View all ›</Text>
+                  </Pressable>
+                </View>
+
+                <Card style={styles.listCard}>
+                  {(data?.recentShifts ?? []).slice(0, 6).map(s => (
+                    <Pressable key={s.id} onPress={() => setSelectedAuditShift(s)} style={styles.row}>
+                      <View style={{ flex: 1, paddingRight: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={styles.rowTitle}>{s.number}</Text>
+                          <Badge tone={s.status === 'APPROVED' ? 'success' : s.status === 'CLOSED' ? 'warning' : 'default'}>
+                            {s.status}
+                          </Badge>
+                          <Text style={{ fontSize: 10, color: colors.textDim }}>{s.stationName}</Text>
+                        </View>
+
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.panel2, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 }}>
+                            <User size={10} color={colors.flame} />
+                            <Text style={{ fontSize: 10, color: colors.text, fontWeight: '700' }}>{s.attendantName}</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.panel2, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 }}>
+                            <Fuel size={10} color={colors.emerald} />
+                            <Text style={{ fontSize: 10, color: colors.emerald, fontWeight: '700' }}>{s.pumpName || pumpNameFor(s.pumpId)}</Text>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 3, backgroundColor: colors.panel2, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5 }}>
+                            <Gauge size={10} color={colors.blue} />
+                            <Text style={{ fontSize: 10, color: colors.blue, fontWeight: '700' }}>Nozzles: {formatShiftNozzles(s)}</Text>
+                          </View>
+                        </View>
+                      </View>
+                      <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                        <Text style={[styles.rowTitle, { color: colors.emerald }]}>{formatGHS(s.actualTotal)}</Text>
+                        <View style={[styles.miniBtn, { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 3 }]}>
+                          <Eye size={11} color={colors.emerald} />
+                          <Text style={{ fontSize: 10, color: colors.emerald, fontWeight: '800' }}>Audit</Text>
+                        </View>
+                      </View>
+                    </Pressable>
+                  ))}
+                </Card>
               </View>
             )}
 
@@ -329,13 +383,30 @@ export const HeadOfficeDashboard: React.FC<{
                 <Text style={styles.sectionTitle}>HEAD OFFICE AUDIT TRAIL</Text>
                 <Card style={styles.listCard}>
                   {(data?.recentShifts ?? []).map(s => (
-                    <View key={s.id} style={styles.row}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.rowTitle}>{s.number} · {s.attendantName}</Text>
-                        <Text style={styles.rowSub}>{s.stationName} · {formatDateTime(s.closedAt ?? s.openedAt)}</Text>
+                    <Pressable key={s.id} onPress={() => setSelectedAuditShift(s)} style={styles.row}>
+                      <View style={{ flex: 1, paddingRight: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                          <Text style={styles.rowTitle}>{s.number}</Text>
+                          <Badge tone={s.status === 'APPROVED' ? 'success' : s.status === 'CLOSED' ? 'warning' : 'default'}>
+                            {s.status}
+                          </Badge>
+                        </View>
+                        <Text style={[styles.rowSub, { fontWeight: '700', color: colors.text }]}>
+                          Attendant: {s.attendantName} · {s.stationName}
+                        </Text>
+                        <Text style={[styles.rowSub, { color: colors.blue, fontSize: 10 }]}>
+                          {s.pumpName || pumpNameFor(s.pumpId)} · Nozzles: {formatShiftNozzles(s)}
+                        </Text>
+                        <Text style={[styles.rowSub, { fontSize: 10 }]}>{formatDateTime(s.closedAt ?? s.openedAt)}</Text>
                       </View>
-                      <Text style={[styles.rowTitle, { color: colors.emerald }]}>{formatGHS(s.actualTotal)}</Text>
-                    </View>
+                      <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                        <Text style={[styles.rowTitle, { color: colors.emerald }]}>{formatGHS(s.actualTotal)}</Text>
+                        <View style={[styles.miniBtn, { flexDirection: 'row', alignItems: 'center', gap: 3, paddingVertical: 3 }]}>
+                          <Eye size={11} color={colors.emerald} />
+                          <Text style={{ fontSize: 10, color: colors.emerald, fontWeight: '800' }}>Audit</Text>
+                        </View>
+                      </View>
+                    </Pressable>
                   ))}
                 </Card>
               </View>
@@ -397,7 +468,138 @@ export const HeadOfficeDashboard: React.FC<{
           </View>
         </View>
       </Modal>
+      {/* Shift Audit Detail Modal */}
+      {selectedAuditShift && (
+        <ShiftAuditDetailModal
+          shift={selectedAuditShift}
+          onClose={() => setSelectedAuditShift(null)}
+        />
+      )}
     </SafeAreaView>
+  )
+}
+
+const ShiftAuditDetailModal: React.FC<{
+  shift: Shift
+  onClose: () => void
+}> = ({ shift, onClose }) => {
+  const nozzles = extractShiftNozzlesList(shift)
+  const nozzleAudit = nozzles.map(n => {
+    const saleMatch = shift.sales.find(s => s.fuelCode === n.fuelCode)
+    const unitPrice = saleMatch?.unitPrice ?? (n.fuelCode === 'AGO' ? 15.20 : 14.80)
+    const amount = saleMatch?.amount ?? Math.round(n.litres * unitPrice * 100) / 100
+    return {
+      fuel: n.fuelCode,
+      label: n.nozzleLabel,
+      opening: n.openingValue,
+      closing: n.closingValue,
+      litres: n.litres,
+      unitPrice,
+      amount,
+    }
+  })
+
+  return (
+    <Modal visible transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modal}>
+        <View style={[styles.modalCard, { maxHeight: '90%' }]}>
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Header */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+              <View style={{ flex: 1, paddingRight: 8 }}>
+                <Text style={styles.modalTitle}>{shift.number}</Text>
+                <Text style={[styles.modalSub, { color: colors.text, fontWeight: '800', marginTop: 2 }]}>
+                  Attendant: {shift.attendantName}
+                </Text>
+                <Text style={[styles.modalSub, { color: colors.emerald, fontWeight: '600', marginTop: 1 }]}>
+                  Dispenser: {shift.pumpName || pumpNameFor(shift.pumpId)} · Nozzles: {formatShiftNozzles(shift)}
+                </Text>
+                <Text style={[styles.modalSub, { fontSize: 10, color: colors.textDim }]}>
+                  {shift.stationName}
+                </Text>
+              </View>
+              <Badge tone={shift.status === 'APPROVED' ? 'success' : shift.status === 'CLOSED' ? 'warning' : 'default'}>
+                {shift.status}
+              </Badge>
+            </View>
+
+            {/* Timing */}
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', backgroundColor: colors.panel2, padding: 8, borderRadius: 8, marginBottom: 12 }}>
+              <Text style={{ fontSize: 10, color: colors.textFaint }}>Opened: {formatDateTime(shift.openedAt)}</Text>
+              <Text style={{ fontSize: 10, color: colors.textFaint }}>Closed: {formatDateTime(shift.closedAt ?? shift.updatedAt)}</Text>
+            </View>
+
+            {/* Dispenser & Nozzle Audit List */}
+            <Text style={[styles.sectionTitle, { marginBottom: 6 }]}>
+              DISPENSER & NOZZLE AUDIT ({shift.pumpName || pumpNameFor(shift.pumpId)})
+            </Text>
+            <View style={{ gap: 8, marginBottom: 12 }}>
+              {nozzleAudit.map((n, i) => (
+                <View key={`${n.fuel}-${n.label}-${i}`} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10, borderWidth: 1, borderColor: colors.border }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{n.label}</Text>
+                    <Text style={{ color: colors.text, fontWeight: '800', fontSize: 12 }}>
+                      {formatGHS(n.amount)}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 2 }}>
+                    <Text style={{ color: colors.textDim, fontSize: 10 }}>
+                      Open: <Text style={{ color: colors.text }}>{n.opening.toFixed(2)}</Text> → Close: <Text style={{ color: colors.text }}>{n.closing > 0 ? n.closing.toFixed(2) : '—'}</Text>
+                    </Text>
+                    <Text style={{ color: colors.textDim, fontSize: 10 }}>
+                      Sold: <Text style={{ color: colors.emerald, fontWeight: '800' }}>{n.litres.toFixed(2)} L</Text> @ GHS {n.unitPrice.toFixed(2)}/L
+                    </Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+
+            {/* Remittance Breakdown */}
+            <Text style={[styles.sectionTitle, { marginBottom: 6 }]}>PAYMENT REMITTANCE</Text>
+            <View style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 12, gap: 6, marginBottom: 12 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: colors.textDim, fontSize: 12 }}>Cash at Hand</Text>
+                <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>{formatGHS(shift.payments?.CASH ?? 0)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: colors.textDim, fontSize: 12 }}>Mobile Money (MoMo)</Text>
+                <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>{formatGHS(shift.payments?.MOMO ?? 0)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: colors.textDim, fontSize: 12 }}>POS / Cards / Vouchers</Text>
+                <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>{formatGHS(shift.payments?.VOUCHER ?? 0)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: colors.textDim, fontSize: 12 }}>Credit / Invoices</Text>
+                <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>{formatGHS(shift.payments?.CREDIT ?? 0)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', borderTopWidth: 1, borderTopColor: colors.border, paddingTop: 6, marginTop: 4 }}>
+                <Text style={{ color: colors.text, fontWeight: '900', fontSize: 12 }}>Total Remitted</Text>
+                <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{formatGHS(shift.actualTotal)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                <Text style={{ color: colors.text, fontWeight: '900', fontSize: 12 }}>Variance Status</Text>
+                <Text style={{ color: shift.variance === 0 ? colors.emerald : shift.variance > 0 ? colors.blue : colors.rose, fontWeight: '900', fontSize: 12 }}>
+                  {shift.variance === 0 ? 'Balanced' : shift.variance > 0 ? `+${formatGHS(shift.variance)} Overage` : `${formatGHS(shift.variance)} Shortage`}
+                </Text>
+              </View>
+            </View>
+
+            {/* Attendant Notes */}
+            {shift.reviewNotes ? (
+              <View style={{ backgroundColor: 'rgba(249, 115, 22, 0.08)', borderColor: colors.flame, borderWidth: 1, borderRadius: 10, padding: 10, marginBottom: 12 }}>
+                <Text style={{ color: colors.flame, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
+                  {shift.reviewNotes.includes('Resubmitted') ? 'ATTENDANT CORRECTION & RESUBMISSION NOTE' : 'ATTENDANT HANDOVER NOTE'}
+                </Text>
+                <Text style={{ color: colors.text, fontSize: 12, marginTop: 4 }}>{shift.reviewNotes}</Text>
+              </View>
+            ) : null}
+
+            <PrimaryButton title="Close Audit" onPress={onClose} tone="rose" style={{ marginTop: 6 }} />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
   )
 }
 

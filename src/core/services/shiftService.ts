@@ -96,6 +96,7 @@ export class ShiftService {
       attendantName: input.attendant.fullName,
       pumpId: pump.id,
       pumpName: pump.name,
+      assignedNozzles: readings.map(r => r.nozzleLabel || (r.nozzleIndex ? `Nozzle ${r.nozzleIndex}` : r.fuelCode)),
       stationId,
       stationName,
       companyId: input.attendant.companyId,

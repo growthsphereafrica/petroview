@@ -214,6 +214,7 @@ export interface Shift {
   payments: PaymentsBreakdown
   actualTotal: number
   variance: number
+  assignedNozzles?: string[]
   notes: string | null
   reviewerNotes: string | null
   syncStatus: SyncStatus

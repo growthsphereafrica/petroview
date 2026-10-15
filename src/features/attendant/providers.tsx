@@ -13,7 +13,7 @@ import { attendantRepo, shiftRepo } from '../../core/infra/repositories'
 import { useLiveChanges } from '../../core/services/liveSyncBus'
 import { formatGHS } from '../../utils/currencyFormatter'
 import { loadUnifiedSession, clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
-import type { Attendant, Shift } from '../../core/domain/types'
+import type { Attendant, Shift, ShiftStatus } from '../../core/domain/types'
 
 const AUTO_SYNC_INTERVAL_MS = 15_000
 
@@ -176,13 +176,28 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
           for (const s of remote.shifts) {
             if (s && s.id) {
               const local = await shiftRepo.getById(s.id as string)
-              // Critical: A remote OPEN shift must NEVER overwrite a local shift that has been CLOSED!
               if (local) {
-                if (local.syncStatus === 'PENDING') continue
-                if (local.status === 'CLOSED' && s.status === 'OPEN') continue
-                if (local.status === 'CLOSED' && s.status === 'CLOSED' && (!s.closingReadings || (s.closingReadings as any[]).length === 0)) continue
+                // If remote shift has a supervisor review verdict (REJECTED or APPROVED),
+                // it ALWAYS takes precedence over local state so attendant sees rejections immediately!
+                if (s.status === 'REJECTED' || s.status === 'APPROVED') {
+                  // Proceed to apply supervisor review verdict
+                } else {
+                  if (local.syncStatus === 'PENDING') continue
+                  if (local.status === 'CLOSED' && s.status === 'OPEN') continue
+                  if (local.status === 'CLOSED' && s.status === 'CLOSED' && (!s.closingReadings || (s.closingReadings as any[]).length === 0)) continue
+                }
               }
-              await shiftRepo.upsert(s as unknown as Shift)
+              const merged: Shift = {
+                ...(local || {}),
+                ...(s as unknown as Shift),
+                status: s.status as ShiftStatus,
+                reviewerNotes: (s.reviewerNotes as string) || local?.reviewerNotes || null,
+                reviewedBy: (s.reviewedBy as string) || local?.reviewedBy || null,
+                reviewedAt: (s.reviewedAt as string) || local?.reviewedAt || null,
+                closingReadings: (s.closingReadings && (s.closingReadings as any[]).length > 0) ? (s.closingReadings as any) : (local?.closingReadings || []),
+                syncStatus: 'SYNCED',
+              }
+              await shiftRepo.upsert(merged)
             }
           }
         }

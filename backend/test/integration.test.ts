@@ -1115,4 +1115,63 @@ describe('closing a shift end to end', () => {
     expect(Number(row.variance)).toBeCloseTo(-75, 2)
     expect(row.reviewerNotes).toBeTruthy()
   })
+
+  it('allows a manager to reject a shift and allows the attendant to view the rejection and resubmit corrections', async () => {
+    const price = db.prepare("SELECT unitPrice AS price FROM products WHERE active = 1 AND UPPER(code) = ? AND (companyId IS NULL OR companyId = ?) ORDER BY companyId IS NULL ASC LIMIT 1").get('PMS', attendant.companyId) as { price: number }
+    const { shiftId, openedAt } = await openShift('close-reject-resubmit')
+    const counted = 40
+    const amount = Math.round(counted * price.price * 100) / 100
+    const sold = await sendSale(shiftId, 'PMS', counted, price.price)
+    expect(sold.accepted, JSON.stringify(sold.rejected)).toHaveLength(1)
+    const closeResult = await sendShift(shiftId, {
+      id: shiftId, number: shiftId, stationId, attendantId: attendant.userId, pumpId: '',
+      status: 'CLOSED', openedAt, closedAt: new Date().toISOString(),
+      openingReadings: [{ fuelCode: 'PMS', value: 1000 }, { fuelCode: 'AGO', value: 2000 }],
+      closingReadings: [{ fuelCode: 'PMS', value: 1000 + counted }, { fuelCode: 'AGO', value: 2000 }],
+      sales: [{ fuelCode: 'PMS', litres: counted, unitPrice: price.price, amount }],
+      expectedTotal: amount, payments: { CASH: amount, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+      actualTotal: amount, variance: 0,
+    })
+    expect(closeResult.accepted, JSON.stringify(closeResult.rejected)).toContain(shiftId)
+
+    // 1. Supervisor rejects the shift with discrepancy explanation
+    const hq = (await login('PV-HQ01', DEMO_HQ_PIN)).token
+    const rejectRes = await fetch(`${BASE}/api/sync/shifts/${shiftId}/review`, {
+      method: 'POST',
+      headers: auth(hq),
+      body: JSON.stringify({ verdict: 'REJECTED', notes: 'Closing meter reading requires physical verification with manager.' }),
+    })
+    expect(rejectRes.status).toBe(200)
+    const rejectJson = (await rejectRes.json()) as { id: string; status: string; reviewerNotes: string }
+    expect(rejectJson.status).toBe('REJECTED')
+    expect(rejectJson.reviewerNotes).toContain('Closing meter reading requires physical verification')
+
+    // 2. Attendant fetches shifts — must receive the rejected shift with manager feedback
+    const attendantToken = attendant.token
+    const attendantShiftsRes = await fetch(`${BASE}/api/shifts`, {
+      headers: auth(attendantToken),
+    })
+    expect(attendantShiftsRes.status).toBe(200)
+    const attendantShiftsJson = (await attendantShiftsRes.json()) as { count: number; shifts: Array<{ id: string; status: string; reviewerNotes?: string }> }
+    const received = attendantShiftsJson.shifts.find(s => s.id === shiftId)
+    expect(received).toBeTruthy()
+    expect(received?.status).toBe('REJECTED')
+    expect(received?.reviewerNotes).toContain('physical verification')
+
+    // 3. Attendant resubmits corrected shift
+    const resubmitRes = await fetch(`${BASE}/api/shifts/${shiftId}/resubmit`, {
+      method: 'POST',
+      headers: auth(attendantToken),
+      body: JSON.stringify({
+        closingReadings: [{ fuelCode: 'PMS', value: 1000 + counted }, { fuelCode: 'AGO', value: 2000 }],
+        notes: 'Verified meters physically with manager.',
+        actualTotal: amount,
+      }),
+    })
+    expect(resubmitRes.status).toBe(200)
+    const resubmitJson = (await resubmitRes.json()) as { success: boolean; shift: { status: string; notes: string } }
+    expect(resubmitJson.success).toBe(true)
+    expect(resubmitJson.shift.status).toBe('CLOSED')
+    expect(resubmitJson.shift.notes).toContain('Verified meters physically with manager')
+  })
 })

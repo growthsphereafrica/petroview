@@ -161,7 +161,7 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
     res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot review this shift.' })
     return
   }
-  if (shift.status !== 'CLOSED') {
+  if (shift.status !== 'CLOSED' && !(shift.status === 'REJECTED' && status === 'REJECTED')) {
     res.status(409).json({ error: 'INVALID_STATE', message: 'Only closed shifts can be reviewed.' })
     return
   }
@@ -170,14 +170,13 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
     res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot review a shift you recorded yourself. Ask another supervisor or Head Office.' })
     return
   }
-  // This path previously skipped the ledger reconciliation that the device sync
-  // path performs, so a shift with a fabricated or incomplete transaction ledger
-  // could be approved.
-  try {
-    assertShiftLedger(shift)
-  } catch (error) {
-    res.status(409).json({ error: 'LEDGER_MISMATCH', message: error instanceof Error ? error.message : 'Shift ledger is incomplete.' })
-    return
+  if (status === 'APPROVED') {
+    try {
+      assertShiftLedger(shift)
+    } catch (error) {
+      res.status(409).json({ error: 'LEDGER_MISMATCH', message: error instanceof Error ? error.message : 'Shift ledger is incomplete.' })
+      return
+    }
   }
   const reviewerNotes = typeof body.reviewerNotes === 'string' ? body.reviewerNotes.trim().slice(0, 1000) : null
   const now = new Date().toISOString()
@@ -185,7 +184,7 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
   const applied = db.prepare(`
     UPDATE shifts
     SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ?
-    WHERE id = ? AND status = 'CLOSED'
+    WHERE id = ? AND (status = 'CLOSED' OR status = 'REJECTED')
   `).run(status, reviewerNotes, reviewerName, now, now, shift.id)
   if (applied.changes === 0) {
     res.status(409).json({ error: 'INVALID_STATE', message: 'This shift was already reviewed.' })

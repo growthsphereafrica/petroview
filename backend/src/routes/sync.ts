@@ -48,15 +48,16 @@ const upsertShift = db.prepare(`
   ON CONFLICT(id) DO UPDATE SET
     pumpName = COALESCE(excluded.pumpName, shifts.pumpName),
     assignedNozzles = COALESCE(excluded.assignedNozzles, shifts.assignedNozzles),
-    status = excluded.status,
-    closedAt = excluded.closedAt,
-    closingReadings = excluded.closingReadings,
-    sales = excluded.sales,
-    expectedTotal = excluded.expectedTotal,
-    payments = excluded.payments,
-    actualTotal = excluded.actualTotal,
-    variance = excluded.variance,
-    notes = excluded.notes,
+    status = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.status ELSE excluded.status END,
+    closedAt = COALESCE(excluded.closedAt, shifts.closedAt),
+    closingReadings = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.closingReadings ELSE excluded.closingReadings END,
+    sales = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.sales ELSE excluded.sales END,
+    expectedTotal = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.expectedTotal ELSE excluded.expectedTotal END,
+    payments = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.payments ELSE excluded.payments END,
+    actualTotal = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.actualTotal ELSE excluded.actualTotal END,
+    variance = CASE WHEN shifts.status IN ('APPROVED', 'REJECTED') THEN shifts.variance ELSE excluded.variance END,
+    notes = COALESCE(shifts.notes, excluded.notes),
+    reviewerNotes = COALESCE(shifts.reviewerNotes, excluded.reviewerNotes),
     syncStatus = 'SYNCED',
     updatedAt = excluded.updatedAt
 `)
@@ -886,20 +887,22 @@ syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor', 'h
     res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot review this shift.' })
     return
   }
-  if (shift.status !== 'CLOSED') {
+  if (shift.status !== 'CLOSED' && !(shift.status === 'REJECTED' && verdict === 'REJECTED')) {
     res.status(409).json({ error: 'INVALID_STATE', message: 'Only closed shifts can be reviewed.' })
     return
   }
-  try {
-    assertShiftLedger(shift)
-  } catch (error) {
-    res.status(409).json({ error: 'LEDGER_MISMATCH', message: error instanceof Error ? error.message : 'Shift ledger is incomplete.' })
-    return
+  if (verdict === 'APPROVED') {
+    try {
+      assertShiftLedger(shift)
+    } catch (error) {
+      res.status(409).json({ error: 'LEDGER_MISMATCH', message: error instanceof Error ? error.message : 'Shift ledger is incomplete.' })
+      return
+    }
   }
 
   const notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 2000) : null
   const reviewResult = db.transaction(() => {
-    const result = db.prepare("UPDATE shifts SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ? WHERE id = ? AND status = 'CLOSED'").run(verdict, notes, session.fullName || session.userId, now, now, shift.id)
+    const result = db.prepare("UPDATE shifts SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ? WHERE id = ? AND (status = 'CLOSED' OR status = 'REJECTED')").run(verdict, notes, session.fullName || session.userId, now, now, shift.id)
     if (result.changes !== 1) return false
     db.prepare('INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp, meta) VALUES (?,?,?,?,?,?,?,?,?,?)').run(
       newToken(), verdict === 'APPROVED' ? 'REVIEW_APPROVED' : 'REJECTED', session.userId, session.fullName, session.role.toUpperCase(), shift.id, `Shift ${shift.number}`, notes, now, JSON.stringify({ companyId: shift.companyId ?? null, stationId: shift.stationId }),

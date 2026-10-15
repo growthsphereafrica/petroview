@@ -50,57 +50,73 @@ export function getUsableAccountScope(table: 'attendants' | 'supervisors', id: s
   `).get(id) as ActiveUserRow | undefined
   if (!user || user.active !== 1 || user.approvalStatus !== 'APPROVED') return null
 
+  // Super Admin has global platform scope without station/company constraints
+  if (user.isSuperAdmin === 1) {
+    return { ...user, stationId: null, companyId: null, companyShortCode: null }
+  }
+
   let stationId = user.stationId
   let companyId = user.companyId
   let companyShortCode = user.companyShortCode
 
+  // Resolve company if companyId or companyShortCode is provided
+  if (companyId || companyShortCode) {
+    const comp = db.prepare(`
+      SELECT id, shortCode FROM companies 
+      WHERE active = 1 AND (UPPER(id) = UPPER(?) OR UPPER(shortCode) = UPPER(?)) 
+      LIMIT 1
+    `).get(companyId || companyShortCode, companyShortCode || companyId) as { id: string; shortCode: string } | undefined
+    if (comp) {
+      companyId = comp.id
+      companyShortCode = comp.shortCode
+    }
+  }
+
+  // If stationId was assigned, verify it is active and belongs to the company
+  let station: { id: string; companyId: string } | undefined
   if (stationId) {
-    const station = db.prepare('SELECT id, companyId FROM companyStations WHERE active = 1 AND (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?)) LIMIT 1').get(stationId, stationId) as { id: string; companyId: string } | undefined
-    if (!station) return null
+    station = db.prepare(`
+      SELECT id, companyId FROM companyStations 
+      WHERE active = 1 AND (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?)) 
+      LIMIT 1
+    `).get(stationId, stationId) as { id: string; companyId: string } | undefined
+  }
+
+  // Auto-heal: If stationId is missing, invalid, deleted, or belongs to another company,
+  // automatically locate the first active station for this company.
+  if ((!station || (companyId && station.companyId.toLowerCase() !== companyId.toLowerCase())) && companyId) {
+    const fallbackStation = db.prepare(`
+      SELECT id, companyId FROM companyStations 
+      WHERE (UPPER(companyId) = UPPER(?) OR companyId = (SELECT id FROM companies WHERE UPPER(shortCode) = UPPER(?))) 
+        AND active = 1 
+      ORDER BY createdAt ASC LIMIT 1
+    `).get(companyId, companyShortCode || companyId) as { id: string; companyId: string } | undefined
+
+    if (fallbackStation) {
+      station = fallbackStation
+      stationId = fallbackStation.id
+      try {
+        db.prepare(`UPDATE ${table} SET stationId = ? WHERE id = ?`).run(stationId, id)
+        console.log(`[auth] Auto-healed stationId for ${table} ${user.employeeCode} -> ${stationId}`)
+      } catch { /* ignore concurrency */ }
+    }
+  }
+
+  if (station) {
     stationId = station.id
-    if (companyId) {
-      const company = db.prepare('SELECT id, shortCode FROM companies WHERE active = 1 AND (UPPER(id) = UPPER(?) OR UPPER(shortCode) = UPPER(?)) LIMIT 1').get(companyId, companyShortCode ?? companyId) as { id: string; shortCode: string } | undefined
-      if (!company || company.id !== station.companyId) return null
-      companyId = company.id
-      companyShortCode = company.shortCode
-    } else {
+    if (!companyId) {
       companyId = station.companyId
-      const company = db.prepare('SELECT shortCode FROM companies WHERE id = ? AND active = 1').get(companyId) as { shortCode: string } | undefined
-      if (!company) return null
-      companyShortCode = company.shortCode
+      const comp = db.prepare('SELECT shortCode FROM companies WHERE id = ? AND active = 1').get(companyId) as { shortCode: string } | undefined
+      companyShortCode = comp?.shortCode ?? null
     }
+  } else if (!stationId && stationId !== null) {
+    stationId = null
   }
 
-  if (companyId && !stationId) {
-    const company = db.prepare('SELECT id, shortCode FROM companies WHERE active = 1 AND (UPPER(id) = UPPER(?) OR UPPER(shortCode) = UPPER(?)) LIMIT 1').get(companyId, companyShortCode ?? companyId) as { id: string; shortCode: string } | undefined
-    if (!company) return null
-    companyId = company.id
-    companyShortCode = company.shortCode
-  } else if (stationId && !companyId) {
-    const company = db.prepare('SELECT id, shortCode FROM companies WHERE id = (SELECT companyId FROM companyStations WHERE id = ?) AND active = 1').get(stationId) as { id: string; shortCode: string } | undefined
-    if (!company) return null
-    companyId = company.id
-    companyShortCode = company.shortCode
-  }
+  // Attendants and Station Supervisors require an active company.
+  // If company stations exist, they have now been resolved. If none exist yet, allow login with stationId = null
+  if (!companyId) return null
 
-  if (table === 'attendants' && companyId && !stationId) {
-    const stn = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY createdAt ASC LIMIT 1').get(companyId) as { id: string } | undefined
-    if (stn?.id) {
-      stationId = stn.id
-      db.prepare('UPDATE attendants SET stationId = ? WHERE id = ?').run(stationId, id)
-    }
-  }
-  if (table === 'supervisors' && user.isSuperAdmin !== 1 && user.isHeadOffice !== 1 && companyId && !stationId) {
-    const stn = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY createdAt ASC LIMIT 1').get(companyId) as { id: string } | undefined
-    if (stn?.id) {
-      stationId = stn.id
-      db.prepare('UPDATE supervisors SET stationId = ? WHERE id = ?').run(stationId, id)
-    }
-  }
-
-  if (table === 'attendants' && (!companyId || !stationId)) return null
-  if (table === 'supervisors' && user.isSuperAdmin !== 1 && user.isHeadOffice !== 1 && (!companyId || !stationId)) return null
-  if (table === 'supervisors' && user.isHeadOffice === 1 && !companyId) return null
   return { ...user, stationId, companyId, companyShortCode }
 }
 

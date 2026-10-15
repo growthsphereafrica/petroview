@@ -344,8 +344,14 @@ companiesRouter.delete('/:id/stations/:stationId', authenticate, requireRole('su
   db.transaction(() => {
     db.prepare('UPDATE companyStations SET active = 0 WHERE id = ? AND companyId = ?').run(station.id, req.params.id)
     db.prepare('DELETE FROM sessions WHERE stationId = ?').run(station.id)
-    db.prepare('UPDATE attendants SET active = 0 WHERE stationId = ?').run(station.id)
-    db.prepare('UPDATE supervisors SET active = 0 WHERE stationId = ?').run(station.id)
+    const fallbackStation = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 AND id != ? ORDER BY createdAt ASC LIMIT 1').get(req.params.id, station.id) as { id: string } | undefined
+    if (fallbackStation?.id) {
+      db.prepare('UPDATE attendants SET stationId = ? WHERE stationId = ?').run(fallbackStation.id, station.id)
+      db.prepare('UPDATE supervisors SET stationId = ? WHERE stationId = ?').run(fallbackStation.id, station.id)
+    } else {
+      db.prepare('UPDATE attendants SET active = 0 WHERE stationId = ?').run(station.id)
+      db.prepare('UPDATE supervisors SET active = 0 WHERE stationId = ?').run(station.id)
+    }
     audit(req, 'STATION_DEACTIVATED', station.id, `${station.name} (${station.code})`, null, { companyId: req.params.id, stationId: station.id }, now)
   })()
   res.json({ success: true, message: 'Station deleted.' })
@@ -705,9 +711,19 @@ companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'),
         if (requestedStation !== 'ALL') {
           deletedCounts.stations += (db.prepare('DELETE FROM companyStations WHERE id = ?').run(requestedStation)).changes
           db.prepare('DELETE FROM sessions WHERE stationId = ?').run(requestedStation)
+          if (!scopes.staff && companyId !== 'ALL') {
+            const fallbackStation = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 AND id != ? ORDER BY createdAt ASC LIMIT 1').get(companyId, requestedStation) as { id: string } | undefined
+            const newStationId = fallbackStation?.id || null
+            db.prepare('UPDATE attendants SET stationId = ? WHERE stationId = ?').run(newStationId, requestedStation)
+            db.prepare('UPDATE supervisors SET stationId = ? WHERE stationId = ?').run(newStationId, requestedStation)
+          }
         } else if (companyId !== 'ALL') {
           deletedCounts.stations += (db.prepare('DELETE FROM companyStations WHERE companyId = ?').run(companyId)).changes
           db.prepare('DELETE FROM sessions WHERE companyId = ?').run(companyId)
+          if (!scopes.staff) {
+            db.prepare('UPDATE attendants SET stationId = NULL WHERE companyId = ?').run(companyId)
+            db.prepare('UPDATE supervisors SET stationId = NULL WHERE companyId = ?').run(companyId)
+          }
         }
       }
 

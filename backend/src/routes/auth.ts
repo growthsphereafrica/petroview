@@ -139,11 +139,7 @@ authRouter.post('/login', async (req, res) => {
     table = 'attendants'
   }
 
-  const account = row ? getUsableAccountScope(table, String(row.id)) : null
-  if (!row || !account) {
-    // Do not distinguish "no such employee code" from "inactive account". The
-    // previous three-way response (INVALID_CREDENTIALS / INVALID_PIN /
-    // LOCKED_OUT) let an unauthenticated caller enumerate every valid code.
+  if (!row) {
     res.status(401).json({ error: 'INVALID_CREDENTIALS', message: 'Invalid employee code or PIN.' })
     return
   }
@@ -152,6 +148,7 @@ authRouter.post('/login', async (req, res) => {
     res.status(423).json({ error: 'LOCKED_OUT', message: 'Too many failed attempts. Try again later.' })
     return
   }
+
   // Async so the KDF does not block the event loop for concurrent callers.
   const verification = await verifyPinAsync(String(pin), row.pinSalt as string, row.pinHash as string)
   if (!verification.valid) {
@@ -162,21 +159,43 @@ authRouter.post('/login', async (req, res) => {
     return
   }
 
+  // Valid credentials: clear any prior failed attempts
   lockoutApply(table, row.id as string, 0, null)
 
   // Transparent credential upgrade. If this row was written with a superseded
   // KDF, rewrite it to the current scheme now, while the plaintext PIN is in
-  // hand. Without this the stricter parameters could never be applied to
-  // existing accounts.
+  // hand.
   if (verification.version !== CURRENT_KDF_VERSION) {
     const upgraded = hashPin(String(pin))
     db.prepare(`UPDATE ${table} SET pinSalt = ?, pinHash = ? WHERE id = ?`).run(upgraded.salt, upgraded.hash, row.id)
     console.log(`[auth] Upgraded ${row.employeeCode} credential from KDF v${verification.version} to v${CURRENT_KDF_VERSION}`)
   }
 
-  const approvalStatus = String(row.approvalStatus || '')
+  // Check account active state
+  if (Number(row.active) !== 1) {
+    res.status(403).json({ error: 'ACCOUNT_DEACTIVATED', message: 'Your account has been deactivated. Please contact your administrator.' })
+    return
+  }
+
+  // Check approval status with human-readable guidance
+  const approvalStatus = String(row.approvalStatus || '').toUpperCase()
+  if (approvalStatus === 'PENDING') {
+    res.status(403).json({ error: 'PENDING_APPROVAL', message: 'Your account is pending approval by your station manager or OMC head office.' })
+    return
+  }
+  if (approvalStatus === 'REJECTED') {
+    res.status(403).json({ error: 'ACCOUNT_REJECTED', message: 'Your account registration was not approved. Please contact your administrator.' })
+    return
+  }
   if (approvalStatus !== 'APPROVED') {
-    res.status(403).json({ error: 'PENDING_APPROVAL', message: 'Your account is not approved.' })
+    res.status(403).json({ error: 'PENDING_APPROVAL', message: 'Your account is not approved yet.' })
+    return
+  }
+
+  // Resolve and auto-heal account scope
+  const account = getUsableAccountScope(table, String(row.id))
+  if (!account) {
+    res.status(403).json({ error: 'ACCOUNT_CONFIGURATION_ERROR', message: 'Your account is not assigned to an active company or station. Please contact your manager.' })
     return
   }
 

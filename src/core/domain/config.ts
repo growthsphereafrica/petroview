@@ -31,9 +31,18 @@ export interface ProductionPumpConfig {
 }
 
 export function deriveNozzlesForPump(pump: ProductionPumpConfig): PumpNozzleConfig[] {
-  if (pump.nozzles && pump.nozzles.length > 0) return pump.nozzles
-  return pump.fuels.map((f, idx) => {
-    const isDup = pump.fuels.filter(x => x === f).length > 1
+  const fuels = Array.isArray(pump.fuels) ? pump.fuels : ['PMS']
+  if (pump.nozzles && Array.isArray(pump.nozzles) && pump.nozzles.length > 0) {
+    return pump.nozzles.map((nz, idx) => ({
+      id: nz.id || `${pump.id}-noz-${idx + 1}`,
+      nozzleIndex: idx + 1,
+      name: nz.name && nz.name.trim() ? nz.name.trim() : (fuels.length === 2 ? (idx === 0 ? 'Side 1' : 'Side 2') : `Nozzle ${idx + 1}`),
+      fuelCode: nz.fuelCode || fuels[idx] || 'PMS',
+      active: nz.active !== false,
+    }))
+  }
+  return fuels.map((f, idx) => {
+    const isDup = fuels.filter(x => x === f).length > 1
     const name = isDup ? `Side ${idx + 1} (${f})` : `Nozzle ${idx + 1} (${f})`
     return {
       id: `${pump.id}-noz-${idx + 1}`,

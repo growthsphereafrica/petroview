@@ -23,7 +23,7 @@ import {
   backendDeleteNozzle,
   type BackendPump,
 } from '../../services/backendApiService'
-import { registerStationPumps, type ProductionPumpConfig } from '../../core/domain/config'
+import { registerStationPumps, deriveNozzlesForPump, type ProductionPumpConfig } from '../../core/domain/config'
 import type { CompanyStation, Product } from '../../core/domain/types'
 
 interface Props {
@@ -70,6 +70,8 @@ export const PumpsManagementView: React.FC<Props> = ({
     pump: BackendPump
     fuelCode: string
     index: number
+    nozzleIndex: number
+    id?: string
     name: string
   } | null>(null)
   const [editNozzleName, setEditNozzleName] = useState('')
@@ -189,9 +191,11 @@ export const PumpsManagementView: React.FC<Props> = ({
         fuels: editPumpFuels.length > 0 ? editPumpFuels : ['PMS', 'PMS'],
         active: editPumpActive,
       })
-      setPumps(prev => prev.map(p => (p.id === editingPump.id ? res.pump : p)))
-      const updated = pumps.map(p => (p.id === editingPump.id ? res.pump : p))
-      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+      setPumps(prev => {
+        const next = prev.map(p => (p.id === editingPump.id ? res.pump : p))
+        registerStationPumps(selectedStationId, next.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+        return next
+      })
       setEditingPump(null)
       setActionNotice({ text: `Updated ${editPumpName} successfully!`, type: 'success' })
       setTimeout(() => setActionNotice(null), 4000)
@@ -206,9 +210,11 @@ export const PumpsManagementView: React.FC<Props> = ({
     if (!window.confirm(`Are you sure you want to permanently delete ${name}?`)) return
     try {
       await backendDeletePump(id)
-      setPumps(prev => prev.filter(p => p.id !== id))
-      const remaining = pumps.filter(p => p.id !== id)
-      registerStationPumps(selectedStationId, remaining.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+      setPumps(prev => {
+        const next = prev.filter(p => p.id !== id)
+        registerStationPumps(selectedStationId, next.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+        return next
+      })
       setActionNotice({ text: `Deleted ${name}.`, type: 'success' })
       setTimeout(() => setActionNotice(null), 4000)
     } catch (err: any) {
@@ -218,31 +224,42 @@ export const PumpsManagementView: React.FC<Props> = ({
 
   // Nozzle Management Actions:
   // 1. Rename Nozzle Name & Assigned Fuel Product
-  const handleOpenEditNozzle = (pump: BackendPump, fuelCode: string, nozzleIndex: number) => {
-    const existing = pump.nozzles?.find(n => n.nozzleIndex === nozzleIndex) || pump.nozzles?.[nozzleIndex]
-    const defaultLabel = existing?.name || (pump.fuels.length === 2 ? (nozzleIndex === 0 ? 'Side 1' : 'Side 2') : `Nozzle ${nozzleIndex + 1}`)
-    setEditingNozzle({ pump, fuelCode, index: nozzleIndex, name: defaultLabel })
-    setEditNozzleName(defaultLabel)
-    setEditNozzleFuelCode(fuelCode)
+  const handleOpenEditNozzle = (
+    pump: BackendPump,
+    noz: { id?: string; nozzleIndex: number; name: string; fuelCode: string },
+    targetIdx: number,
+  ) => {
+    setEditingNozzle({
+      pump,
+      fuelCode: noz.fuelCode,
+      index: targetIdx,
+      nozzleIndex: noz.nozzleIndex,
+      id: noz.id,
+      name: noz.name,
+    })
+    setEditNozzleName(noz.name)
+    setEditNozzleFuelCode(noz.fuelCode)
   }
 
   const handleSaveRenameNozzle = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!editingNozzle) return
-    const { pump, index } = editingNozzle
-    const customName = editNozzleName.trim() || `Nozzle ${index + 1}`
+    const { pump, index, nozzleIndex, id } = editingNozzle
+    const customName = editNozzleName.trim() || `Nozzle ${nozzleIndex}`
     const fuelCode = editNozzleFuelCode.trim().toUpperCase()
 
     setSavingNozzle(true)
     try {
       const res = await backendUpdatePump(pump.id, {
-        updateNozzle: { index, name: customName, fuelCode },
+        updateNozzle: { index, nozzleIndex, id, name: customName, fuelCode } as any,
       })
-      setPumps(prev => prev.map(p => (p.id === pump.id ? res.pump : p)))
-      const updated = pumps.map(p => (p.id === pump.id ? res.pump : p))
-      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+      setPumps(prev => {
+        const next = prev.map(p => (p.id === pump.id ? res.pump : p))
+        registerStationPumps(selectedStationId, next.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+        return next
+      })
       setEditingNozzle(null)
-      setActionNotice({ text: `Updated Nozzle ${index + 1} on ${pump.name} to "${customName}" (${fuelCode}).`, type: 'success' })
+      setActionNotice({ text: `Updated Nozzle ${nozzleIndex} on ${pump.name} to "${customName}" (${fuelCode}).`, type: 'success' })
       setTimeout(() => setActionNotice(null), 4000)
     } catch (err: any) {
       setActionNotice({ text: err.message || 'Failed to update nozzle.', type: 'error' })
@@ -258,7 +275,8 @@ export const PumpsManagementView: React.FC<Props> = ({
       setTimeout(() => setActionNotice(null), 4000)
       return
     }
-    const existing = pump.nozzles?.find(n => n.nozzleIndex === nozzleIndex) || pump.nozzles?.[nozzleIndex]
+    const nozzles = deriveNozzlesForPump(pump as any)
+    const existing = nozzles[nozzleIndex]
     const label = existing?.name || `Nozzle ${nozzleIndex + 1} (${fuelCode})`
     if (!window.confirm(`Are you sure you want to remove ${label} from ${pump.name}?`)) return
     try {
@@ -268,9 +286,11 @@ export const PumpsManagementView: React.FC<Props> = ({
         fuels: res.fuels,
         nozzles: res.nozzles,
       }
-      setPumps(prev => prev.map(p => (p.id === pump.id ? updatedPump : p)))
-      const updated = pumps.map(p => (p.id === pump.id ? updatedPump : p))
-      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+      setPumps(prev => {
+        const next = prev.map(p => (p.id === pump.id ? updatedPump : p))
+        registerStationPumps(selectedStationId, next.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+        return next
+      })
       setActionNotice({ text: `Removed ${label} from ${pump.name}.`, type: 'success' })
       setTimeout(() => setActionNotice(null), 4000)
     } catch (err: any) {
@@ -299,9 +319,11 @@ export const PumpsManagementView: React.FC<Props> = ({
       const res = await backendUpdatePump(pump.id, {
         addNozzle: { name: customName, fuelCode: fuelToAdd },
       })
-      setPumps(prev => prev.map(p => (p.id === pump.id ? res.pump : p)))
-      const updated = pumps.map(p => (p.id === pump.id ? res.pump : p))
-      registerStationPumps(selectedStationId, updated.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+      setPumps(prev => {
+        const next = prev.map(p => (p.id === pump.id ? res.pump : p))
+        registerStationPumps(selectedStationId, next.map(p => ({ id: p.id, name: p.name, fuels: p.fuels as any, nozzles: p.nozzles as any })))
+        return next
+      })
       setAddingNozzlePump(null)
       setActionNotice({ text: `Added ${customName} (${fuelToAdd}) to ${pump.name}.`, type: 'success' })
       setTimeout(() => setActionNotice(null), 4000)
@@ -409,77 +431,80 @@ export const PumpsManagementView: React.FC<Props> = ({
               </div>
 
               {/* Nozzles list with individual edit & delete */}
-              <div className="mt-3 pt-3 border-t border-slate-800/60">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[10px] uppercase font-bold text-slate-400">
-                    Active Nozzles ({pump.fuels?.length || 0})
-                  </span>
-                  <button
-                    onClick={() => handleOpenAddNozzle(pump)}
-                    className="text-[10px] font-bold text-orange-400 hover:text-orange-300 flex items-center gap-0.5"
-                    title="Add a nozzle to this dispenser"
-                  >
-                    <Plus className="w-3 h-3" /> Add Nozzle
-                  </button>
-                </div>
+              {(() => {
+                const nozzles = deriveNozzlesForPump(pump as any)
+                return (
+                  <div className="mt-3 pt-3 border-t border-slate-800/60">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] uppercase font-bold text-slate-400">
+                        Active Nozzles ({nozzles.length})
+                      </span>
+                      <button
+                        onClick={() => handleOpenAddNozzle(pump)}
+                        className="text-[10px] font-bold text-orange-400 hover:text-orange-300 flex items-center gap-0.5"
+                        title="Add a nozzle to this dispenser"
+                      >
+                        <Plus className="w-3 h-3" /> Add Nozzle
+                      </button>
+                    </div>
 
-                <div className="flex flex-col gap-2">
-                  {pump.fuels && pump.fuels.length > 0 ? (
-                    pump.fuels.map((f, idx) => {
-                      const opt = fuelOptions.find(o => o.code === f)
-                      const nozzleConfig = pump.nozzles?.find(n => n.nozzleIndex === idx) || pump.nozzles?.[idx]
-                      const nozzleDisplayName = nozzleConfig?.name || (pump.fuels.length === 2 ? (idx === 0 ? 'Side 1' : 'Side 2') : `Nozzle ${idx + 1}`)
-                      return (
-                        <div
-                          key={`${f}-${idx}`}
-                          className="flex items-center justify-between p-2 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition"
-                        >
-                          <div className="flex items-center gap-2">
-                            <span
-                              className="w-2.5 h-2.5 rounded-full shrink-0"
-                              style={{ backgroundColor: opt?.color || '#F97316' }}
-                            />
-                            <div>
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-900 text-orange-400 border border-slate-800">
-                                  {nozzleDisplayName}
-                                </span>
-                                <span className="text-xs font-bold font-mono text-white">
-                                  {f}
-                                </span>
+                    <div className="flex flex-col gap-2">
+                      {nozzles.length > 0 ? (
+                        nozzles.map((noz, idx) => {
+                          const opt = fuelOptions.find(o => o.code === noz.fuelCode)
+                          return (
+                            <div
+                              key={noz.id || `${noz.fuelCode}-${idx}`}
+                              className="flex items-center justify-between p-2 rounded-xl bg-slate-950/70 border border-slate-800 hover:border-slate-700 transition"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className="w-2.5 h-2.5 rounded-full shrink-0"
+                                  style={{ backgroundColor: opt?.color || '#F97316' }}
+                                />
+                                <div>
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-900 text-orange-400 border border-slate-800">
+                                      {noz.name}
+                                    </span>
+                                    <span className="text-xs font-bold font-mono text-white">
+                                      {noz.fuelCode}
+                                    </span>
+                                  </div>
+                                  {opt?.name && opt.name !== noz.fuelCode && (
+                                    <span className="text-[9px] text-slate-500 block">
+                                      {opt.name}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              {opt?.name && opt.name !== f && (
-                                <span className="text-[9px] text-slate-500 block">
-                                  {opt.name}
-                                </span>
-                              )}
-                            </div>
-                          </div>
 
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => handleOpenEditNozzle(pump, f, idx)}
-                              className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-orange-400 transition"
-                              title={`Edit Nozzle name and fuel for ${nozzleDisplayName}`}
-                            >
-                              <Edit2 className="w-3 h-3" />
-                            </button>
-                            <button
-                              onClick={() => void handleDeleteNozzle(pump, f, idx)}
-                              className="p-1 rounded-lg hover:bg-rose-500/10 text-slate-500 hover:text-rose-400 transition"
-                              title={`Delete ${nozzleDisplayName}`}
-                            >
-                              <Trash2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })
-                  ) : (
-                    <span className="text-xs text-rose-400 italic">No nozzles configured on this pump</span>
-                  )}
-                </div>
-              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => handleOpenEditNozzle(pump, noz, idx)}
+                                  className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-orange-400 transition"
+                                  title={`Edit Nozzle name and fuel for ${noz.name}`}
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={() => void handleDeleteNozzle(pump, noz.fuelCode, idx)}
+                                  className="p-1 rounded-lg hover:bg-rose-500/10 text-slate-500 hover:text-rose-400 transition"
+                                  title={`Delete ${noz.name}`}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                          )
+                        })
+                      ) : (
+                        <span className="text-xs text-rose-400 italic">No nozzles configured on this pump</span>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
 
             {/* Pump Actions */}

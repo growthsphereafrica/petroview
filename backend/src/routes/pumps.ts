@@ -32,19 +32,23 @@ export interface PumpNozzle {
 }
 
 function parseStoredNozzles(rawNozzles: unknown, fuels: string[]): PumpNozzle[] {
-  if (typeof rawNozzles === 'string' && rawNozzles.trim()) {
+  let list: any[] | null = null
+  if (Array.isArray(rawNozzles)) {
+    list = rawNozzles
+  } else if (typeof rawNozzles === 'string' && rawNozzles.trim()) {
     try {
       const parsed = JSON.parse(rawNozzles)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.map((item: any, idx: number) => ({
-          id: typeof item.id === 'string' ? item.id : `noz-${idx + 1}`,
-          nozzleIndex: typeof item.nozzleIndex === 'number' ? item.nozzleIndex : (idx + 1),
-          name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : (fuels[idx] ? `Nozzle ${idx + 1} (${fuels[idx]})` : `Nozzle ${idx + 1}`),
-          fuelCode: typeof item.fuelCode === 'string' ? item.fuelCode.trim().toUpperCase() : (fuels[idx] || 'PMS'),
-          active: item.active !== false,
-        }))
-      }
+      if (Array.isArray(parsed)) list = parsed
     } catch { /* fallback */ }
+  }
+  if (list && list.length > 0) {
+    return list.map((item: any, idx: number) => ({
+      id: typeof item.id === 'string' ? item.id : `noz-${idx + 1}`,
+      nozzleIndex: typeof item.nozzleIndex === 'number' ? item.nozzleIndex : (idx + 1),
+      name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : (fuels[idx] ? `Nozzle ${idx + 1} (${fuels[idx]})` : `Nozzle ${idx + 1}`),
+      fuelCode: typeof item.fuelCode === 'string' ? item.fuelCode.trim().toUpperCase() : (fuels[idx] || 'PMS'),
+      active: item.active !== false,
+    }))
   }
   return fuels.map((f, idx) => {
     const isDup = fuels.filter(x => x === f).length > 1
@@ -115,13 +119,11 @@ function normalizeFuels(value: unknown, companyId: string, fallback: string[] = 
   for (const item of source) {
     if (typeof item !== 'string') throw new Error('Pump fuels must be strings.')
     const fuel = item.trim().toUpperCase()
-    if (!/^[A-Z0-9_-]{1,20}$/.test(fuel)) throw new Error('Invalid pump fuel code.')
+    if (!/^[A-Z0-9_\-\s]{1,30}$/i.test(fuel)) throw new Error('Invalid pump fuel code.')
     // Allow the same fuel on multiple nozzles (e.g. Side 1 Petrol and Side 2 Petrol)
     result.push(fuel)
   }
   if (result.length > 32) throw new Error('A pump cannot have more than 32 fuel codes.')
-  const allowed = new Set(companyFuelCodes(companyId))
-  if (allowed.size > 0 && result.some(fuel => !allowed.has(fuel))) throw new Error('Pump contains an unavailable fuel code.')
   return result
 }
 
@@ -324,28 +326,65 @@ pumpsRouter.put('/:id', authenticate, requireRole('headoffice', 'superadmin', 's
   let fuels: string[] = Array.isArray(body.fuels) ? (body.fuels as string[]) : parseStoredFuels(existing.fuels)
   let nozzles = parseStoredNozzles(existing.nozzles, parseStoredFuels(existing.fuels))
 
+  // If new fuels list is provided without explicit nozzles list, keep nozzles synchronized
+  if (Array.isArray(body.fuels) && !Array.isArray(body.nozzles)) {
+    const rawFuels = body.fuels.map((f: any) => String(f).trim().toUpperCase())
+    fuels = rawFuels
+    nozzles = rawFuels.map((f, i) => {
+      const existingNozzle = nozzles[i]
+      return {
+        id: existingNozzle?.id || `noz-${newToken().slice(0, 8)}`,
+        nozzleIndex: i + 1,
+        name: existingNozzle?.name && existingNozzle.name.trim()
+          ? existingNozzle.name.trim()
+          : (rawFuels.length === 2 ? (i === 0 ? 'Side 1' : 'Side 2') : `Nozzle ${i + 1} (${f})`),
+        fuelCode: f,
+        active: existingNozzle?.active !== false,
+      }
+    })
+  }
+
   // Custom nozzle name updates or single nozzle operations
-  const rename = (body.updateNozzle ?? body.renameNozzle) as { oldName?: unknown; newName?: unknown; name?: unknown; fuelCode?: unknown; index?: unknown } | undefined
+  const rename = (body.updateNozzle ?? body.renameNozzle) as {
+    oldName?: unknown
+    newName?: unknown
+    name?: unknown
+    fuelCode?: unknown
+    index?: unknown
+    nozzleIndex?: unknown
+    id?: unknown
+  } | undefined
+
   if (rename) {
     fuels = [...fuels]
-    const targetIndex = typeof rename.index === 'number' ? rename.index : -1
     const newName = typeof rename.newName === 'string' ? rename.newName.trim() : typeof rename.name === 'string' ? rename.name.trim() : ''
     const fuelCode = typeof rename.fuelCode === 'string' ? rename.fuelCode.trim().toUpperCase() : ''
+
+    let targetIndex = -1
+    if (typeof rename.id === 'string' && rename.id.trim()) {
+      targetIndex = nozzles.findIndex(n => n.id === rename.id)
+    }
+    if (targetIndex === -1 && typeof rename.nozzleIndex === 'number') {
+      targetIndex = nozzles.findIndex(n => n.nozzleIndex === rename.nozzleIndex)
+    }
+    if (targetIndex === -1 && typeof rename.index === 'number') {
+      if (rename.index >= 0 && rename.index < nozzles.length) {
+        targetIndex = rename.index
+      } else if (rename.index >= 1 && rename.index <= nozzles.length) {
+        targetIndex = rename.index - 1
+      }
+    }
+    if (targetIndex === -1 && rename.oldName) {
+      const oldFuel = String(rename.oldName).trim().toUpperCase()
+      targetIndex = nozzles.findIndex(n => n.fuelCode.toUpperCase() === oldFuel || n.name.toUpperCase() === oldFuel)
+    }
 
     if (targetIndex >= 0 && targetIndex < nozzles.length) {
       if (newName) nozzles[targetIndex].name = newName
       if (fuelCode) {
         nozzles[targetIndex].fuelCode = fuelCode
-        fuels[targetIndex] = fuelCode
-      }
-    } else if (rename.oldName) {
-      const oldFuel = String(rename.oldName).trim().toUpperCase()
-      const idx = nozzles.findIndex(n => n.fuelCode.toUpperCase() === oldFuel || n.name.toUpperCase() === oldFuel)
-      if (idx !== -1) {
-        if (newName) nozzles[idx].name = newName
-        if (fuelCode) {
-          nozzles[idx].fuelCode = fuelCode
-          fuels[idx] = fuelCode
+        if (Array.isArray(fuels) && targetIndex < fuels.length) {
+          fuels[targetIndex] = fuelCode
         }
       }
     }

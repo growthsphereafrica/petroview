@@ -57,6 +57,9 @@ export const AttendantDashboard: React.FC<{
         if (active) {
           setAttendantId(session.userId)
           setShift(curShift)
+          if (!curShift) {
+            setOpenModal(true)
+          }
           setPendingCount(pending)
           if (prices) setFuelPrices(prices)
           if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
@@ -312,18 +315,11 @@ export const AttendantDashboard: React.FC<{
                   onPress={() => setCloseModal(true)}
                   tone="amber"
                 />
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                  <PrimaryButton
-                    title="⚡ Single Receipt (POS)"
-                    onPress={() => setSaleModal(true)}
-                    tone="emerald"
-                    style={{ flex: 1 }}
-                  />
+                <View style={{ marginTop: 8 }}>
                   <PrimaryButton
                     title="Add Expense"
                     onPress={() => setExpenseModal(true)}
                     tone="violet"
-                    style={{ flex: 1 }}
                   />
                 </View>
               </>

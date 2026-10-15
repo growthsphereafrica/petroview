@@ -3,10 +3,18 @@
  * Works for both opening (Step 2 of Start Shift) and closing (before End Shift).
  */
 
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { CheckCircle2, Gauge, Sparkles } from 'lucide-react'
 import { ScreenHeader } from '../ui'
-import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, findPumpByIdOrName, getStationPumps, registerStationPumps } from '../../../core/domain/config'
+import {
+  FUEL_META,
+  MAX_METER_READING,
+  PRODUCTION_PUMPS,
+  findPumpByIdOrName,
+  getStationPumps,
+  registerStationPumps,
+  deriveNozzlesForPump,
+} from '../../../core/domain/config'
 import { shiftRepo } from '../../../core/infra/repositories'
 import type { FuelCode, MeterReading } from '../../../core/domain/types'
 
@@ -14,11 +22,19 @@ interface Props {
   pumpId: string
   stationId?: string
   mode: 'opening' | 'closing'
+  selectedNozzleIndices?: number[]
   onSave: (readings: MeterReading[]) => void
   onBack: () => void
 }
 
-export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, onSave, onBack }) => {
+export const MeterReadingsScreen: React.FC<Props> = ({
+  pumpId,
+  stationId,
+  mode,
+  selectedNozzleIndices,
+  onSave,
+  onBack,
+}) => {
   const [stationPumps, setStationPumps] = useState(() => getStationPumps(stationId))
   const pump = findPumpByIdOrName(stationPumps, pumpId) ??
     findPumpByIdOrName(getStationPumps(stationId), pumpId) ??
@@ -36,6 +52,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
               id: p.id,
               name: p.name,
               fuels: p.fuels as any,
+              nozzles: (p as any).nozzles,
             }))
             registerStationPumps(stationId, mapped)
             setStationPumps(mapped)
@@ -46,21 +63,30 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
     return () => { cancelled = true }
   }, [stationId])
 
+  const allNozzles = useMemo(() => deriveNozzlesForPump(pump), [pump])
+  const activeNozzles = useMemo(() => {
+    if (selectedNozzleIndices && selectedNozzleIndices.length > 0) {
+      return allNozzles.filter(n => selectedNozzleIndices.includes(n.nozzleIndex))
+    }
+    return allNozzles
+  }, [allNozzles, selectedNozzleIndices])
+
   // Safe fuel meta lookup — custom OMC products may not be in the static FUEL_META map
   const getFuelColor = (fuel: string) => FUEL_META[fuel]?.color ?? '#F97316'
   const [values, setValues] = useState<Record<number, string>>(() =>
-    Object.fromEntries(pump.fuels.map((_, i) => [i, ''])),
+    Object.fromEntries(activeNozzles.map(n => [n.nozzleIndex, ''])),
   )
 
   useEffect(() => {
     setValues(prev => {
       const next: Record<number, string> = {}
-      pump.fuels.forEach((_, i) => {
-        next[i] = prev[i] ?? ''
+      activeNozzles.forEach(n => {
+        next[n.nozzleIndex] = prev[n.nozzleIndex] ?? ''
       })
       return next
     })
-  }, [pump.id, pump.fuels.join(',')])
+  }, [pump.id, activeNozzles])
+
   const [errors, setErrors] = useState<Record<number, string>>({})
   const [autoFilledShift, setAutoFilledShift] = useState<string | null>(null)
   const [loadingDefaults, setLoadingDefaults] = useState(mode === 'opening')
@@ -68,7 +94,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
   useEffect(() => {
     let cancelled = false
     const init = async () => {
-      const initial: Record<number, string> = Object.fromEntries(pump.fuels.map((_, i) => [i, '']))
+      const initial: Record<number, string> = Object.fromEntries(activeNozzles.map(n => [n.nozzleIndex, '']))
       if (mode === 'opening') {
         setLoadingDefaults(true)
         try {
@@ -87,15 +113,13 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
 
           if (!cancelled && latestClosed && latestClosed.closingReadings?.length) {
             let filledCount = 0
-            for (let i = 0; i < pump.fuels.length; i++) {
-              const expectedFuel = pump.fuels[i]
-              // Find matching reading by nozzleIndex or position
+            for (const n of activeNozzles) {
               const match =
-                latestClosed.closingReadings.find(r => r.nozzleIndex === i + 1 && r.fuelCode === expectedFuel) ||
-                (latestClosed.closingReadings[i]?.fuelCode === expectedFuel ? latestClosed.closingReadings[i] : undefined) ||
-                latestClosed.closingReadings.find(r => r.fuelCode === expectedFuel)
+                latestClosed.closingReadings.find(r => r.nozzleIndex === n.nozzleIndex) ||
+                (latestClosed.closingReadings[n.nozzleIndex - 1]?.fuelCode === n.fuelCode ? latestClosed.closingReadings[n.nozzleIndex - 1] : undefined) ||
+                latestClosed.closingReadings.find(r => r.fuelCode === n.fuelCode)
               if (match && match.value > 0) {
-                initial[i] = String(match.value)
+                initial[n.nozzleIndex] = String(match.value)
                 filledCount += 1
               }
             }
@@ -118,20 +142,20 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
     return () => {
       cancelled = true
     }
-  }, [pumpId, pump, mode])
+  }, [pumpId, pump, activeNozzles, mode])
 
   const parse = (v: string): number => Number(v.replace(/,/g, '')) || 0
 
   const validate = (): boolean => {
     const next: Record<number, string> = {}
-    for (let i = 0; i < pump.fuels.length; i++) {
-      const raw = values[i]
+    for (const n of activeNozzles) {
+      const raw = values[n.nozzleIndex]
       if (!raw || raw.trim() === '') {
-        next[i] = 'Required'
+        next[n.nozzleIndex] = 'Required'
       } else {
         const val = parse(raw)
-        if (!Number.isFinite(val) || val < 0) next[i] = 'Must be ≥ 0'
-        else if (val > MAX_METER_READING) next[i] = 'Implausible value'
+        if (!Number.isFinite(val) || val < 0) next[n.nozzleIndex] = 'Must be ≥ 0'
+        else if (val > MAX_METER_READING) next[n.nozzleIndex] = 'Implausible value'
       }
     }
     setErrors(next)
@@ -140,17 +164,12 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
 
   const submit = () => {
     if (!validate()) return
-    const readings: MeterReading[] = pump.fuels.map((fuel, index) => {
-      const sideLabel = pump.fuels.length === 2
-        ? (index === 0 ? 'Side 1' : 'Side 2')
-        : `Nozzle ${index + 1}`
-      return {
-        fuelCode: fuel,
-        value: Math.round(parse(values[index]) * 100) / 100,
-        nozzleIndex: index + 1,
-        nozzleLabel: `${sideLabel} (${fuel})`,
-      }
-    })
+    const readings: MeterReading[] = activeNozzles.map(noz => ({
+      fuelCode: noz.fuelCode,
+      value: Math.round(parse(values[noz.nozzleIndex]) * 100) / 100,
+      nozzleIndex: noz.nozzleIndex,
+      nozzleLabel: noz.name,
+    }))
     onSave(readings)
   }
 
@@ -166,7 +185,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
           <Gauge className="w-5 h-5 text-orange-400 shrink-0" />
           <p className="text-[11px] text-slate-400 leading-snug">
             {mode === 'opening'
-              ? 'Opening meters are automatically carried from the previous closing stock. Verify the figures for each nozzle before starting.'
+              ? 'Opening meters are automatically carried from the previous closing stock. Verify figures for your assigned nozzle(s) before starting.'
               : 'Read the figures shown on each meter at the end of your shift and enter them below. These lock in your sales calculation.'}
           </p>
         </div>
@@ -182,53 +201,50 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
         )}
 
         <div className="flex flex-col gap-3">
-          {pump.fuels.map((fuel, index) => {
-            const sideLabel = pump.fuels.length === 2
-              ? (index === 0 ? 'Side 1' : 'Side 2')
-              : `Nozzle ${index + 1}`
+          {activeNozzles.map(noz => {
             return (
               <div
-                key={`${fuel}-${index}`}
+                key={`${noz.fuelCode}-${noz.nozzleIndex}`}
                 className="flex flex-col gap-2 p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm"
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span
                       className="px-2.5 py-1 rounded-lg text-center text-[10px] font-black text-white uppercase"
-                      style={{ backgroundColor: getFuelColor(fuel) }}
+                      style={{ backgroundColor: getFuelColor(noz.fuelCode) }}
                     >
-                      {fuel}
+                      {noz.fuelCode}
                     </span>
                     <span className="text-xs font-bold text-white">
-                      {FUEL_META[fuel]?.label || fuel}
+                      {noz.name}
                     </span>
                   </div>
                   <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-slate-950 text-orange-400 border border-slate-800">
-                    {sideLabel}
+                    Nozzle #{noz.nozzleIndex}
                   </span>
                 </div>
 
                 <div className="flex items-center gap-2">
                   <input
-                    value={values[index] ?? ''}
+                    value={values[noz.nozzleIndex] ?? ''}
                     onChange={e => {
                       const sanitized = e.target.value.replace(/[^0-9.,]/g, '')
-                      setValues(prev => ({ ...prev, [index]: sanitized }))
+                      setValues(prev => ({ ...prev, [noz.nozzleIndex]: sanitized }))
                       setErrors(prev => {
                         const copy = { ...prev }
-                        delete copy[index]
+                        delete copy[noz.nozzleIndex]
                         return copy
                       })
                     }}
                     inputMode="decimal"
                     placeholder="0.00"
                     className={`flex-1 rounded-xl bg-slate-950 border px-3.5 py-2.5 text-right font-mono text-sm text-white placeholder:text-slate-700 outline-none transition ${
-                      errors[index] ? 'border-rose-500' : 'border-slate-800 focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20'
+                      errors[noz.nozzleIndex] ? 'border-rose-500' : 'border-slate-800 focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20'
                     }`}
                   />
                   <span className="text-xs font-mono font-bold text-slate-500">L</span>
                 </div>
-                {errors[index] && <span className="text-[10px] font-bold text-rose-400">{errors[index]}</span>}
+                {errors[noz.nozzleIndex] && <span className="text-[10px] font-bold text-rose-400">{errors[noz.nozzleIndex]}</span>}
               </div>
             )
           })}
@@ -238,7 +254,9 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
           onClick={submit}
           className="mt-auto sticky bottom-0 w-full rounded-xl bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white py-3.5 text-sm font-extrabold transition active:scale-[0.98] shadow-lg shadow-orange-950/50 border border-orange-400/30"
         >
-          {mode === 'opening' ? 'Save Opening Readings & Start Shift' : 'Confirm & Close Shift'}
+          {mode === 'opening'
+            ? `Save Opening Readings & Start Shift (${activeNozzles.length} Nozzle${activeNozzles.length > 1 ? 's' : ''})`
+            : 'Confirm & Close Shift'}
         </button>
       </div>
     </div>

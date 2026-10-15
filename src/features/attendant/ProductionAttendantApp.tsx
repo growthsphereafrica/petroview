@@ -3,7 +3,7 @@
  * mobile screen flow with typed navigation and a global toast.
  */
 
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, Info, X } from 'lucide-react'
 import { AttendantSessionProvider, ShiftProvider, useAttendantSession, useShift } from './providers'
 import { clearUnifiedSession, type UnifiedSession } from '../unified/UnifiedLoginScreen'
@@ -37,24 +37,39 @@ const Splash: React.FC = () => (
 )
 
 const ShiftNavigator: React.FC = () => {
-  const [screen, setScreen] = useState<Screen>('dashboard')
+  const [screen, setScreen] = useState<Screen>('start_shift')
   const [pendingPumpId, setPendingPumpId] = useState<string | null>(null)
+  const [pendingNozzleIndices, setPendingNozzleIndices] = useState<number[] | null>(null)
   const { attendant } = useAttendantSession()
-  const { activeShift, openShift, toast, dismissToast } = useShift()
+  const { activeShift, openShift, toast, dismissToast, loading: shiftLoading } = useShift()
   const go = (s: Screen) => setScreen(s)
+
+  // When an attendant signs in:
+  // - If no active shift, the first thing they see is to select pump & nozzle ('start_shift')
+  // - If an active shift is already running, show the active shift dashboard with closing option ('dashboard')
+  useEffect(() => {
+    if (!shiftLoading) {
+      if (activeShift) {
+        setScreen(prev => (prev === 'start_shift' ? 'dashboard' : prev))
+      } else {
+        setScreen(prev => (prev === 'dashboard' ? 'start_shift' : prev))
+      }
+    }
+  }, [shiftLoading, activeShift])
 
   const dashboard = (
     <DashboardScreen
       onGoToStartShift={() => go('start_shift')}
-      onGoToTransactions={() => go('sales')}
+      onGoToTransactions={() => go('dashboard')}
       onGoToClose={() => go('closing')}
       onGoToSync={() => go('sync')}
       onGoToSettings={() => go('settings')}
     />
   )
 
-  const handleStartShiftNext = (pumpId: string) => {
+  const handleStartShiftNext = (pumpId: string, nozzleIndices: number[]) => {
     setPendingPumpId(pumpId)
+    setPendingNozzleIndices(nozzleIndices)
     go('opening_readings')
   }
 
@@ -77,24 +92,21 @@ const ShiftNavigator: React.FC = () => {
           pumpId={pendingPumpId}
           stationId={attendant?.stationId}
           mode="opening"
+          selectedNozzleIndices={pendingNozzleIndices ?? undefined}
           onBack={() => go('start_shift')}
           onSave={values => void handleOpeningSaved(values)}
         />
       )}
 
-      {screen === 'sales'
-        ? activeShift
-          ? <SalesScreen onBack={() => go('dashboard')} onCaptureReceipt={() => go('receipts')} />
-          : dashboard
-        : null}
+      {screen === 'sales' && dashboard}
 
-      {screen === 'receipts' && activeShift && <ReceiptCaptureScreen onBack={() => go('sales')} />}
+      {screen === 'receipts' && dashboard}
 
       {screen === 'closing' && activeShift && (
         <ClosingReadingsScreen onBack={() => go('dashboard')} onClosed={handleClosed} />
       )}
 
-      {screen === 'summary' && <ShiftSummaryScreen onBack={() => go('dashboard')} onDone={() => go('dashboard')} />}
+      {screen === 'summary' && <ShiftSummaryScreen onBack={() => go('dashboard')} onDone={() => go('start_shift')} />}
 
       {screen === 'sync' && <SyncScreen onBack={() => go('dashboard')} />}
 

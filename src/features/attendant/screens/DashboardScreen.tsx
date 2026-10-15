@@ -89,7 +89,7 @@ export const DashboardScreen: React.FC<{
               <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-2.5">
                 <span className="text-slate-400 font-medium">Assigned Nozzles:</span>
                 <span className="font-mono font-bold text-white uppercase tracking-wider">
-                  {activeShift.openingReadings.map(o => o.fuelCode).join(' · ')}
+                  {activeShift.openingReadings.map(o => o.nozzleLabel || o.fuelCode).join(' · ')}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 leading-snug">
@@ -101,12 +101,6 @@ export const DashboardScreen: React.FC<{
               className="w-full px-4 py-3.5 bg-gradient-to-r from-orange-600 via-orange-500 to-amber-500 hover:from-orange-500 hover:to-amber-400 text-white text-xs font-black flex items-center justify-center gap-2 transition shadow-lg active:scale-[0.99]"
             >
               <Flame className="w-4 h-4 text-amber-200" /> End Shift & Enter Closing Meters
-            </button>
-            <button
-              onClick={onGoToTransactions}
-              className="w-full px-4 py-2.5 bg-slate-900/80 hover:bg-slate-800 text-slate-400 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 transition border-t border-slate-800/80"
-            >
-              <PlusCircle className="w-3.5 h-3.5" /> Optional: Record Individual Customer Sale
             </button>
           </Card>
         ) : (

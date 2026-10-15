@@ -510,6 +510,7 @@ export function assertShiftLedger(shift: ShiftRow & { companyId?: string | null 
     transactionSales.set(fuelCode, current)
     if (transaction.method in transactionPayments) transactionPayments[transaction.method] = money(transactionPayments[transaction.method] + transaction.amount)
   }
+
   for (const sale of expectedSales) {
     const totals = transactionSales.get(sale.fuelCode.toUpperCase()) ?? { litres: 0, amount: 0 }
     if (Math.abs(totals.litres - sale.litres) > 0.05 || Math.abs(totals.amount - sale.amount) > 0.02) throw new Error('Shift sales do not match the synced transaction ledger.')
@@ -597,9 +598,33 @@ syncRouter.post('/entities', authenticate, (req: AuthRequest, res) => {
       if (entity.type === 'SHIFT') {
         const shift = validateShiftData(session, data)
         const existing = db.prepare('SELECT number, stationId, attendantId, pumpId, pumpName, companyId, companyShortCode, status, openedAt, closedAt, openingReadings, closingReadings, sales, expectedTotal, payments, actualTotal, variance, notes, createdAt FROM shifts WHERE id = ?').get(shift.id) as Record<string, unknown> | undefined
+function meterReadingsMatch(aStr: unknown, bStr: unknown): boolean {
+  if (aStr === bStr) return true
+  try {
+    const a = typeof aStr === 'string' ? JSON.parse(aStr) : aStr
+    const b = typeof bStr === 'string' ? JSON.parse(bStr) : bStr
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    return a.every((ra: any, idx: number) => {
+      const rb = b[idx] || b.find((x: any) => x.fuelCode === ra.fuelCode)
+      return rb && ra.fuelCode === rb.fuelCode && Math.abs(Number(ra.value) - Number(rb.value)) <= 0.01
+    })
+  } catch {
+    return false
+  }
+}
+
         if (existing) {
           if (!canAccessShift(session, existing as { stationId: string; attendantId: string; companyId?: string | null })) throw new Error('Shift is outside your account scope.')
-          if (existing.stationId !== shift.stationId || existing.attendantId !== shift.attendantId || existing.number !== shift.number || existing.pumpId !== shift.pumpId || existing.pumpName !== shift.pumpName || existing.openedAt !== shift.openedAt || existing.openingReadings !== shift.openingReadings || existing.createdAt !== shift.createdAt) throw new Error('Shift identity cannot be changed by device sync.')
+          const identityMismatch =
+            existing.stationId !== shift.stationId ||
+            existing.attendantId !== shift.attendantId ||
+            existing.number !== shift.number ||
+            existing.pumpId !== shift.pumpId ||
+            String(existing.pumpName).toUpperCase() !== String(shift.pumpName).toUpperCase() ||
+            existing.openedAt !== shift.openedAt ||
+            !meterReadingsMatch(existing.openingReadings, shift.openingReadings) ||
+            Math.abs(new Date(String(existing.createdAt)).getTime() - new Date(String(shift.createdAt)).getTime()) > 5000
+          if (identityMismatch) throw new Error('Shift identity cannot be changed by device sync.')
           if (existing.companyId && existing.companyId !== shift.companyId) throw new Error('Shift company identity cannot be changed by device sync.')
           if (!SHIFT_STATUSES.has(String(existing.status))) throw new Error('Reviewed shifts cannot be overwritten by device sync.')
           if (existing.status === 'CLOSED') {

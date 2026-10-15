@@ -491,6 +491,25 @@ export async function backendGetShifts(status?: string, station?: string): Promi
   return apiCall(`/api/shifts${qs ? '?' + qs : ''}`)
 }
 
+export async function backendCloseShift(
+  shiftId: string,
+  payload: {
+    closingReadings: unknown
+    sales?: unknown
+    expectedTotal?: number
+    payments?: unknown
+    actualTotal?: number
+    variance?: number
+    notes?: string
+    closedAt?: string
+  },
+): Promise<{ success: boolean; shift: any }> {
+  return apiCall(`/api/shifts/${encodeURIComponent(shiftId)}/close`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export async function backendReviewShift(
   shiftId: string,
   verdict: 'APPROVED' | 'REJECTED',

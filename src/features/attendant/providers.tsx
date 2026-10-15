@@ -175,6 +175,13 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
         if (remote && Array.isArray(remote.shifts)) {
           for (const s of remote.shifts) {
             if (s && s.id) {
+              const local = await shiftRepo.getById(s.id as string)
+              // Critical: A remote OPEN shift must NEVER overwrite a local shift that has been CLOSED!
+              if (local) {
+                if (local.syncStatus === 'PENDING') continue
+                if (local.status === 'CLOSED' && s.status === 'OPEN') continue
+                if (local.status === 'CLOSED' && s.status === 'CLOSED' && (!s.closingReadings || (s.closingReadings as any[]).length === 0)) continue
+              }
               await shiftRepo.upsert(s as unknown as Shift)
             }
           }
@@ -326,9 +333,31 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       const closed = await shiftService.closeShift(activeShift, input.closingReadings, input.notes ?? null, input.remittance)
       setActiveShift(null)
       setShifts(prev => prev.map(s => (s.id === closed.id ? closed : s)))
+
+      // 1. Direct cloud push to ensure server marks it CLOSED immediately
+      try {
+        const { backendCloseShift } = await import('../../services/backendApiService')
+        await backendCloseShift(closed.id, {
+          closingReadings: closed.closingReadings,
+          sales: closed.sales,
+          expectedTotal: closed.expectedTotal,
+          payments: closed.payments,
+          actualTotal: closed.actualTotal,
+          variance: closed.variance,
+          notes: closed.notes || undefined,
+          closedAt: closed.closedAt || new Date().toISOString(),
+        })
+        closed.syncStatus = 'SYNCED'
+        await shiftRepo.upsert(closed)
+      } catch (cloudErr) {
+        console.warn('[closeShift] Direct cloud close failed, queue will retry:', cloudErr)
+      }
+
+      // 2. Also run sync queue
       try {
         await syncService.runPendingSync(true)
       } catch { /* offline fallback */ }
+
       await refresh()
       notify(`Shift ${closed.number} closed and submitted directly to supervisor for review.`, 'success')
     },

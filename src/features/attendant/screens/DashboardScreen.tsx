@@ -244,16 +244,16 @@ export const DashboardScreen: React.FC<{
             )}
           </div>
           <Card className="divide-y divide-slate-800/70 overflow-hidden">
-            {shifts.length === 0 ? (
-              <p className="px-4 py-5 text-xs text-slate-500 text-center">No shifts yet. Start your first one.</p>
+            {shifts.filter(s => s.status !== 'OPEN').length === 0 ? (
+              <p className="px-4 py-5 text-xs text-slate-500 text-center">No past shift submissions yet.</p>
             ) : (
-              shifts.slice(0, 4).map(s => (
+              shifts.filter(s => s.status !== 'OPEN').slice(0, 4).map(s => (
                 <div key={s.id} onClick={onGoToHistory} className="cursor-pointer">
                   <TappableRow
                     title={s.number}
-                    subtitle={`${s.pumpName} · ${formatTimeOnly(s.openedAt)}`}
+                    subtitle={`${s.pumpName} · ${formatTimeOnly(s.closedAt || s.openedAt)}`}
                     value={formatGHS(s.actualTotal)}
-                    accent={s.status === 'OPEN' ? '#F97316' : '#6366f1'}
+                    accent={s.status === 'REJECTED' ? '#f43f5e' : s.status === 'APPROVED' ? '#10b981' : '#6366f1'}
                     icon={<CalendarClock className="w-4 h-4" />}
                   />
                 </div>

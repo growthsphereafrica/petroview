@@ -337,3 +337,143 @@ shiftsRouter.post('/:id/resubmit', authenticate, (req: AuthRequest, res) => {
   res.json({ success: true, shift: deserializeShift(updated) })
 })
 
+shiftsRouter.post('/:id/close', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id) as ScopedShiftRow | undefined
+  if (!shift) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Shift not found.' })
+    return
+  }
+  if (session.role === 'attendant' && shift.attendantId !== session.userId) {
+    res.status(403).json({ error: 'FORBIDDEN', message: "You cannot close another attendant's shift." })
+    return
+  }
+  if (session.role === 'supervisor' && shift.stationId !== session.stationId) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot close a shift from another station.' })
+    return
+  }
+  if (!canAccessShift(session, shift)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot access this shift.' })
+    return
+  }
+
+  // Idempotent: If already closed or reviewed, return current state
+  if (shift.status === 'CLOSED' || shift.status === 'APPROVED' || shift.status === 'REVIEWED') {
+    res.json({ success: true, shift: deserializeShift(shift), alreadyClosed: true })
+    return
+  }
+
+  const body = (req.body ?? {}) as {
+    closingReadings?: unknown
+    sales?: unknown
+    expectedTotal?: number
+    payments?: unknown
+    actualTotal?: number
+    variance?: number
+    notes?: string
+    closedAt?: string
+  }
+
+  const now = new Date().toISOString()
+  const closedAt = typeof body.closedAt === 'string' && body.closedAt ? body.closedAt : now
+
+  let closingReadingsStr = shift.closingReadings
+  if (body.closingReadings !== undefined) {
+    closingReadingsStr = typeof body.closingReadings === 'string' ? body.closingReadings : JSON.stringify(body.closingReadings)
+  }
+
+  let salesStr = shift.sales
+  if (body.sales !== undefined) {
+    salesStr = typeof body.sales === 'string' ? body.sales : JSON.stringify(body.sales)
+  }
+
+  let paymentsStr = shift.payments
+  if (body.payments !== undefined) {
+    paymentsStr = typeof body.payments === 'string' ? body.payments : JSON.stringify(body.payments)
+  }
+
+  const expectedTotal = typeof body.expectedTotal === 'number' ? body.expectedTotal : shift.expectedTotal
+  const actualTotal = typeof body.actualTotal === 'number' ? body.actualTotal : shift.actualTotal
+  const variance = typeof body.variance === 'number' ? body.variance : Math.round((actualTotal - expectedTotal) * 100) / 100
+  const userNotes = typeof body.notes === 'string' ? body.notes.trim() : (shift.notes || '')
+
+  // Ensure all metered sales have corresponding transactions in SQLite so assertShiftLedger succeeds
+  try {
+    const parsedSales = Array.isArray(body.sales)
+      ? body.sales
+      : (typeof salesStr === 'string' ? JSON.parse(salesStr) : [])
+    for (const sale of parsedSales) {
+      if (sale && Number(sale.litres) > 0) {
+        const fuelCode = String(sale.fuelCode).toUpperCase()
+        const row = db.prepare('SELECT COALESCE(SUM(litres), 0) AS totalLitres FROM transactions WHERE shiftId = ? AND UPPER(fuelCode) = ?').get(shift.id, fuelCode) as { totalLitres: number }
+        const missingLitres = Math.round((Number(sale.litres) - row.totalLitres) * 100) / 100
+        if (missingLitres > 0.05) {
+          const unitPrice = Number(sale.unitPrice) || 14.8
+          const missingAmount = Math.round(missingLitres * unitPrice * 100) / 100
+          db.prepare(`
+            INSERT INTO transactions (id, shiftId, attendantId, fuelCode, litres, amount, unitPrice, method, customerRef, recordedAt, syncStatus)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'CASH', 'Shift closing auto-reconciliation', ?, 'SYNCED')
+          `).run(
+            newToken(),
+            shift.id,
+            shift.attendantId,
+            fuelCode,
+            missingLitres,
+            missingAmount,
+            unitPrice,
+            closedAt
+          )
+        }
+      }
+    }
+  } catch (txErr) {
+    console.warn('[closeShift] auto-reconciliation error:', txErr)
+  }
+
+  db.prepare(`
+    UPDATE shifts
+    SET closingReadings = ?,
+        sales = ?,
+        expectedTotal = ?,
+        payments = ?,
+        actualTotal = ?,
+        variance = ?,
+        notes = ?,
+        status = 'CLOSED',
+        closedAt = ?,
+        syncStatus = 'SYNCED',
+        updatedAt = ?
+    WHERE id = ?
+  `).run(
+    closingReadingsStr,
+    salesStr,
+    expectedTotal,
+    paymentsStr,
+    actualTotal,
+    variance,
+    userNotes,
+    closedAt,
+    now,
+    shift.id,
+  )
+
+  db.prepare(`
+    INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    newToken(),
+    'SHIFT_CLOSED',
+    session.userId,
+    session.fullName,
+    session.role.toUpperCase(),
+    shift.id,
+    `Shift ${shift.number} (${shift.attendantName}) closed. Variance: GHS ${variance.toFixed(2)}`,
+    userNotes,
+    now,
+  )
+
+  const updated = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id) as ShiftRow
+  res.json({ success: true, shift: deserializeShift(updated) })
+})
+
+

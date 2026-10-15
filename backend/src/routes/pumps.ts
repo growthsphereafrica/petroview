@@ -17,9 +17,46 @@ interface PumpRow {
   companyId: string | null
   name: string
   fuels: string
+  nozzles?: string | null
   active: number
   createdAt: string
   updatedAt: string
+}
+
+export interface PumpNozzle {
+  id: string
+  nozzleIndex: number
+  name: string
+  fuelCode: string
+  active: boolean
+}
+
+function parseStoredNozzles(rawNozzles: unknown, fuels: string[]): PumpNozzle[] {
+  if (typeof rawNozzles === 'string' && rawNozzles.trim()) {
+    try {
+      const parsed = JSON.parse(rawNozzles)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map((item: any, idx: number) => ({
+          id: typeof item.id === 'string' ? item.id : `noz-${idx + 1}`,
+          nozzleIndex: typeof item.nozzleIndex === 'number' ? item.nozzleIndex : (idx + 1),
+          name: typeof item.name === 'string' && item.name.trim() ? item.name.trim() : (fuels[idx] ? `Nozzle ${idx + 1} (${fuels[idx]})` : `Nozzle ${idx + 1}`),
+          fuelCode: typeof item.fuelCode === 'string' ? item.fuelCode.trim().toUpperCase() : (fuels[idx] || 'PMS'),
+          active: item.active !== false,
+        }))
+      }
+    } catch { /* fallback */ }
+  }
+  return fuels.map((f, idx) => {
+    const isDup = fuels.filter(x => x === f).length > 1
+    const name = isDup ? `Side ${idx + 1} (${f})` : `Nozzle ${idx + 1} (${f})`
+    return {
+      id: `noz-${idx + 1}`,
+      nozzleIndex: idx + 1,
+      name,
+      fuelCode: f,
+      active: true,
+    }
+  })
 }
 
 function sessionOf(req: AuthRequest): SessionClaims {
@@ -34,15 +71,17 @@ function stationById(value: unknown): StationRow | undefined {
     FROM companyStations cs
     JOIN companies c ON c.id = cs.companyId
     WHERE cs.active = 1 AND c.active = 1
-      AND (UPPER(cs.id) = UPPER(?) OR UPPER(cs.code) = UPPER(?))
+      AND (UPPER(cs.id) = UPPER(?) OR UPPER(cs.code) = UPPER(?) OR UPPER(cs.name) = UPPER(?))
     LIMIT 1
-  `).get(stationId, stationId) as StationRow | undefined
+  `).get(stationId, stationId, stationId) as StationRow | undefined
 }
 
 function canAccessStation(session: SessionClaims, station: StationRow): boolean {
   if (session.role === 'superadmin') return true
   if (session.role === 'headoffice') return session.companyId === station.companyId
-  return !!session.stationId && session.stationId === station.id
+  if (session.stationId && session.stationId === station.id) return true
+  if (session.companyId && session.companyId === station.companyId) return true
+  return false
 }
 
 function stationForRequest(session: SessionClaims, value: unknown, required = true): StationRow | undefined {
@@ -77,7 +116,8 @@ function normalizeFuels(value: unknown, companyId: string, fallback: string[] = 
     if (typeof item !== 'string') throw new Error('Pump fuels must be strings.')
     const fuel = item.trim().toUpperCase()
     if (!/^[A-Z0-9_-]{1,20}$/.test(fuel)) throw new Error('Invalid pump fuel code.')
-    if (!result.includes(fuel)) result.push(fuel)
+    // Allow the same fuel on multiple nozzles (e.g. Side 1 Petrol and Side 2 Petrol)
+    result.push(fuel)
   }
   if (result.length > 32) throw new Error('A pump cannot have more than 32 fuel codes.')
   const allowed = new Set(companyFuelCodes(companyId))
@@ -140,16 +180,21 @@ pumpsRouter.get('/', (req: AuthRequest, res) => {
     }
     res.json({
       count: rows.length,
-      pumps: rows.map(row => ({
-        id: row.id,
-        stationId: row.stationId,
-        companyId: row.companyId,
-        name: row.name,
-        fuels: parseStoredFuels(row.fuels),
-        active: Number(row.active) === 1,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-      })),
+      pumps: rows.map(row => {
+        const fuels = parseStoredFuels(row.fuels)
+        const nozzles = parseStoredNozzles(row.nozzles, fuels)
+        return {
+          id: row.id,
+          stationId: row.stationId,
+          companyId: row.companyId,
+          name: row.name,
+          fuels,
+          nozzles,
+          active: Number(row.active) === 1,
+          createdAt: row.createdAt,
+          updatedAt: row.updatedAt,
+        }
+      }),
     })
     return
   }
@@ -184,8 +229,36 @@ pumpsRouter.get('/', (req: AuthRequest, res) => {
     conditions.push('p.companyId = @requestedCompany')
     params.requestedCompany = requestedCompany
   }
-  const rows = db.prepare(`SELECT p.* FROM pumps p WHERE ${conditions.join(' AND ')} ORDER BY p.name ASC LIMIT 1000`).all(params) as PumpRow[]
-  res.json({ count: rows.length, pumps: rows.map(row => ({ id: row.id, stationId: row.stationId, companyId: row.companyId, name: row.name, fuels: parseStoredFuels(row.fuels), active: Number(row.active) === 1, createdAt: row.createdAt, updatedAt: row.updatedAt })) })
+  let rows = db.prepare(`SELECT p.* FROM pumps p WHERE ${conditions.join(' AND ')} ORDER BY p.createdAt ASC, p.name ASC LIMIT 1000`).all(params) as PumpRow[]
+  if (rows.length === 0 && station) {
+    const now = new Date().toISOString()
+    for (let p = 1; p <= 4; p++) {
+      const pId = `pump-${station.id}-${p}`
+      const pName = `Pump ${p}`
+      db.prepare('INSERT OR IGNORE INTO pumps (id, stationId, companyId, name, fuels, active, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, 1, ?, ?)').run(
+        pId, station.id, station.companyId, pName, JSON.stringify(['PMS', 'AGO']), now, now,
+      )
+    }
+    rows = db.prepare(`SELECT p.* FROM pumps p WHERE ${conditions.join(' AND ')} ORDER BY p.createdAt ASC, p.name ASC LIMIT 1000`).all(params) as PumpRow[]
+  }
+  res.json({
+    count: rows.length,
+    pumps: rows.map(row => {
+      const fuels = parseStoredFuels(row.fuels)
+      const nozzles = parseStoredNozzles(row.nozzles, fuels)
+      return {
+        id: row.id,
+        stationId: row.stationId,
+        companyId: row.companyId,
+        name: row.name,
+        fuels,
+        nozzles,
+        active: Number(row.active) === 1,
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt,
+      }
+    }),
+  })
 })
 
 pumpsRouter.post('/', authenticate, requireRole('headoffice', 'superadmin', 'supervisor'), (req: AuthRequest, res) => {
@@ -210,9 +283,20 @@ pumpsRouter.post('/', authenticate, requireRole('headoffice', 'superadmin', 'sup
   }
   const id = `pump-${newToken()}`
   const now = new Date().toISOString()
-  db.prepare('INSERT INTO pumps (id, stationId, companyId, name, fuels, active, createdAt, updatedAt) VALUES (?,?,?,?,?,1,?,?)').run(id, station.id, station.companyId, name, JSON.stringify(fuels), now, now)
+  const initialNozzles: PumpNozzle[] = (Array.isArray(body.nozzles) && body.nozzles.length > 0)
+    ? body.nozzles.map((nz: any, idx: number) => ({
+        id: typeof nz.id === 'string' ? nz.id : `noz-${idx + 1}`,
+        nozzleIndex: idx + 1,
+        name: typeof nz.name === 'string' && nz.name.trim() ? nz.name.trim() : `Nozzle ${idx + 1} (${fuels[idx] || 'PMS'})`,
+        fuelCode: typeof nz.fuelCode === 'string' ? nz.fuelCode.trim().toUpperCase() : (fuels[idx] || 'PMS'),
+        active: nz.active !== false,
+      }))
+    : parseStoredNozzles(null, fuels)
+  db.prepare('INSERT INTO pumps (id, stationId, companyId, name, fuels, nozzles, active, createdAt, updatedAt) VALUES (?,?,?,?,?,?,1,?,?)').run(
+    id, station.id, station.companyId, name, JSON.stringify(fuels), JSON.stringify(initialNozzles), now, now
+  )
   audit(req, 'PUMP_CREATED', id, `Created pump ${name}`, { companyId: station.companyId, stationId: station.id }, now)
-  res.status(201).json({ pump: { id, stationId: station.id, companyId: station.companyId, name, fuels, active: true, createdAt: now, updatedAt: now } })
+  res.status(201).json({ pump: { id, stationId: station.id, companyId: station.companyId, name, fuels, nozzles: initialNozzles, active: true, createdAt: now, updatedAt: now } })
 })
 
 pumpsRouter.put('/:id', authenticate, requireRole('headoffice', 'superadmin', 'supervisor'), (req: AuthRequest, res) => {
@@ -237,37 +321,87 @@ pumpsRouter.put('/:id', authenticate, requireRole('headoffice', 'superadmin', 's
     res.status(400).json({ error: 'BAD_REQUEST', message: 'Pump name is invalid.' })
     return
   }
-  let fuels = body.fuels === undefined ? parseStoredFuels(existing.fuels) : body.fuels
-  if (body.renameNozzle !== undefined || body.deleteNozzle !== undefined || body.addNozzle !== undefined) {
-    if (typeof fuels !== 'object' || !Array.isArray(fuels)) fuels = parseStoredFuels(existing.fuels)
-    fuels = [...(fuels as unknown[])]
-    const rename = body.renameNozzle as { oldName?: unknown; newName?: unknown } | undefined
-    if (rename) {
-      const oldName = typeof rename.oldName === 'string' ? rename.oldName.trim().toUpperCase() : ''
-      const newName = typeof rename.newName === 'string' ? rename.newName.trim().toUpperCase() : ''
-      if (!oldName || !newName) {
-        res.status(400).json({ error: 'BAD_REQUEST', message: 'renameNozzle requires oldName and newName.' })
-        return
+  let fuels: string[] = Array.isArray(body.fuels) ? (body.fuels as string[]) : parseStoredFuels(existing.fuels)
+  let nozzles = parseStoredNozzles(existing.nozzles, parseStoredFuels(existing.fuels))
+
+  // Custom nozzle name updates or single nozzle operations
+  const rename = (body.updateNozzle ?? body.renameNozzle) as { oldName?: unknown; newName?: unknown; name?: unknown; fuelCode?: unknown; index?: unknown } | undefined
+  if (rename) {
+    fuels = [...fuels]
+    const targetIndex = typeof rename.index === 'number' ? rename.index : -1
+    const newName = typeof rename.newName === 'string' ? rename.newName.trim() : typeof rename.name === 'string' ? rename.name.trim() : ''
+    const fuelCode = typeof rename.fuelCode === 'string' ? rename.fuelCode.trim().toUpperCase() : ''
+
+    if (targetIndex >= 0 && targetIndex < nozzles.length) {
+      if (newName) nozzles[targetIndex].name = newName
+      if (fuelCode) {
+        nozzles[targetIndex].fuelCode = fuelCode
+        fuels[targetIndex] = fuelCode
       }
-      fuels = (fuels as string[]).map(fuel => fuel.toUpperCase() === oldName ? newName : fuel)
-    }
-    if (body.deleteNozzle !== undefined) {
-      const deleted = typeof body.deleteNozzle === 'string' ? body.deleteNozzle.trim().toUpperCase() : ''
-      if (!deleted) {
-        res.status(400).json({ error: 'BAD_REQUEST', message: 'deleteNozzle is invalid.' })
-        return
+    } else if (rename.oldName) {
+      const oldFuel = String(rename.oldName).trim().toUpperCase()
+      const idx = nozzles.findIndex(n => n.fuelCode.toUpperCase() === oldFuel || n.name.toUpperCase() === oldFuel)
+      if (idx !== -1) {
+        if (newName) nozzles[idx].name = newName
+        if (fuelCode) {
+          nozzles[idx].fuelCode = fuelCode
+          fuels[idx] = fuelCode
+        }
       }
-      fuels = (fuels as string[]).filter(fuel => fuel.toUpperCase() !== deleted)
-    }
-    if (body.addNozzle !== undefined) {
-      const added = typeof body.addNozzle === 'string' ? body.addNozzle.trim().toUpperCase() : ''
-      if (!added) {
-        res.status(400).json({ error: 'BAD_REQUEST', message: 'addNozzle is invalid.' })
-        return
-      }
-      if (!(fuels as string[]).some(fuel => fuel.toUpperCase() === added)) (fuels as string[]).push(added)
     }
   }
+
+  if (body.nozzles !== undefined && Array.isArray(body.nozzles)) {
+    nozzles = body.nozzles.map((nz: any, idx: number) => ({
+      id: typeof nz.id === 'string' ? nz.id : `noz-${idx + 1}`,
+      nozzleIndex: idx + 1,
+      name: typeof nz.name === 'string' && nz.name.trim() ? nz.name.trim() : `Nozzle ${idx + 1}`,
+      fuelCode: typeof nz.fuelCode === 'string' ? nz.fuelCode.trim().toUpperCase() : 'PMS',
+      active: nz.active !== false,
+    }))
+    fuels = nozzles.map(n => n.fuelCode)
+  }
+
+  if (body.deleteNozzleIndex !== undefined && typeof body.deleteNozzleIndex === 'number') {
+    const idx = body.deleteNozzleIndex
+    if (idx >= 0 && idx < nozzles.length) {
+      nozzles.splice(idx, 1)
+      nozzles.forEach((n, i) => { n.nozzleIndex = i + 1 })
+      if (Array.isArray(fuels) && idx < fuels.length) fuels.splice(idx, 1)
+    }
+  } else if (body.deleteNozzle !== undefined) {
+    const deleted = typeof body.deleteNozzle === 'string' ? body.deleteNozzle.trim().toUpperCase() : ''
+    const idx = nozzles.findIndex(n => n.fuelCode.toUpperCase() === deleted || n.name.toUpperCase() === deleted)
+    if (idx !== -1) {
+      nozzles.splice(idx, 1)
+      nozzles.forEach((n, i) => { n.nozzleIndex = i + 1 })
+      if (Array.isArray(fuels) && idx < fuels.length) fuels.splice(idx, 1)
+    }
+  }
+
+  if (body.addNozzle !== undefined) {
+    let addFuel = 'PMS'
+    let addName = ''
+    if (typeof body.addNozzle === 'string') {
+      addFuel = body.addNozzle.trim().toUpperCase()
+    } else if (typeof body.addNozzle === 'object' && body.addNozzle !== null) {
+      const obj = body.addNozzle as { name?: string; fuelCode?: string }
+      if (obj.fuelCode) addFuel = obj.fuelCode.trim().toUpperCase()
+      if (obj.name) addName = obj.name.trim()
+    }
+    const nextIdx = nozzles.length + 1
+    const finalName = addName || `Side ${nextIdx} (${addFuel})`
+    nozzles.push({
+      id: `noz-${newToken().slice(0, 8)}`,
+      nozzleIndex: nextIdx,
+      name: finalName,
+      fuelCode: addFuel,
+      active: true,
+    })
+    if (!Array.isArray(fuels)) fuels = []
+    fuels.push(addFuel)
+  }
+
   let normalized: string[]
   try {
     normalized = normalizeFuels(fuels, station.companyId)
@@ -277,9 +411,11 @@ pumpsRouter.put('/:id', authenticate, requireRole('headoffice', 'superadmin', 's
   }
   const active = body.active === undefined ? existing.active : body.active ? 1 : 0
   const now = new Date().toISOString()
-  db.prepare('UPDATE pumps SET name = ?, fuels = ?, active = ?, updatedAt = ? WHERE id = ?').run(name, JSON.stringify(normalized), active, now, existing.id)
-  audit(req, 'PUMP_UPDATED', existing.id, `Updated pump ${name}`, { companyId: station.companyId, stationId: station.id }, now)
-  res.json({ success: true, pump: { id: existing.id, stationId: existing.stationId, companyId: existing.companyId, name, fuels: normalized, active: Boolean(active), updatedAt: now } })
+  db.prepare('UPDATE pumps SET name = ?, fuels = ?, nozzles = ?, active = ?, updatedAt = ? WHERE id = ?').run(
+    name, JSON.stringify(normalized), JSON.stringify(nozzles), active, now, existing.id
+  )
+  audit(req, 'PUMP_UPDATED', existing.id, `Updated pump ${name} with ${nozzles.length} nozzles`, { companyId: station.companyId, stationId: station.id }, now)
+  res.json({ success: true, pump: { id: existing.id, stationId: existing.stationId, companyId: existing.companyId, name, fuels: normalized, nozzles, active: Boolean(active), updatedAt: now } })
 })
 
 pumpsRouter.delete('/:id', authenticate, requireRole('headoffice', 'superadmin', 'supervisor'), (req: AuthRequest, res) => {
@@ -320,9 +456,31 @@ pumpsRouter.delete('/:id/nozzles/:fuelCode', authenticate, requireRole('headoffi
     res.status(400).json({ error: 'BAD_REQUEST', message: 'Invalid fuel code.' })
     return
   }
-  const fuels = parseStoredFuels(existing.fuels).filter(fuel => fuel.toUpperCase() !== fuelCode)
+  const targetIndex = req.query.index !== undefined ? Number(req.query.index) : -1
+  const fuels = parseStoredFuels(existing.fuels)
+  let storedNozzles = parseStoredNozzles(existing.nozzles, fuels)
+  if (targetIndex >= 0 && targetIndex < fuels.length) {
+    fuels.splice(targetIndex, 1)
+    storedNozzles = storedNozzles.filter(n => n.nozzleIndex !== targetIndex + 1)
+  } else {
+    const idx = fuels.findIndex(fuel => fuel.toUpperCase() === fuelCode)
+    if (idx !== -1) {
+      fuels.splice(idx, 1)
+      storedNozzles = storedNozzles.filter(n => n.nozzleIndex !== idx + 1)
+    }
+  }
+  // Re-index nozzle indices
+  storedNozzles = storedNozzles.map((n, i) => ({
+    ...n,
+    nozzleIndex: i + 1,
+  }))
   const now = new Date().toISOString()
-  db.prepare('UPDATE pumps SET fuels = ?, updatedAt = ? WHERE id = ?').run(JSON.stringify(fuels), now, existing.id)
+  db.prepare('UPDATE pumps SET fuels = ?, nozzles = ?, updatedAt = ? WHERE id = ?').run(
+    JSON.stringify(fuels),
+    JSON.stringify(storedNozzles),
+    now,
+    existing.id,
+  )
   audit(req, 'PUMP_NOZZLE_REMOVED', existing.id, `Removed nozzle ${fuelCode}`, { companyId: station.companyId, stationId: station.id }, now)
-  res.json({ success: true, pumpId: existing.id, fuels })
+  res.json({ success: true, pumpId: existing.id, fuels, nozzles: storedNozzles })
 })

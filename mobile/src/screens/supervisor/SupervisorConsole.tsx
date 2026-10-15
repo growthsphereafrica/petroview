@@ -24,7 +24,8 @@ import { TankReadingsSheet } from './TankReadingsSheet'
 import { FuelPricesTab } from './FuelPricesTab'
 import { ExpensesSheet } from './ExpensesSheet'
 import { supervisorService } from '../../core/services/supervisorService'
-import { cloudGetTankReadings } from '../../core/infra/cloudApi'
+import { cloudGetTankReadings, cloudGetPumps, pumpNameFor } from '../../core/infra/cloudApi'
+import { registerStationPumps } from '../../core/domain/config'
 import type { Shift, Attendant } from '../../core/domain/types'
 import { formatGHS, formatLitres, formatDateTime } from '../../shared/currencyFormatter'
 import type { MobileSession } from '../LoginScreen'
@@ -63,16 +64,24 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
   const refresh = useCallback(async () => {
     setLoading(true)
     try {
-      const [s, a] = await Promise.all([
+      const [s, a, pumpsRes] = await Promise.all([
         supervisorService.listShifts(),
         supervisorService.listAttendants(session.stationId),
+        cloudGetPumps(session.stationId, session.companyId).catch(() => null),
       ])
       setShifts(s)
       setAttendants(a)
+      if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
+        registerStationPumps(session.stationId, pumpsRes.pumps.map(p => ({
+          id: p.id,
+          name: p.name,
+          fuels: p.fuels as any,
+        })))
+      }
     } finally {
       setLoading(false)
     }
-  }, [session.stationId])
+  }, [session.stationId, session.companyId])
 
   useEffect(() => {
     void refresh()
@@ -367,7 +376,7 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
           <Pressable key={s.id} onPress={() => setSelected(s)} style={styles.row}>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>{s.number}</Text>
-              <Text style={styles.rowSub}>{s.attendantName} · {s.pumpId.replace('pump-', 'Pump ')} · {s.stationName}</Text>
+              <Text style={styles.rowSub}>{s.attendantName} · {pumpNameFor(s.pumpId)} · {s.stationName}</Text>
               <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '700' }]}>{formatGHS(s.actualTotal)}</Text>
             </View>
             <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
@@ -435,7 +444,7 @@ const ShiftDetailModal: React.FC<{
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.modalTitle}>{shift.number}</Text>
                 <Text style={styles.modalSub}>
-                  {shift.attendantName} · {shift.stationName} · {shift.pumpId.replace('pump-', 'Pump ')}
+                  {shift.attendantName} · {shift.stationName} · {pumpNameFor(shift.pumpId)}
                 </Text>
               </View>
               <Badge tone={toneFor(shift.status)}>{labelFor(shift.status)}</Badge>
@@ -773,7 +782,7 @@ const AttendantsTab: React.FC<{ attendants: Attendant[]; session: MobileSession;
                   {!a.active && <Badge tone="danger">Inactive</Badge>}
                 </View>
                 <Text style={styles.rowSub}>
-                  {a.employeeCode} · {a.pumpId ? a.pumpId.replace('pump-', 'Pump ') : 'Unassigned'}
+                  {a.employeeCode} · {a.pumpId ? pumpNameFor(a.pumpId) : 'Unassigned'}
                 </Text>
               </View>
               {a.active && (

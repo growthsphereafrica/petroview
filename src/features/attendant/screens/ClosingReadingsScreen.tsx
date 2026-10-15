@@ -75,9 +75,10 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
     let totalLitres = 0
     let totalCashExpected = 0
     let allValid = openings.length > 0
-    const perNozzle = openings.map(open => {
+    const perNozzle = openings.map((open, idx) => {
       const fuelCode = open.fuelCode as FuelCode
-      const rawClosing = closingValues[fuelCode] ?? ''
+      const key = open.nozzleIndex ? `nozzle_${open.nozzleIndex}` : `nozzle_${idx}`
+      const rawClosing = closingValues[key] ?? ''
       const hasInput = rawClosing.trim().length > 0
       const closingVal = parseNum(rawClosing)
       const unitPrice = fuelPrices[fuelCode] ?? resolveUnitPrice([], fuelCode)
@@ -99,7 +100,13 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
         totalCashExpected += productSales
       }
 
+      const sideLabel = open.nozzleLabel || (openings.length === 2 ? (idx === 0 ? 'Side 1' : 'Side 2') : `Nozzle ${open.nozzleIndex || idx + 1}`)
+
       return {
+        key,
+        index: idx,
+        nozzleIndex: open.nozzleIndex || (idx + 1),
+        sideLabel,
         fuelCode,
         openingReading: open.value,
         closingReading: closingVal,
@@ -161,10 +168,15 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
     setSubmitting(true)
     setError(null)
     try {
-      const closings: MeterReading[] = openings.map(open => ({
-        fuelCode: open.fuelCode,
-        value: parseNum(closingValues[open.fuelCode] || '0'),
-      }))
+      const closings: MeterReading[] = openings.map((open, idx) => {
+        const key = open.nozzleIndex ? `nozzle_${open.nozzleIndex}` : `nozzle_${idx}`
+        return {
+          fuelCode: open.fuelCode,
+          value: parseNum(closingValues[key] || '0'),
+          nozzleIndex: open.nozzleIndex || (idx + 1),
+          nozzleLabel: open.nozzleLabel || `Nozzle ${idx + 1} (${open.fuelCode})`,
+        }
+      })
 
       const remittance: Partial<PaymentsBreakdown> = {
         CASH: cashNum,
@@ -220,7 +232,7 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
             const fuelMeta = FUEL_META[nozzle.fuelCode] || { color: '#F97316', label: nozzle.fuelCode }
             return (
               <div
-                key={nozzle.fuelCode}
+                key={nozzle.key}
                 className={`rounded-2xl bg-slate-900 border p-4 transition shadow-md ${
                   nozzle.validationError
                     ? 'border-slate-800'
@@ -235,7 +247,10 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
                     >
                       {nozzle.fuelCode}
                     </span>
-                    <span className="text-xs font-extrabold text-white">{fuelMeta.label}</span>
+                    <div>
+                      <span className="text-xs font-extrabold text-white block">{fuelMeta.label}</span>
+                      <span className="text-[10px] font-mono font-bold text-orange-400 block">{nozzle.sideLabel}</span>
+                    </div>
                   </div>
                   <div className="text-right">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">Unit Rate</span>
@@ -263,7 +278,7 @@ export const ClosingReadingsScreen: React.FC<{ onBack: () => void; onClosed: () 
                       value={nozzle.rawInput}
                       onChange={e => {
                         const val = e.target.value.replace(/[^0-9.,]/g, '')
-                        setClosingValues(prev => ({ ...prev, [nozzle.fuelCode]: val }))
+                        setClosingValues(prev => ({ ...prev, [nozzle.key]: val }))
                       }}
                       placeholder={nozzle.openingReading.toFixed(2)}
                       className={`w-full rounded-xl bg-slate-950 border px-3 py-2 text-right font-mono text-sm font-bold text-white placeholder:text-slate-700 outline-none transition ${

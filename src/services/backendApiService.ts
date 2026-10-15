@@ -568,12 +568,21 @@ export async function backendGetAuditLogGlobal(options?: {
 
 // ── Pumps Management ─────────────────────────────────────────────────────────
 
+export interface BackendPumpNozzle {
+  id: string
+  nozzleIndex: number
+  name: string
+  fuelCode: string
+  active: boolean
+}
+
 export interface BackendPump {
   id: string
   stationId: string
   companyId?: string | null
   name: string
   fuels: string[]
+  nozzles?: BackendPumpNozzle[]
   active: boolean
   createdAt: string
   updatedAt: string
@@ -595,6 +604,7 @@ export async function backendCreatePump(data: {
   companyId?: string
   name: string
   fuels?: string[]
+  nozzles?: Array<{ name: string; fuelCode: string }>
 }): Promise<{ pump: BackendPump }> {
   return apiCall('/api/pumps', {
     method: 'POST',
@@ -607,10 +617,13 @@ export async function backendUpdatePump(
   updates: {
     name?: string
     fuels?: string[]
+    nozzles?: BackendPumpNozzle[]
     active?: boolean
-    renameNozzle?: { oldName: string; newName: string }
+    updateNozzle?: { index?: number; name?: string; fuelCode?: string }
+    renameNozzle?: { oldName?: string; newName: string; index?: number }
     deleteNozzle?: string
-    addNozzle?: string
+    deleteNozzleIndex?: number
+    addNozzle?: string | { name?: string; fuelCode: string }
   },
 ): Promise<{ success: boolean; pump: BackendPump }> {
   return apiCall(`/api/pumps/${id}`, {
@@ -619,8 +632,9 @@ export async function backendUpdatePump(
   })
 }
 
-export async function backendDeleteNozzle(pumpId: string, fuelCode: string): Promise<{ success: boolean; pumpId: string; fuels: string[] }> {
-  return apiCall(`/api/pumps/${pumpId}/nozzles/${encodeURIComponent(fuelCode)}`, {
+export async function backendDeleteNozzle(pumpId: string, fuelCode: string, index?: number): Promise<{ success: boolean; pumpId: string; fuels: string[]; nozzles?: BackendPumpNozzle[] }> {
+  const qs = index !== undefined ? `?index=${index}` : ''
+  return apiCall(`/api/pumps/${pumpId}/nozzles/${encodeURIComponent(fuelCode)}${qs}`, {
     method: 'DELETE',
   })
 }

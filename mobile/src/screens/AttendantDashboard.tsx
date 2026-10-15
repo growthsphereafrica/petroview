@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle } from 'lucide-react-native'
+import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
@@ -18,16 +18,16 @@ import { shiftService, syncNow } from '../core/services/shiftService'
 import type { Attendant, Shift } from '../core/domain/types'
 import type { MobileSession } from './LoginScreen'
 import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
-import { PRODUCTION_PUMPS, PRODUCTION_STATION } from '../core/domain/config'
+import { PRODUCTION_PUMPS, PRODUCTION_STATION, getStationPumps, registerStationPumps, deriveNozzlesForPump, type ProductionPumpConfig, type PumpNozzleConfig } from '../core/domain/config'
 import { mobileProductService } from '../core/services/productService'
-
-const PUMPS = PRODUCTION_PUMPS
+import { cloudGetPumps, pumpNameFor } from '../core/infra/cloudApi'
 
 export const AttendantDashboard: React.FC<{
   session: MobileSession
   onSignOut: () => void
 }> = ({ session, onSignOut }) => {
   const [shift, setShift] = useState<Shift | null>(null)
+  const [stationPumps, setStationPumps] = useState<ProductionPumpConfig[]>(() => getStationPumps(session.stationId))
   const [fuelPrices, setFuelPrices] = useState<Record<string, number>>(PRODUCTION_STATION.fuelPrices)
   const [attendantId, setAttendantId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -48,16 +48,27 @@ export const AttendantDashboard: React.FC<{
     async function init() {
       try {
         const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
-        const [curShift, pending, prices] = await Promise.all([
+        const [curShift, pending, prices, pumpsRes] = await Promise.all([
           getActiveShiftForAttendant(session.userId),
           pendingSyncCount(),
           mobileProductService.getFuelPrices().catch(() => PRODUCTION_STATION.fuelPrices),
+          cloudGetPumps(session.stationId, session.companyId).catch(() => null),
         ])
         if (active) {
           setAttendantId(session.userId)
           setShift(curShift)
           setPendingCount(pending)
           if (prices) setFuelPrices(prices)
+          if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
+            const mapped: ProductionPumpConfig[] = pumpsRes.pumps.map(p => ({
+              id: p.id,
+              name: p.name,
+              fuels: p.fuels as any,
+              nozzles: p.nozzles as any,
+            }))
+            registerStationPumps(session.stationId, mapped)
+            setStationPumps(mapped)
+          }
         }
       } finally {
         if (active) setLoading(false)
@@ -65,19 +76,30 @@ export const AttendantDashboard: React.FC<{
     }
     void init()
     return () => { active = false }
-  }, [session.userId])
+  }, [session.userId, session.stationId, session.companyId])
 
   const refresh = useCallback(async () => {
     if (!attendantId) return
     const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
-    const [active, pending] = await Promise.all([
+    const [active, pending, pumpsRes] = await Promise.all([
       getActiveShiftForAttendant(attendantId),
       pendingSyncCount(),
+      cloudGetPumps(session.stationId, session.companyId).catch(() => null),
     ])
     setShift(active)
     setPendingCount(pending)
+    if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
+      const mapped: ProductionPumpConfig[] = pumpsRes.pumps.map(p => ({
+        id: p.id,
+        name: p.name,
+        fuels: p.fuels as any,
+        nozzles: p.nozzles as any,
+      }))
+      registerStationPumps(session.stationId, mapped)
+      setStationPumps(mapped)
+    }
     setLoading(false)
-  }, [attendantId])
+  }, [attendantId, session.stationId, session.companyId])
 
   const insets = useSafeAreaInsets()
 
@@ -131,6 +153,124 @@ export const AttendantDashboard: React.FC<{
           </View>
         </View>
 
+        {/* Forecourt Attendant Mini Dashboard */}
+        <Card style={styles.miniDashboardCard}>
+          {/* Live Price Board Ticker */}
+          <View style={styles.priceBoardHeader}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Zap size={13} color={colors.amber} />
+              <Text style={styles.priceBoardTitle}>FORECOURT LIVE PRICE BOARD</Text>
+            </View>
+            <View style={styles.priceBoardLiveTag}>
+              <View style={styles.livePulse} />
+              <Text style={styles.priceBoardLiveText}>ACTIVE RATES</Text>
+            </View>
+          </View>
+
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.priceBoardScroll}
+          >
+            {Object.entries(fuelPrices).map(([code, price]) => {
+              const dotColor =
+                code === 'PMS'
+                  ? '#22c55e'
+                  : code === 'AGO'
+                  ? '#3b82f6'
+                  : code === 'DPK'
+                  ? '#eab308'
+                  : '#f97316'
+              return (
+                <View key={code} style={styles.pricePill}>
+                  <View style={[styles.priceDot, { backgroundColor: dotColor }]} />
+                  <Text style={styles.priceFuelCode}>{code}</Text>
+                  <Text style={styles.priceRate}>
+                    {formatGHS(price)}
+                    <Text style={{ fontSize: 9, color: colors.textDim, fontWeight: '500' }}>/L</Text>
+                  </Text>
+                </View>
+              )
+            })}
+          </ScrollView>
+
+          {/* Active Forecourt Assignment & Nozzle Status */}
+          <View style={styles.assignmentBox}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Fuel size={15} color={shift ? colors.emerald : colors.textDim} />
+                <Text style={{ color: colors.text, fontSize: 13, fontWeight: '800' }}>
+                  {shift ? pumpNameFor(shift.pumpId) : 'No Active Dispenser'}
+                </Text>
+              </View>
+              <View
+                style={[
+                  styles.statusBadge,
+                  { backgroundColor: shift ? 'rgba(34,197,94,0.15)' : 'rgba(148,163,184,0.12)' },
+                ]}
+              >
+                <Text style={[styles.statusBadgeText, { color: shift ? colors.emerald : colors.textDim }]}>
+                  {shift ? '● ON DUTY' : '○ STANDBY'}
+                </Text>
+              </View>
+            </View>
+
+            {shift?.openingReadings && Object.keys(shift.openingReadings).length > 0 ? (
+              <View style={{ marginTop: 8 }}>
+                <Text style={{ color: colors.textDim, fontSize: 10, fontWeight: '700', textTransform: 'uppercase', marginBottom: 4 }}>
+                  Assigned Operating Nozzles:
+                </Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                  {Object.values(shift.openingReadings).map((rd, i) => (
+                    <View key={i} style={styles.activeNozzleBadge}>
+                      <View
+                        style={[
+                          styles.priceDot,
+                          {
+                            backgroundColor:
+                              rd.fuelCode === 'PMS'
+                                ? '#22c55e'
+                                : rd.fuelCode === 'AGO'
+                                ? '#3b82f6'
+                                : '#eab308',
+                          },
+                        ]}
+                      />
+                      <Text style={styles.activeNozzleText}>
+                        {rd.nozzleLabel || `Nozzle ${rd.nozzleIndex || i + 1} (${rd.fuelCode})`}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : (
+              <Text style={{ color: colors.textFaint, fontSize: 11, marginTop: 4 }}>
+                Ready to open shift. Select your assigned dispenser & nozzle(s) below.
+              </Text>
+            )}
+
+            {/* Quick KPI Bar inside Mini Dashboard */}
+            <View style={styles.miniKpiRow}>
+              <View style={styles.miniKpiItem}>
+                <Text style={styles.miniKpiLabel}>Shift Revenue</Text>
+                <Text style={styles.miniKpiValue}>{shift ? formatGHS(shift.salesTotal) : 'GHS 0.00'}</Text>
+              </View>
+              <View style={styles.miniKpiDivider} />
+              <View style={styles.miniKpiItem}>
+                <Text style={styles.miniKpiLabel}>Fuel Dispensed</Text>
+                <Text style={styles.miniKpiValue}>
+                  {shift ? `${Math.round(shift.sales.reduce((a, s) => a + s.litres, 0))} L` : '0 L'}
+                </Text>
+              </View>
+              <View style={styles.miniKpiDivider} />
+              <View style={styles.miniKpiItem}>
+                <Text style={styles.miniKpiLabel}>Sales Count</Text>
+                <Text style={styles.miniKpiValue}>{shift ? shift.sales.length : 0}</Text>
+              </View>
+            </View>
+          </View>
+        </Card>
+
         {/* Shift Card */}
         <Card style={styles.shiftCard}>
           <View style={styles.shiftHeader}>
@@ -141,7 +281,7 @@ export const AttendantDashboard: React.FC<{
           </View>
           <Text style={styles.shiftMeta}>
             {shift
-              ? `Pump ${shift.pumpId.replace('pump-', '')} · opened ${formatDateTime(shift.openedAt)}`
+              ? `${pumpNameFor(shift.pumpId)} · opened ${formatDateTime(shift.openedAt)}`
               : 'Start a shift to begin dispensing and recording sales'}
           </Text>
 
@@ -164,11 +304,11 @@ export const AttendantDashboard: React.FC<{
 
           <View style={styles.shiftActions}>
             {!shift ? (
-              <PrimaryButton title="Open Shift" onPress={() => setOpenModal(true)} tone="emerald" />
+              <PrimaryButton title="Open Shift & Pick Nozzles" onPress={() => setOpenModal(true)} tone="emerald" />
             ) : (
               <>
                 <PrimaryButton
-                  title="🔒 End Shift & Enter Closing Meters"
+                  title="🔒 End Shift & Reconcile Nozzles"
                   onPress={() => setCloseModal(true)}
                   tone="amber"
                 />
@@ -220,6 +360,7 @@ export const AttendantDashboard: React.FC<{
       {/* Modals */}
       <OpenShiftModal
         visible={openModal}
+        pumps={stationPumps}
         onClose={() => setOpenModal(false)}
         onConfirm={async (pumpId, openingReadings) => {
           try {
@@ -258,6 +399,11 @@ export const AttendantDashboard: React.FC<{
       <SaleModal
         visible={saleModal}
         fuelPrices={fuelPrices}
+        allowedFuels={
+          shift?.openingReadings && Object.keys(shift.openingReadings).length > 0
+            ? Object.values(shift.openingReadings).map(r => r.fuelCode)
+            : (shift ? (stationPumps.find(p => p.id === shift.pumpId)?.fuels || PRODUCTION_PUMPS.find(p => p.id === shift.pumpId)?.fuels) : undefined)
+        }
         onClose={() => setSaleModal(false)}
         onSave={async (fuel, litres, method) => {
           try {
@@ -374,18 +520,44 @@ export const AttendantDashboard: React.FC<{
 
 const OpenShiftModal: React.FC<{
   visible: boolean
+  pumps?: ProductionPumpConfig[]
   onClose: () => void
   onConfirm: (
     pumpId: string,
-    openingReadings: Record<string, { fuelCode: string; value: number }>,
+    openingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>,
   ) => Promise<void>
-}> = ({ visible, onClose, onConfirm }) => {
-  const [pumpId, setPumpId] = useState('pump-1')
-  const [readings, setReadings] = useState<Record<string, string>>({})
+}> = ({ visible, pumps, onClose, onConfirm }) => {
+  const availablePumps = pumps && pumps.length > 0 ? pumps : PRODUCTION_PUMPS
+  const [pumpId, setPumpId] = useState(() => availablePumps[0]?.id || 'pump-1')
+  const [readings, setReadings] = useState<Record<number, string>>({})
   const [autoFilled, setAutoFilled] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const selectedPump = PUMPS.find(p => p.id === pumpId) || PUMPS[0]
+  useEffect(() => {
+    if (availablePumps.length > 0 && !availablePumps.some(p => p.id === pumpId)) {
+      setPumpId(availablePumps[0].id)
+    }
+  }, [availablePumps, pumpId])
+
+  const selectedPump = availablePumps.find(p => p.id === pumpId) || availablePumps[0] || { id: 'pump-1', name: 'Pump 1', fuels: ['PMS'] }
+  const derivedNozzles = React.useMemo(() => deriveNozzlesForPump(selectedPump), [selectedPump])
+
+  const [selectedNozzleIndices, setSelectedNozzleIndices] = useState<number[]>([])
+
+  // Reset selected nozzles when pump changes
+  useEffect(() => {
+    setSelectedNozzleIndices(derivedNozzles.map(n => n.nozzleIndex))
+  }, [pumpId, derivedNozzles])
+
+  const toggleNozzleIndex = (idx: number) => {
+    setSelectedNozzleIndices(prev => {
+      if (prev.includes(idx)) {
+        if (prev.length === 1) return prev // keep at least 1 nozzle selected
+        return prev.filter(x => x !== idx)
+      }
+      return [...prev, idx].sort((a, b) => a - b)
+    })
+  }
 
   useEffect(() => {
     let active = true
@@ -407,23 +579,28 @@ const OpenShiftModal: React.FC<{
           )[0]
 
         if (active) {
-          const init: Record<string, string> = {}
+          const init: Record<number, string> = {}
           let filled = false
-          for (const f of selectedPump.fuels) {
-            if (closed?.closingReadings?.[f]?.value) {
-              init[f] = String(closed.closingReadings[f].value)
+          const closedReadings = closed?.closingReadings ? Object.values(closed.closingReadings) : []
+          derivedNozzles.forEach((noz) => {
+            const matched = closedReadings.find((cr: any) => cr.nozzleIndex === noz.nozzleIndex) || closedReadings[noz.nozzleIndex - 1]
+            if (matched && typeof matched.value === 'number') {
+              init[noz.nozzleIndex] = String(matched.value)
+              filled = true
+            } else if (closed?.closingReadings?.[noz.fuelCode]?.value) {
+              init[noz.nozzleIndex] = String(closed.closingReadings[noz.fuelCode].value)
               filled = true
             } else {
-              init[f] = ''
+              init[noz.nozzleIndex] = ''
             }
-          }
+          })
           setReadings(init)
           setAutoFilled(filled ? closed.number : null)
         }
       } catch {
         if (active) {
-          const init: Record<string, string> = {}
-          for (const f of selectedPump.fuels) init[f] = ''
+          const init: Record<number, string> = {}
+          derivedNozzles.forEach((noz) => { init[noz.nozzleIndex] = '' })
           setReadings(init)
           setAutoFilled(null)
         }
@@ -435,10 +612,11 @@ const OpenShiftModal: React.FC<{
     return () => {
       active = false
     }
-  }, [pumpId, visible])
+  }, [pumpId, visible, derivedNozzles])
 
-  const allFilled = selectedPump.fuels.every(f => {
-    const raw = readings[f]
+  const activeNozzles = derivedNozzles.filter(n => selectedNozzleIndices.includes(n.nozzleIndex))
+  const allFilled = activeNozzles.length > 0 && activeNozzles.every((noz) => {
+    const raw = readings[noz.nozzleIndex]
     const val = parseFloat(raw || '')
     return raw && raw.trim().length > 0 && Number.isFinite(val) && val >= 0
   })
@@ -448,12 +626,13 @@ const OpenShiftModal: React.FC<{
       <View style={styles.modalBack}>
         <Card style={[styles.modalCard, { maxHeight: '90%' }]}>
           <ScrollView showsVerticalScrollIndicator={false}>
-            <Text style={styles.modalTitle}>Open Shift</Text>
-            <Text style={styles.modalSub}>Select dispensing pump and confirm opening meters</Text>
+            <Text style={styles.modalTitle}>Open Shift & Assign Dispenser</Text>
+            <Text style={styles.modalSub}>Select your forecourt dispenser and operating nozzle(s)</Text>
 
             {/* Pump Selector */}
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 }}>
-              {PUMPS.map(p => (
+            <Text style={[styles.fieldLabel, { marginTop: 12 }]}>1. SELECT DISPENSER PUMP</Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+              {availablePumps.map(p => (
                 <Pressable
                   key={p.id}
                   onPress={() => setPumpId(p.id)}
@@ -470,6 +649,45 @@ const OpenShiftModal: React.FC<{
                   </Text>
                 </Pressable>
               ))}
+            </View>
+
+            {/* Nozzle Selector */}
+            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>
+              2. SELECT OPERATING NOZZLE(S)
+            </Text>
+            <Text style={{ color: colors.textDim, fontSize: 11, marginTop: 2, marginBottom: 6 }}>
+              Tap to toggle nozzle(s) if sharing this dispenser with another attendant:
+            </Text>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+              {derivedNozzles.map(noz => {
+                const isSelected = selectedNozzleIndices.includes(noz.nozzleIndex)
+                return (
+                  <Pressable
+                    key={noz.id}
+                    onPress={() => toggleNozzleIndex(noz.nozzleIndex)}
+                    style={[
+                      styles.nozzleSelectChip,
+                      isSelected ? styles.nozzleSelectChipActive : styles.nozzleSelectChipInactive,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.nozzleDot,
+                        { backgroundColor: noz.fuelCode === 'PMS' ? '#22c55e' : noz.fuelCode === 'AGO' ? '#3b82f6' : '#eab308' },
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.nozzleSelectChipText,
+                        { color: isSelected ? colors.text : colors.textDim },
+                      ]}
+                    >
+                      {noz.name}
+                    </Text>
+                    {isSelected && <Check size={12} color={colors.emerald} style={{ marginLeft: 3 }} />}
+                  </Pressable>
+                )
+              })}
             </View>
 
             {autoFilled && (
@@ -489,32 +707,43 @@ const OpenShiftModal: React.FC<{
               </View>
             )}
 
-            {/* Nozzles */}
-            <View style={{ marginTop: 12, gap: 10 }}>
-              {selectedPump.fuels.map(f => (
-                <View key={f} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
-                  <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 12, marginBottom: 4 }}>
-                    {f} NOZZLE OPENING METER
-                  </Text>
-                  <StyledTextInput
-                    value={readings[f] ?? ''}
-                    onChangeText={t => setReadings(prev => ({ ...prev, [f]: t.replace(/[^0-9.]/g, '') }))}
-                    placeholder="Enter opening meter (e.g. 12500.00)"
-                    keyboardType="number-pad"
-                  />
-                </View>
-              ))}
+            {/* Nozzles Opening Meter Inputs */}
+            <Text style={[styles.fieldLabel, { marginTop: 14 }]}>
+              3. ENTER OPENING METER READING(S)
+            </Text>
+            <View style={{ marginTop: 6, gap: 10 }}>
+              {activeNozzles.map(noz => {
+                return (
+                  <View key={`nozzle-${noz.nozzleIndex}`} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 12, marginBottom: 4 }}>
+                      {noz.name.toUpperCase()} OPENING METER
+                    </Text>
+                    <StyledTextInput
+                      value={readings[noz.nozzleIndex] ?? ''}
+                      onChangeText={t => setReadings(prev => ({ ...prev, [noz.nozzleIndex]: t.replace(/[^0-9.]/g, '') }))}
+                      placeholder="Enter opening meter (e.g. 12500.00)"
+                      keyboardType="number-pad"
+                    />
+                  </View>
+                )
+              })}
             </View>
 
             <PrimaryButton
-              title={busy ? 'Starting Shift…' : 'Confirm & Start Shift'}
+              title={busy ? 'Starting Shift…' : `Confirm & Start Shift (${activeNozzles.length} Nozzle${activeNozzles.length > 1 ? 's' : ''})`}
               onPress={async () => {
                 if (!allFilled) return
                 setBusy(true)
-                const out: Record<string, { fuelCode: string; value: number }> = {}
-                for (const f of selectedPump.fuels) {
-                  out[f] = { fuelCode: f, value: parseFloat(readings[f]) || 0 }
-                }
+                const out: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
+                activeNozzles.forEach((noz) => {
+                  const key = `nozzle_${noz.nozzleIndex}`
+                  out[key] = {
+                    fuelCode: noz.fuelCode,
+                    value: parseFloat(readings[noz.nozzleIndex]) || 0,
+                    nozzleIndex: noz.nozzleIndex,
+                    nozzleLabel: noz.name,
+                  }
+                })
                 await onConfirm(pumpId, out)
                 setBusy(false)
               }}
@@ -533,13 +762,28 @@ const OpenShiftModal: React.FC<{
 const SaleModal: React.FC<{
   visible: boolean
   fuelPrices: Record<string, number>
+  allowedFuels?: string[]
   onClose: () => void
   onSave: (fuel: string, litres: number, method: string) => Promise<void>
-}> = ({ visible, fuelPrices, onClose, onSave }) => {
-  const [fuel, setFuel] = useState('PMS')
+}> = ({ visible, fuelPrices, allowedFuels, onClose, onSave }) => {
+  const fuelsToDisplay = React.useMemo(() => {
+    if (allowedFuels && allowedFuels.length > 0) {
+      return [...new Set(allowedFuels)]
+    }
+    return Object.keys(fuelPrices)
+  }, [allowedFuels, fuelPrices])
+
+  const [fuel, setFuel] = useState(() => fuelsToDisplay[0] || 'PMS')
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState('CASH')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (fuelsToDisplay.length > 0 && !fuelsToDisplay.includes(fuel)) {
+      setFuel(fuelsToDisplay[0])
+    }
+  }, [fuelsToDisplay, fuel])
+
   const currentPrice = fuelPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
 
   const setAmountPreset = (ghsAmount: number) => {
@@ -556,7 +800,7 @@ const SaleModal: React.FC<{
 
           {/* Fuel selection */}
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-            {Object.keys(fuelPrices).map(k => (
+            {fuelsToDisplay.map(k => (
               <Pressable
                 key={k}
                 onPress={() => setFuel(k)}
@@ -635,7 +879,7 @@ const CloseShiftModal: React.FC<{
   fuelPrices: Record<string, number>
   onClose: () => void
   onConfirm: (
-    closingReadings: Record<string, { fuelCode: string; value: number }>,
+    closingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>,
     remittance: { CASH: number; MOMO: number; VOUCHER: number; CREDIT: number },
     notes?: string,
   ) => Promise<void>
@@ -648,18 +892,52 @@ const CloseShiftModal: React.FC<{
   const [credit, setCredit] = useState('')
   const [notes, setNotes] = useState('')
 
-  const fuels = shift?.openingReadings ? Object.keys(shift.openingReadings) : ['PMS', 'AGO']
+  const allShiftNozzles = React.useMemo(() => {
+    if (!shift?.openingReadings) return []
+    return Object.entries(shift.openingReadings).map(([key, o], idx) => {
+      const nozzleIndex = o.nozzleIndex ?? (idx + 1)
+      const label = o.nozzleLabel || `Side ${nozzleIndex} (${o.fuelCode})`
+      return {
+        key,
+        fuelCode: o.fuelCode,
+        opening: o.value,
+        nozzleIndex,
+        label,
+      }
+    })
+  }, [shift?.openingReadings])
 
-  // Per-fuel calculations
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+
+  useEffect(() => {
+    if (allShiftNozzles.length > 0) {
+      setSelectedKeys(allShiftNozzles.map(n => n.key))
+    }
+  }, [allShiftNozzles])
+
+  const toggleNozzleKey = (key: string) => {
+    setSelectedKeys(prev => {
+      if (prev.includes(key)) {
+        if (prev.length === 1) return prev // keep at least 1
+        return prev.filter(k => k !== key)
+      }
+      return [...prev, key]
+    })
+  }
+
+  // Active nozzles being closed
+  const activeClosingNozzles = allShiftNozzles.filter(n => selectedKeys.includes(n.key))
+
+  // Per-nozzle calculations
   let totalLitres = 0
   let totalExpectedCash = 0
-  let allValid = fuels.length > 0
+  let allValid = activeClosingNozzles.length > 0
 
-  const nozzleRows = fuels.map(fuel => {
-    const opening = shift?.openingReadings?.[fuel]?.value ?? 0
-    const raw = values[fuel] ?? ''
+  const nozzleRows = activeClosingNozzles.map(nz => {
+    const opening = nz.opening
+    const raw = values[nz.key] ?? ''
     const val = parseFloat(raw.replace(/,/g, '')) || 0
-    const price = fuelPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
+    const price = fuelPrices[nz.fuelCode] ?? PRODUCTION_STATION.fuelPrices[nz.fuelCode as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
     const hasInput = raw.trim().length > 0
     const isValid = hasInput && val >= opening
 
@@ -673,7 +951,7 @@ const CloseShiftModal: React.FC<{
       totalExpectedCash += amount
     }
 
-    return { fuel, opening, raw, val, price, litres, amount, isValid, hasInput }
+    return { ...nz, raw, val, price, litres, amount, isValid, hasInput }
   })
 
   totalLitres = Math.round(totalLitres * 100) / 100
@@ -693,22 +971,83 @@ const CloseShiftModal: React.FC<{
           <ScrollView showsVerticalScrollIndicator={false}>
             <Text style={styles.modalTitle}>End Shift & Closing Meters</Text>
             <Text style={styles.modalSub}>
-              Enter closing pump stock to compute total litres sold and cash at hand.
+              Verify your dispenser and nozzle assignment, then enter closing pump stock.
             </Text>
 
-            {/* Nozzles input */}
+            {/* Pump and Nozzle Selection & Verification Box */}
+            <View style={styles.dispenserSummaryBox}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <Fuel size={16} color={colors.amber} />
+                  <Text style={{ color: colors.text, fontWeight: '900', fontSize: 13 }}>
+                    {pumpNameFor(shift?.pumpId || '')}
+                  </Text>
+                </View>
+                <Text style={{ color: colors.emerald, fontSize: 10, fontWeight: '800', textTransform: 'uppercase' }}>
+                  Shift {shift?.number || ''}
+                </Text>
+              </View>
+
+              <Text style={{ color: colors.textDim, fontSize: 11, marginTop: 6, fontWeight: '700', textTransform: 'uppercase' }}>
+                OPERATED NOZZLE(S) TO CLOSE:
+              </Text>
+              <Text style={{ color: colors.textFaint, fontSize: 10, marginTop: 1 }}>
+                Tap to toggle nozzles if closing specific sides:
+              </Text>
+
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                {allShiftNozzles.map(nz => {
+                  const isSelected = selectedKeys.includes(nz.key)
+                  return (
+                    <Pressable
+                      key={nz.key}
+                      onPress={() => toggleNozzleKey(nz.key)}
+                      style={[
+                        styles.nozzleSelectChip,
+                        isSelected ? styles.nozzleSelectChipActive : styles.nozzleSelectChipInactive,
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.nozzleDot,
+                          {
+                            backgroundColor:
+                              nz.fuelCode === 'PMS'
+                                ? '#22c55e'
+                                : nz.fuelCode === 'AGO'
+                                ? '#3b82f6'
+                                : '#eab308',
+                          },
+                        ]}
+                      />
+                      <Text
+                        style={[
+                          styles.nozzleSelectChipText,
+                          { color: isSelected ? colors.text : colors.textDim },
+                        ]}
+                      >
+                        {nz.label}
+                      </Text>
+                      {isSelected && <Check size={12} color={colors.emerald} style={{ marginLeft: 3 }} />}
+                    </Pressable>
+                  )
+                })}
+              </View>
+            </View>
+
+            {/* Nozzles Closing Meter Inputs */}
             <View style={{ marginTop: 12, gap: 10 }}>
               {nozzleRows.map(row => (
-                <View key={row.fuel} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
+                <View key={row.key} style={{ backgroundColor: colors.panel2, borderRadius: 10, padding: 10 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{row.fuel}</Text>
+                    <Text style={{ color: colors.emerald, fontWeight: '900', fontSize: 13 }}>{row.label}</Text>
                     <Text style={{ color: colors.textDim, fontSize: 11 }}>
                       Opening: <Text style={{ color: colors.text, fontWeight: '700' }}>{row.opening.toFixed(2)}</Text> · Rate: GHS {row.price.toFixed(2)}/L
                     </Text>
                   </View>
                   <StyledTextInput
                     value={row.raw}
-                    onChangeText={t => setValues(prev => ({ ...prev, [row.fuel]: t.replace(/[^0-9.]/g, '') }))}
+                    onChangeText={t => setValues(prev => ({ ...prev, [row.key]: t.replace(/[^0-9.]/g, '') }))}
                     placeholder={`Closing (min ${row.opening.toFixed(2)})`}
                     keyboardType="number-pad"
                   />
@@ -810,12 +1149,17 @@ const CloseShiftModal: React.FC<{
             </View>
 
             <PrimaryButton
-              title={busy ? 'Locking…' : 'Confirm Close & Submit to Manager'}
+              title={busy ? 'Locking…' : `Confirm Close & Submit (${activeClosingNozzles.length} Nozzle${activeClosingNozzles.length > 1 ? 's' : ''})`}
               onPress={async () => {
                 setBusy(true)
-                const closings: Record<string, { fuelCode: string; value: number }> = {}
+                const closings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
                 for (const row of nozzleRows) {
-                  closings[row.fuel] = { fuelCode: row.fuel, value: row.val }
+                  closings[row.key] = {
+                    fuelCode: row.fuelCode,
+                    value: row.val,
+                    nozzleIndex: row.nozzleIndex,
+                    nozzleLabel: row.label,
+                  }
                 }
                 const remittance = { CASH: cNum, MOMO: mNum, VOUCHER: kNum, CREDIT: crNum }
                 await onConfirm(closings, remittance, notes.trim() || undefined)
@@ -838,7 +1182,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
   loadText: { color: colors.textDim, fontSize: 12 },
   content: { padding: 16, paddingBottom: 40 },
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   greeting: { color: colors.text, fontSize: 20, fontWeight: '900' },
   subGreeting: { color: colors.textFaint, fontSize: 11, marginTop: 2 },
   iconBtn: {
@@ -853,6 +1197,27 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   iconBtnText: { color: colors.textDim, fontSize: 11, fontWeight: '700' },
+  miniDashboardCard: { padding: 14, marginBottom: 14, borderColor: 'rgba(249, 115, 22, 0.3)', borderWidth: 1 },
+  priceBoardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  priceBoardTitle: { color: colors.textDim, fontSize: 10, fontWeight: '900', letterSpacing: 0.5 },
+  priceBoardLiveTag: { flexDirection: 'row', alignItems: 'center', gap: 4, backgroundColor: 'rgba(34, 197, 94, 0.12)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
+  livePulse: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.emerald },
+  priceBoardLiveText: { color: colors.emerald, fontSize: 9, fontWeight: '800' },
+  priceBoardScroll: { flexDirection: 'row', gap: 8, paddingBottom: 4 },
+  pricePill: { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: colors.panel2, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
+  priceDot: { width: 6, height: 6, borderRadius: 3 },
+  priceFuelCode: { color: colors.text, fontSize: 11, fontWeight: '900' },
+  priceRate: { color: colors.emerald, fontSize: 11, fontWeight: '800' },
+  assignmentBox: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.border },
+  statusBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
+  statusBadgeText: { fontSize: 10, fontWeight: '800' },
+  activeNozzleBadge: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: colors.panel2, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, borderWidth: 1, borderColor: colors.border },
+  activeNozzleText: { color: colors.text, fontSize: 10, fontWeight: '700' },
+  miniKpiRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.panel2, borderRadius: 10, padding: 10, marginTop: 10 },
+  miniKpiItem: { flex: 1, alignItems: 'center' },
+  miniKpiLabel: { color: colors.textFaint, fontSize: 9, textTransform: 'uppercase', fontWeight: '700' },
+  miniKpiValue: { color: colors.text, fontSize: 12, fontWeight: '900', marginTop: 2 },
+  miniKpiDivider: { width: 1, height: 20, backgroundColor: colors.border },
   shiftCard: { padding: 16, marginBottom: 16 },
   shiftHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   shiftTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
@@ -884,4 +1249,10 @@ const styles = StyleSheet.create({
   fieldLabel: { color: colors.textDim, fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1 },
   amountPreview: { color: colors.emerald, fontSize: 16, fontWeight: '900' },
   warningBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: colors.panel2, borderRadius: 10, padding: 12, marginTop: 12 },
+  dispenserSummaryBox: { backgroundColor: colors.panel2, borderRadius: 12, padding: 12, marginTop: 12, borderWidth: 1, borderColor: colors.border },
+  nozzleSelectChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, borderWidth: 1 },
+  nozzleSelectChipActive: { borderColor: colors.emerald, backgroundColor: 'rgba(34, 197, 94, 0.12)' },
+  nozzleSelectChipInactive: { borderColor: colors.border, backgroundColor: colors.panel },
+  nozzleSelectChipText: { fontSize: 11, fontWeight: '800' },
+  nozzleDot: { width: 7, height: 7, borderRadius: 4, marginRight: 5 },
 })

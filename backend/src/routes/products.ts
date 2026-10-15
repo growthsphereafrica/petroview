@@ -37,7 +37,10 @@ function requestedCompany(session: SessionClaims, value: unknown): string | null
 
 function canManageProduct(session: SessionClaims, product: Pick<ProductRow, 'companyId'>): boolean {
   if (session.role === 'superadmin') return true
-  return !!session.companyId && product.companyId === session.companyId
+  if (session.role === 'headoffice' || session.role === 'supervisor') {
+    return !product.companyId || product.companyId === session.companyId
+  }
+  return false
 }
 
 function productCode(value: unknown): string {
@@ -143,9 +146,9 @@ productsRouter.post('/', authenticate, requireRole('supervisor', 'headoffice', '
   res.status(201).json(rowToProduct(created))
 })
 
-productsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
+const handleUpdateProduct = (req: AuthRequest, res: any) => {
   const session = sessionOf(req)
-  const existing = db.prepare('SELECT * FROM products WHERE id = ?').get(req.params.id) as ProductRow | undefined
+  const existing = db.prepare('SELECT * FROM products WHERE id = ? OR UPPER(code) = UPPER(?)').get(req.params.id, req.params.id) as ProductRow | undefined
   if (!existing) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Product not found.' })
     return
@@ -182,7 +185,10 @@ productsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice',
   const result = db.prepare('SELECT * FROM products WHERE id = ?').get(existing.id) as ProductRow
   audit(req, 'PRODUCT_UPDATED', result, null, now)
   res.json(rowToProduct(result))
-})
+}
+
+productsRouter.put('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), handleUpdateProduct)
+productsRouter.patch('/:id', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), handleUpdateProduct)
 
 productsRouter.delete('/:id', authenticate, requireRole('headoffice', 'superadmin'), (req: AuthRequest, res) => {
   const session = sessionOf(req)

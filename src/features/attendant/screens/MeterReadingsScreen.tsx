@@ -6,7 +6,7 @@
 import React, { useEffect, useState } from 'react'
 import { CheckCircle2, Gauge, Sparkles } from 'lucide-react'
 import { ScreenHeader } from '../ui'
-import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, findPumpByIdOrName, getStationPumps } from '../../../core/domain/config'
+import { FUEL_META, MAX_METER_READING, PRODUCTION_PUMPS, findPumpByIdOrName, getStationPumps, registerStationPumps } from '../../../core/domain/config'
 import { shiftRepo } from '../../../core/infra/repositories'
 import type { FuelCode, MeterReading } from '../../../core/domain/types'
 
@@ -19,20 +19,56 @@ interface Props {
 }
 
 export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, onSave, onBack }) => {
-  const pump = findPumpByIdOrName(getStationPumps(stationId), pumpId) ?? PRODUCTION_PUMPS.find(p => p.id === pumpId) ?? PRODUCTION_PUMPS[0]
+  const [stationPumps, setStationPumps] = useState(() => getStationPumps(stationId))
+  const pump = findPumpByIdOrName(stationPumps, pumpId) ??
+    findPumpByIdOrName(getStationPumps(stationId), pumpId) ??
+    PRODUCTION_PUMPS.find(p => p.id === pumpId) ??
+    PRODUCTION_PUMPS[0]
+
+  useEffect(() => {
+    let cancelled = false
+    if (stationId) {
+      import('../../../services/backendApiService').then(async ({ backendGetPumps }) => {
+        try {
+          const res = await backendGetPumps(stationId)
+          if (!cancelled && res?.pumps && res.pumps.length > 0) {
+            const mapped = res.pumps.map(p => ({
+              id: p.id,
+              name: p.name,
+              fuels: p.fuels as any,
+            }))
+            registerStationPumps(stationId, mapped)
+            setStationPumps(mapped)
+          }
+        } catch { /* offline */ }
+      })
+    }
+    return () => { cancelled = true }
+  }, [stationId])
+
   // Safe fuel meta lookup — custom OMC products may not be in the static FUEL_META map
   const getFuelColor = (fuel: string) => FUEL_META[fuel]?.color ?? '#F97316'
-  const [values, setValues] = useState<Record<FuelCode, string>>(() =>
-    Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>,
+  const [values, setValues] = useState<Record<number, string>>(() =>
+    Object.fromEntries(pump.fuels.map((_, i) => [i, ''])),
   )
-  const [errors, setErrors] = useState<Partial<Record<FuelCode, string>>>({})
+
+  useEffect(() => {
+    setValues(prev => {
+      const next: Record<number, string> = {}
+      pump.fuels.forEach((_, i) => {
+        next[i] = prev[i] ?? ''
+      })
+      return next
+    })
+  }, [pump.id, pump.fuels.join(',')])
+  const [errors, setErrors] = useState<Record<number, string>>({})
   const [autoFilledShift, setAutoFilledShift] = useState<string | null>(null)
   const [loadingDefaults, setLoadingDefaults] = useState(mode === 'opening')
 
   useEffect(() => {
     let cancelled = false
     const init = async () => {
-      const initial = Object.fromEntries(pump.fuels.map(f => [f, ''])) as Record<FuelCode, string>
+      const initial: Record<number, string> = Object.fromEntries(pump.fuels.map((_, i) => [i, '']))
       if (mode === 'opening') {
         setLoadingDefaults(true)
         try {
@@ -51,9 +87,15 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
 
           if (!cancelled && latestClosed && latestClosed.closingReadings?.length) {
             let filledCount = 0
-            for (const r of latestClosed.closingReadings) {
-              if (pump.fuels.includes(r.fuelCode as FuelCode) && r.value > 0) {
-                initial[r.fuelCode as FuelCode] = String(r.value)
+            for (let i = 0; i < pump.fuels.length; i++) {
+              const expectedFuel = pump.fuels[i]
+              // Find matching reading by nozzleIndex or position
+              const match =
+                latestClosed.closingReadings.find(r => r.nozzleIndex === i + 1 && r.fuelCode === expectedFuel) ||
+                (latestClosed.closingReadings[i]?.fuelCode === expectedFuel ? latestClosed.closingReadings[i] : undefined) ||
+                latestClosed.closingReadings.find(r => r.fuelCode === expectedFuel)
+              if (match && match.value > 0) {
+                initial[i] = String(match.value)
                 filledCount += 1
               }
             }
@@ -81,15 +123,15 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
   const parse = (v: string): number => Number(v.replace(/,/g, '')) || 0
 
   const validate = (): boolean => {
-    const next: Partial<Record<FuelCode, string>> = {}
-    for (const fuel of pump.fuels) {
-      const raw = values[fuel]
+    const next: Record<number, string> = {}
+    for (let i = 0; i < pump.fuels.length; i++) {
+      const raw = values[i]
       if (!raw || raw.trim() === '') {
-        next[fuel] = 'Required'
+        next[i] = 'Required'
       } else {
         const val = parse(raw)
-        if (!Number.isFinite(val) || val < 0) next[fuel] = 'Must be ≥ 0'
-        else if (val > MAX_METER_READING) next[fuel] = 'Implausible value'
+        if (!Number.isFinite(val) || val < 0) next[i] = 'Must be ≥ 0'
+        else if (val > MAX_METER_READING) next[i] = 'Implausible value'
       }
     }
     setErrors(next)
@@ -98,10 +140,17 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
 
   const submit = () => {
     if (!validate()) return
-    const readings: MeterReading[] = pump.fuels.map(fuel => ({
-      fuelCode: fuel,
-      value: Math.round(parse(values[fuel]) * 100) / 100,
-    }))
+    const readings: MeterReading[] = pump.fuels.map((fuel, index) => {
+      const sideLabel = pump.fuels.length === 2
+        ? (index === 0 ? 'Side 1' : 'Side 2')
+        : `Nozzle ${index + 1}`
+      return {
+        fuelCode: fuel,
+        value: Math.round(parse(values[index]) * 100) / 100,
+        nozzleIndex: index + 1,
+        nozzleLabel: `${sideLabel} (${fuel})`,
+      }
+    })
     onSave(readings)
   }
 
@@ -117,7 +166,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
           <Gauge className="w-5 h-5 text-orange-400 shrink-0" />
           <p className="text-[11px] text-slate-400 leading-snug">
             {mode === 'opening'
-              ? 'Opening meters are automatically carried from the previous closing stock. Verify the figures below before starting.'
+              ? 'Opening meters are automatically carried from the previous closing stock. Verify the figures for each nozzle before starting.'
               : 'Read the figures shown on each meter at the end of your shift and enter them below. These lock in your sales calculation.'}
           </p>
         </div>
@@ -133,32 +182,56 @@ export const MeterReadingsScreen: React.FC<Props> = ({ pumpId, stationId, mode, 
         )}
 
         <div className="flex flex-col gap-3">
-          {pump.fuels.map(fuel => (
-            <div key={fuel} className="flex items-center gap-3">
-              <span
-                className="w-14 shrink-0 rounded-lg px-2 py-1 text-center text-[10px] font-black text-white uppercase"
-                style={{ backgroundColor: getFuelColor(fuel) }}
+          {pump.fuels.map((fuel, index) => {
+            const sideLabel = pump.fuels.length === 2
+              ? (index === 0 ? 'Side 1' : 'Side 2')
+              : `Nozzle ${index + 1}`
+            return (
+              <div
+                key={`${fuel}-${index}`}
+                className="flex flex-col gap-2 p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-sm"
               >
-                {fuel}
-              </span>
-              <div className="flex-1 max-w-[220px]">
-                <input
-                  value={values[fuel]}
-                  onChange={e => {
-                    const sanitized = e.target.value.replace(/[^0-9.,]/g, '')
-                    setValues(prev => ({ ...prev, [fuel]: sanitized }))
-                    setErrors(prev => ({ ...prev, [fuel]: undefined }))
-                  }}
-                  inputMode="decimal"
-                  placeholder="0.00"
-                  className={`w-full rounded-xl bg-slate-900 border px-4 py-3 text-right font-mono text-white placeholder:text-slate-700 outline-none transition ${
-                    errors[fuel] ? 'border-rose-500' : 'border-slate-800 focus:border-orange-500 focus:ring-2 focus:ring-orange-500/20'
-                  }`}
-                />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="px-2.5 py-1 rounded-lg text-center text-[10px] font-black text-white uppercase"
+                      style={{ backgroundColor: getFuelColor(fuel) }}
+                    >
+                      {fuel}
+                    </span>
+                    <span className="text-xs font-bold text-white">
+                      {FUEL_META[fuel]?.label || fuel}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-slate-950 text-orange-400 border border-slate-800">
+                    {sideLabel}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    value={values[index] ?? ''}
+                    onChange={e => {
+                      const sanitized = e.target.value.replace(/[^0-9.,]/g, '')
+                      setValues(prev => ({ ...prev, [index]: sanitized }))
+                      setErrors(prev => {
+                        const copy = { ...prev }
+                        delete copy[index]
+                        return copy
+                      })
+                    }}
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    className={`flex-1 rounded-xl bg-slate-950 border px-3.5 py-2.5 text-right font-mono text-sm text-white placeholder:text-slate-700 outline-none transition ${
+                      errors[index] ? 'border-rose-500' : 'border-slate-800 focus:border-orange-500 focus:ring-1 focus:ring-orange-500/20'
+                    }`}
+                  />
+                  <span className="text-xs font-mono font-bold text-slate-500">L</span>
+                </div>
+                {errors[index] && <span className="text-[10px] font-bold text-rose-400">{errors[index]}</span>}
               </div>
-              {errors[fuel] && <span className="text-[10px] font-bold text-rose-400 w-16">{errors[fuel]}</span>}
-            </div>
-          ))}
+            )
+          })}
         </div>
 
         <button

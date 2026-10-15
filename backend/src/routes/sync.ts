@@ -133,16 +133,16 @@ function dateOnly(value: unknown, field: string): string {
 function validateMeterReadings(value: unknown, field: string): Array<Record<string, unknown>> {
   const readings = Array.isArray(value) ? value : []
   if (readings.length > MAX_READINGS) throw new Error(`${field} contains too many readings.`)
-  const seen = new Set<string>()
-  return readings.map(item => {
+  return readings.map((item, index) => {
     if (!item || typeof item !== 'object') throw new Error(`${field} contains an invalid reading.`)
     const reading = item as Record<string, unknown>
     const fuelCode = typeof reading.fuelCode === 'string' ? reading.fuelCode.trim().toUpperCase() : ''
-    if (!/^[A-Z0-9_-]{1,20}$/.test(fuelCode) || seen.has(fuelCode)) throw new Error(`${field} contains an invalid or duplicate fuel code.`)
-    seen.add(fuelCode)
+    if (!/^[A-Z0-9_-]{1,20}$/.test(fuelCode)) throw new Error(`${field} contains an invalid fuel code.`)
     const readingValue = Number(reading.value)
     if (!Number.isFinite(readingValue) || readingValue < 0 || readingValue > 1_000_000_000) throw new Error(`${field} contains an invalid meter value.`)
-    return { fuelCode, value: readingValue }
+    const nozzleIndex = typeof reading.nozzleIndex === 'number' ? reading.nozzleIndex : (index + 1)
+    const nozzleLabel = typeof reading.nozzleLabel === 'string' ? reading.nozzleLabel : undefined
+    return { fuelCode, value: readingValue, nozzleIndex, ...(nozzleLabel ? { nozzleLabel } : {}) }
   })
 }
 
@@ -326,23 +326,37 @@ function validateShiftData(session: SessionClaims, data: Record<string, unknown>
   if (openingReadings.length === 0) throw new Error('openingReadings are required.')
   if (status === 'CLOSED') {
     if (closingReadings.length === 0) throw new Error('closingReadings are required for a closed shift.')
-    const openingCodes = new Set(openingReadings.map(reading => reading.fuelCode))
-    const closingCodes = new Set(closingReadings.map(reading => reading.fuelCode))
-    if (openingCodes.size !== closingCodes.size || [...openingCodes].some(code => !closingCodes.has(code))) throw new Error('closingReadings must contain the same fuel codes as openingReadings.')
+    if (openingReadings.length !== closingReadings.length) {
+      throw new Error('closingReadings count must match openingReadings count.')
+    }
   }
   const rawSales = Array.isArray(data.sales) ? data.sales : salesFromLegacy(data.fuelSales)
   const sales = normalizeSales(rawSales, station.companyId)
   if (status === 'CLOSED') {
-    const openingByFuel = new Map(openingReadings.map(reading => [String(reading.fuelCode), Number(reading.value)]))
+    const meteredLitresByFuel = new Map<string, number>()
+    for (let i = 0; i < closingReadings.length; i++) {
+      const closing = closingReadings[i]
+      const opening = (typeof closing.nozzleIndex === 'number'
+        ? openingReadings.find(o => o.nozzleIndex === closing.nozzleIndex)
+        : undefined) || openingReadings[i]
+      if (!opening || opening.fuelCode !== closing.fuelCode) {
+        throw new Error('closingReadings nozzles do not match openingReadings.')
+      }
+      const closeVal = Number(closing.value)
+      const openVal = Number(opening.value)
+      if (closeVal < openVal) {
+        throw new Error('A closing meter reading cannot be below its opening reading.')
+      }
+      const meteredLitres = money(closeVal - openVal)
+      const current = meteredLitresByFuel.get(String(closing.fuelCode)) ?? 0
+      meteredLitresByFuel.set(String(closing.fuelCode), money(current + meteredLitres))
+    }
     const salesByFuel = new Map(sales.value.map(sale => [String(sale.fuelCode), Number(sale.litres)]))
-    const closingCodes = new Set(closingReadings.map(reading => String(reading.fuelCode)))
-    if (sales.value.some(sale => Number(sale.litres) > 0 && !closingCodes.has(String(sale.fuelCode)))) throw new Error('Shift sales contain a fuel without a closing meter reading.')
-    for (const closing of closingReadings) {
-      const openingValue = openingByFuel.get(String(closing.fuelCode)) ?? 0
-      if (Number(closing.value) < openingValue) throw new Error('A closing meter reading cannot be below its opening reading.')
-      const meteredLitres = money(Number(closing.value) - openingValue)
-      const saleLitres = salesByFuel.get(String(closing.fuelCode)) ?? 0
-      if (Math.abs(meteredLitres - saleLitres) > 0.05) throw new Error('Shift sales do not match the opening and closing meter readings.')
+    for (const [fuelCode, meteredLitres] of meteredLitresByFuel.entries()) {
+      const saleLitres = salesByFuel.get(fuelCode) ?? 0
+      if (Math.abs(meteredLitres - saleLitres) > 0.05) {
+        throw new Error('Shift sales do not match the opening and closing meter readings.')
+      }
     }
   }
   const rawPayments = data.payments ?? paymentsFromLegacy(data.breakdown)
@@ -356,7 +370,19 @@ function validateShiftData(session: SessionClaims, data: Record<string, unknown>
   const pumpId = text(data.pumpId, 'pumpId', false)
   let pumpName = ''
   if (pumpId) {
-    const pump = db.prepare('SELECT name FROM pumps WHERE id = ? AND stationId = ? AND active = 1').get(pumpId, station.id) as { name: string } | undefined
+    let pump = db.prepare('SELECT id, name FROM pumps WHERE (id = ? OR UPPER(name) = UPPER(?)) AND stationId = ? AND active = 1').get(pumpId, pumpId, station.id) as { id: string; name: string } | undefined
+    if (!pump) {
+      const m = pumpId.toLowerCase().match(/^pump[\s-]?(\d+)$/)
+      if (m) {
+        const num = m[1]
+        pump = db.prepare(`
+          SELECT id, name FROM pumps
+          WHERE stationId = ? AND active = 1
+            AND (UPPER(name) = ? OR id LIKE ?)
+          LIMIT 1
+        `).get(station.id, `PUMP ${num}`, `%-${num}`) as { id: string; name: string } | undefined
+      }
+    }
     if (!pump) throw new Error('pumpId is not active at the selected station.')
     pumpName = pump.name
   }

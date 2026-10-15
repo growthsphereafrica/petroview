@@ -58,6 +58,8 @@ export interface StationExpense {
 export interface MeterReading {
   fuelCode: FuelCode
   value: number
+  nozzleIndex?: number
+  nozzleLabel?: string
 }
 
 export interface FuelSale {

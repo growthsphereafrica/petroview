@@ -36,7 +36,7 @@ import {
 } from 'lucide-react'
 import { useSupervisorData, useSupervisorSession } from '../providers'
 import { Badge, Card, ScreenHeader, StatusBar } from '../../shared/ui'
-import { PRODUCTION_PUMPS, getStationName, getStationPumps } from '../../../core/domain/config'
+import { PRODUCTION_PUMPS, getStationName, getStationPumps, registerStationPumps } from '../../../core/domain/config'
 import { rollupService, type HeadOfficeSummary, type AttendantRollup } from '../../../core/services/rollupService'
 import { supervisorService } from '../../../core/services/supervisorService'
 import { expenseService, type ExpenseSummary } from '../../../core/services/expenseService'
@@ -69,6 +69,29 @@ export const SupervisorAttendantsScreen: React.FC<{
   const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary | null>(null)
   const [loadingSummary, setLoadingSummary] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+
+  const [stationPumps, setStationPumps] = useState(() => getStationPumps(supervisor?.stationId))
+
+  useEffect(() => {
+    let cancelled = false
+    if (supervisor?.stationId) {
+      import('../../../services/backendApiService').then(async ({ backendGetPumps }) => {
+        try {
+          const res = await backendGetPumps(supervisor.stationId, supervisor.companyId)
+          if (!cancelled && res?.pumps && res.pumps.length > 0) {
+            const mapped = res.pumps.map(p => ({
+              id: p.id,
+              name: p.name,
+              fuels: p.fuels as any,
+            }))
+            registerStationPumps(supervisor.stationId, mapped)
+            setStationPumps(mapped)
+          }
+        } catch { /* offline fallback */ }
+      })
+    }
+    return () => { cancelled = true }
+  }, [supervisor?.stationId, supervisor?.companyId])
 
   // Modals state
   const [showRegisterForm, setShowRegisterForm] = useState(false)
@@ -689,7 +712,7 @@ export const SupervisorAttendantsScreen: React.FC<{
                     className="w-full rounded-xl bg-slate-900 border border-slate-800 px-3 py-2.5 text-xs text-white focus:border-orange-500 outline-none transition"
                   >
                     <option value="">Assign Pump (Optional)…</option>
-                    {getStationPumps(supervisor?.stationId).map(p => (
+                    {stationPumps.map(p => (
                       <option key={p.id} value={p.id}>
                         {p.name} · ({p.fuels.join(', ')})
                       </option>

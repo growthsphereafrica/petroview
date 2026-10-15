@@ -248,4 +248,39 @@ describe('finalizeClosedShift', () => {
     expect(result.syncStatus).toBe('PENDING')
     expect(result.notes).toBe('note')
   })
+
+  it('accurately calculates sales when a dispenser has the same product on multiple sides (e.g. Petrol Side 1 & Petrol Side 2)', () => {
+    const openings: MeterReading[] = [
+      { fuelCode: 'PMS', value: 1000, nozzleIndex: 1, nozzleLabel: 'Nozzle 1 (Side 1)' },
+      { fuelCode: 'PMS', value: 5000, nozzleIndex: 2, nozzleLabel: 'Nozzle 2 (Side 2)' },
+    ]
+    const closings: MeterReading[] = [
+      { fuelCode: 'PMS', value: 1200, nozzleIndex: 1, nozzleLabel: 'Nozzle 1 (Side 1)' }, // 200L sold
+      { fuelCode: 'PMS', value: 5350, nozzleIndex: 2, nozzleLabel: 'Nozzle 2 (Side 2)' }, // 350L sold
+    ]
+    // Both nozzles must pass validation
+    expect(() => validateClosingReadings(openings, closings)).not.toThrow()
+
+    // 200L + 350L = 550L total PMS @ 14.80 = 8,140.00
+    const sales = computeFuelSales(openings, closings, { PMS: 14.8, AGO: 15.2 })
+    expect(sales).toHaveLength(1)
+    expect(sales[0].fuelCode).toBe('PMS')
+    expect(sales[0].litres).toBe(550)
+    expect(sales[0].amount).toBe(8140)
+  })
+
+  it('accurately calculates sales for a pump with petrol and diesel', () => {
+    const openings: MeterReading[] = [
+      { fuelCode: 'PMS', value: 1000, nozzleIndex: 1 },
+      { fuelCode: 'AGO', value: 2000, nozzleIndex: 2 },
+    ]
+    const closings: MeterReading[] = [
+      { fuelCode: 'PMS', value: 1100, nozzleIndex: 1 }, // 100L PMS
+      { fuelCode: 'AGO', value: 2150, nozzleIndex: 2 }, // 150L AGO
+    ]
+    expect(() => validateClosingReadings(openings, closings)).not.toThrow()
+    const sales = computeFuelSales(openings, closings, { PMS: 14.8, AGO: 15.2 })
+    expect(sales.find(s => s.fuelCode === 'PMS')?.litres).toBe(100)
+    expect(sales.find(s => s.fuelCode === 'AGO')?.litres).toBe(150)
+  })
 })

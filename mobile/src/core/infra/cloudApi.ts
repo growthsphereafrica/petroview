@@ -6,10 +6,13 @@
 
 import { keys, sDel, sGet, sSet } from '../store/storage'
 import type { Shift } from '../domain/types'
-import { PRODUCTION_PUMPS } from '../domain/config'
+import { PRODUCTION_PUMPS, getStationPumps } from '../domain/config'
 
-function pumpNameFor(id: string | null | undefined): string {
-  return PRODUCTION_PUMPS.find(p => p.id === id)?.name ?? ''
+export function pumpNameFor(id: string | null | undefined): string {
+  if (!id) return ''
+  const dynamic = getStationPumps().find(p => p.id === id || p.name.toLowerCase() === id.toLowerCase())
+  if (dynamic) return dynamic.name
+  return PRODUCTION_PUMPS.find(p => p.id === id)?.name ?? (id.startsWith('pump-') ? `Pump ${id.replace('pump-', '')}` : id)
 }
 
 export function getCloudApiBase(): string {
@@ -467,6 +470,75 @@ export async function cloudDeactivateAttendant(id: string): Promise<void> {
   if (!resp.ok) {
     const json = await readJson(resp)
     throw new Error(typeof json.message === 'string' ? json.message : typeof json.error === 'string' ? json.error : `HTTP ${resp.status}`)
+  }
+}
+
+export interface CloudPumpNozzle {
+  id: string
+  nozzleIndex: number
+  name: string
+  fuelCode: string
+  active: boolean
+}
+
+export interface CloudPump {
+  id: string
+  stationId: string
+  companyId?: string
+  name: string
+  fuels: string[]
+  nozzles?: CloudPumpNozzle[]
+  active: boolean
+  createdAt?: string
+  updatedAt?: string
+}
+
+export async function cloudGetPumps(stationId?: string, companyId?: string): Promise<{ ok: boolean; pumps: CloudPump[]; message?: string }> {
+  const base = getCloudApiBase()
+  const headers = await authHeaders().catch(() => ({ 'Content-Type': 'application/json' }))
+  const params = new URLSearchParams()
+  if (stationId) params.set('stationId', stationId)
+  if (companyId) params.set('companyId', companyId)
+  const qs = params.toString()
+  try {
+    const resp = await fetchWithTimeout(`${base}/api/pumps${qs ? '?' + qs : ''}`, { headers })
+    const json = await readJson(resp)
+    if (!resp.ok) {
+      return { ok: false, pumps: [], message: typeof json.message === 'string' ? json.message : 'Failed to load station pumps' }
+    }
+    const rawPumps = Array.isArray(json.pumps) ? json.pumps : []
+    const pumps: CloudPump[] = rawPumps.map((p: any) => {
+      const fuels = Array.isArray(p.fuels) ? p.fuels.map(String) : ['PMS', 'AGO']
+      const nozzles: CloudPumpNozzle[] = Array.isArray(p.nozzles) && p.nozzles.length > 0
+        ? p.nozzles.map((nz: any, idx: number) => ({
+            id: String(nz.id || `noz-${idx + 1}`),
+            nozzleIndex: typeof nz.nozzleIndex === 'number' ? nz.nozzleIndex : idx + 1,
+            name: String(nz.name || `Nozzle ${idx + 1} (${fuels[idx] || 'PMS'})`),
+            fuelCode: String(nz.fuelCode || fuels[idx] || 'PMS'),
+            active: nz.active !== false,
+          }))
+        : fuels.map((f: string, idx: number) => ({
+            id: `noz-${idx + 1}`,
+            nozzleIndex: idx + 1,
+            name: fuels.filter((x: string) => x === f).length > 1 ? `Side ${idx + 1} (${f})` : `Nozzle ${idx + 1} (${f})`,
+            fuelCode: f,
+            active: true,
+          }))
+      return {
+        id: String(p.id),
+        stationId: String(p.stationId || stationId || ''),
+        companyId: p.companyId ? String(p.companyId) : undefined,
+        name: String(p.name || 'Pump'),
+        fuels,
+        nozzles,
+        active: p.active !== false,
+        createdAt: p.createdAt ? String(p.createdAt) : undefined,
+        updatedAt: p.updatedAt ? String(p.updatedAt) : undefined,
+      }
+    })
+    return { ok: true, pumps }
+  } catch (err) {
+    return { ok: false, pumps: [], message: err instanceof Error ? err.message : 'Network error' }
   }
 }
 

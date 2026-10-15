@@ -5,7 +5,7 @@
  */
 
 import { DomainError, describeError } from '../domain/errors'
-import { PRODUCTION_STATION, PRODUCTION_PUMPS, uid } from '../domain/config'
+import { PRODUCTION_STATION, PRODUCTION_PUMPS, uid, getStationPumps } from '../domain/config'
 import type { Attendant, PaymentsBreakdown, Shift, SyncQueueItem } from '../domain/types'
 import {
   getActiveShiftForAttendant,
@@ -20,7 +20,7 @@ import { mobileProductService } from './productService'
 export interface OpenShiftInput {
   attendant: Attendant
   pumpId: string
-  openingReadings: Record<string, { fuelCode: string; value: number }>
+  openingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>
 }
 
 export interface RecordSaleInput {
@@ -32,7 +32,7 @@ export interface RecordSaleInput {
 
 export interface CloseShiftInput {
   shiftId: string
-  closingReadings: Record<string, { fuelCode: string; value: number }>
+  closingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>
   notes?: string
   remittance?: Partial<PaymentsBreakdown>
 }
@@ -49,23 +49,36 @@ export class ShiftService {
       throw new DomainError('SHIFT_ALREADY_EXISTS', 'A shift is already open.')
     }
 
-    const pump = PRODUCTION_PUMPS.find(p => p.id === pumpId)
+    const stationPumps = getStationPumps(attendant.stationId)
+    const pump = stationPumps.find(p => p.id === pumpId) || PRODUCTION_PUMPS.find(p => p.id === pumpId)
     if (!pump) throw new DomainError('READINGS_EMPTY', 'Unknown pump.')
 
-    const readings: Record<string, { fuelCode: string; value: number }> = {}
+    const readings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
     let readingsTotal = 0
-    for (const fuel of pump.fuels) {
-      const r = openingReadings[fuel]
-      if (r == null || typeof r.value !== 'number') {
-        throw new DomainError('READINGS_EMPTY', `Opening reading required for ${fuel}.`, fuel)
-      }
+
+    const providedKeys = Object.keys(openingReadings).filter(k => openingReadings[k] && typeof openingReadings[k].value === 'number')
+    if (providedKeys.length === 0) {
+      throw new DomainError('READINGS_EMPTY', 'At least one nozzle opening reading is required.')
+    }
+
+    for (const key of providedKeys) {
+      const r = openingReadings[key]
       if (r.value < 0) {
-        throw new DomainError('READING_NEGATIVE', `Reading cannot be negative.`, fuel)
+        throw new DomainError('READING_NEGATIVE', `Reading cannot be negative.`, r.fuelCode || key)
       }
       if (r.value > 1_000_000) {
-        throw new DomainError('READING_OUT_OF_RANGE', 'Reading out of range.', fuel)
+        throw new DomainError('READING_OUT_OF_RANGE', 'Reading out of range.', r.fuelCode || key)
       }
-      readings[fuel] = { fuelCode: fuel, value: round2(r.value) }
+      const nozzleIndex = r.nozzleIndex ?? (parseInt(key.replace(/\D/g, ''), 10) || 1)
+      const isDuplicate = pump.fuels.filter(f => f === r.fuelCode).length > 1
+      const defaultLabel = isDuplicate ? `Side ${nozzleIndex} (${r.fuelCode})` : (r.fuelCode || `Nozzle ${nozzleIndex}`)
+      const label = r.nozzleLabel || defaultLabel
+      readings[key] = {
+        fuelCode: r.fuelCode || pump.fuels[nozzleIndex - 1] || 'PMS',
+        value: round2(r.value),
+        nozzleIndex,
+        nozzleLabel: label,
+      }
       readingsTotal += round2(r.value)
     }
 
@@ -146,33 +159,53 @@ export class ShiftService {
     if (!shift) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.')
     if (shift.status !== 'OPEN') throw new DomainError('SHIFT_ALREADY_CLOSED', 'Shift already closed.')
 
-    const closing: Record<string, { fuelCode: string; value: number }> = {}
+    const closing: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
     let readingsTotal = 0
     let meteredSalesTotal = 0
-    const salesList: Array<{ fuelCode: string; litres: number; unitPrice: number; amount: number }> = []
+    const salesByFuel: Record<string, { litres: number; amount: number; unitPrice: number }> = {}
 
     const dynamicPrices = await mobileProductService.getFuelPrices().catch(() => ({} as Record<string, number>))
 
-    for (const [fuel, r] of Object.entries(input.closingReadings)) {
+    for (const [key, r] of Object.entries(input.closingReadings)) {
       if (typeof r.value !== 'number') {
-        throw new DomainError('READINGS_EMPTY', `Closing reading required for ${fuel}.`, fuel)
+        throw new DomainError('READINGS_EMPTY', `Closing reading required for ${key}.`, r.fuelCode || key)
       }
-      const opening = shift.openingReadings[fuel]?.value ?? 0
+      const openingEntry = shift.openingReadings[key] ??
+        Object.values(shift.openingReadings).find((o: any) => o.nozzleIndex === r.nozzleIndex) ??
+        shift.openingReadings[r.fuelCode]
+      const opening = openingEntry?.value ?? 0
       if (r.value < 0) {
-        throw new DomainError('READING_NEGATIVE', 'Reading cannot be negative.', fuel)
+        throw new DomainError('READING_NEGATIVE', 'Reading cannot be negative.', r.fuelCode || key)
       }
       if (r.value < opening) {
-        throw new DomainError('CLOSING_BELOW_OPENING', 'Closing below opening.', fuel)
+        throw new DomainError('CLOSING_BELOW_OPENING', 'Closing below opening.', r.fuelCode || key)
       }
-      closing[fuel] = { fuelCode: fuel, value: round2(r.value) }
+      closing[key] = {
+        fuelCode: r.fuelCode,
+        value: round2(r.value),
+        nozzleIndex: r.nozzleIndex,
+        nozzleLabel: r.nozzleLabel,
+      }
       readingsTotal += round2(r.value)
 
       const litres = round2(r.value - opening)
-      const unitPrice = dynamicPrices[fuel] ?? PRODUCTION_STATION.fuelPrices[fuel as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
+      const unitPrice = dynamicPrices[r.fuelCode] ?? PRODUCTION_STATION.fuelPrices[r.fuelCode as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
       const amount = round2(litres * unitPrice)
       meteredSalesTotal = round2(meteredSalesTotal + amount)
-      salesList.push({ fuelCode: fuel, litres, unitPrice, amount })
+
+      if (!salesByFuel[r.fuelCode]) {
+        salesByFuel[r.fuelCode] = { litres: 0, amount: 0, unitPrice }
+      }
+      salesByFuel[r.fuelCode].litres = round2(salesByFuel[r.fuelCode].litres + litres)
+      salesByFuel[r.fuelCode].amount = round2(salesByFuel[r.fuelCode].amount + amount)
     }
+
+    const salesList = Object.entries(salesByFuel).map(([fuelCode, s]) => ({
+      fuelCode,
+      litres: s.litres,
+      unitPrice: s.unitPrice,
+      amount: s.amount,
+    }))
 
     const payments: PaymentsBreakdown = input.remittance
       ? {

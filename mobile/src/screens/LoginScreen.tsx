@@ -5,6 +5,8 @@ import { Flame, ShieldCheck, UserCog, Zap } from 'lucide-react-native'
 import { colors } from '../theme'
 import { PrimaryButton, StyledTextInput } from '../components/ui'
 import { mobileAuth, type MobileRole } from '../core/services/authService'
+import { cloudGetPumps } from '../core/infra/cloudApi'
+import { registerStationPumps } from '../core/domain/config'
 
 export interface MobileSession {
   role: MobileRole
@@ -29,6 +31,17 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
     setSigningIn(true)
     try {
       const { role, session } = await mobileAuth.authenticate(employeeCode, pin)
+      if (session.stationId) {
+        cloudGetPumps(session.stationId, session.companyId).then(res => {
+          if (res?.ok && res.pumps) {
+            registerStationPumps(session.stationId, res.pumps.map(p => ({
+              id: p.id,
+              name: p.name,
+              fuels: p.fuels as any,
+            })))
+          }
+        }).catch(() => {})
+      }
       onAuthenticated({
         role,
         userId: session.userId,

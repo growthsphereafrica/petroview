@@ -52,7 +52,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   // Standardized pump fuels: always derived from the selected pump and active shift
   const pumpFuels = useMemo<FuelCode[]>(() => {
     if (pump?.fuels && pump.fuels.length > 0) {
-      return pump.fuels
+      return Array.from(new Set(pump.fuels))
     }
     if (activeShift?.openingReadings && activeShift.openingReadings.length > 0) {
       const fuels = Array.from(new Set(activeShift.openingReadings.map(r => r.fuelCode as FuelCode))).filter(Boolean)
@@ -68,7 +68,7 @@ export const SalesScreen: React.FC<{ onBack: () => void; onCaptureReceipt: () =>
   // Dynamic products and prices loaded from OMC / ProductService
   const [activeProducts, setActiveProducts] = useState<Product[]>([])
   const [productsLoading, setProductsLoading] = useState(true)
-  const [fuelCode, setFuelCode] = useState<FuelCode>(() => pumpFuels[0] || 'AGO')
+  const [fuelCode, setFuelCode] = useState<FuelCode>(() => pumpFuels[0] || 'PMS')
   const [litres, setLitres] = useState('')
   const [method, setMethod] = useState<PaymentMethod>('CASH')
   const [saving, setSaving] = useState(false)

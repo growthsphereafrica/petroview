@@ -15,10 +15,34 @@ export interface ProductionStationConfig {
   paymentMethods: PaymentMethod[]
 }
 
+export interface PumpNozzleConfig {
+  id: string
+  nozzleIndex: number
+  name: string
+  fuelCode: FuelCode
+  active: boolean
+}
+
 export interface ProductionPumpConfig {
   id: string
   name: string
   fuels: FuelCode[]
+  nozzles?: PumpNozzleConfig[]
+}
+
+export function deriveNozzlesForPump(pump: ProductionPumpConfig): PumpNozzleConfig[] {
+  if (pump.nozzles && pump.nozzles.length > 0) return pump.nozzles
+  return pump.fuels.map((f, idx) => {
+    const isDup = pump.fuels.filter(x => x === f).length > 1
+    const name = isDup ? `Side ${idx + 1} (${f})` : `Nozzle ${idx + 1} (${f})`
+    return {
+      id: `${pump.id}-noz-${idx + 1}`,
+      nozzleIndex: idx + 1,
+      name,
+      fuelCode: f,
+      active: true,
+    }
+  })
 }
 
 export interface ProductionStationEntry {
@@ -49,7 +73,7 @@ export const PRODUCTION_PUMPS: ProductionPumpConfig[] = [
   { id: 'pump-1', name: 'Pump 1', fuels: ['PMS', 'AGO'] },
   { id: 'pump-2', name: 'Pump 2', fuels: ['PMS', 'AGO'] },
   { id: 'pump-3', name: 'Pump 3', fuels: ['PMS', 'AGO'] },
-  { id: 'pump-4', name: 'Pump 4', fuels: ['AGO'] },
+  { id: 'pump-4', name: 'Pump 4', fuels: ['PMS', 'AGO'] },
 ]
 
 const PUMPS_STORAGE_KEY = 'pv_dynamic_pumps_cache'
@@ -123,9 +147,10 @@ export function findPumpByIdOrName(
     if (byName) return byName
   }
   if (pumpId) {
-    const num = pumpId.match(/\d+$/)?.[0]
-    if (num) {
-      const byNum = pumps.find(p => p.id.endsWith(`-${num}`) || p.name.toLowerCase() === `pump ${num}` || p.id === `pump-${num}`)
+    const directNum = pumpId.match(/^pump-(\d+)$/i)
+    if (directNum) {
+      const n = directNum[1]
+      const byNum = pumps.find(p => p.id === `pump-${n}` || p.name.trim().toLowerCase() === `pump ${n}`)
       if (byNum) return byNum
     }
   }

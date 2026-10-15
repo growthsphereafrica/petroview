@@ -98,6 +98,10 @@ export interface MeterReading {
   fuelCode: FuelCode
   /** Cumulative volume shown on the pump meter in litres */
   value: number
+  /** Optional nozzle index (1-based, e.g. 1 for Side 1, 2 for Side 2) */
+  nozzleIndex?: number
+  /** Optional nozzle label */
+  nozzleLabel?: string
 }
 
 export interface FuelSale {

@@ -109,5 +109,6 @@ export const keys = {
   activeSession: 'mvp_m_active_session',
   products: 'mvp_m_products',
   expenses: 'mvp_m_expenses',
+  stationPumps: 'mvp_m_station_pumps',
   schemaVersion: 'mvp_m_schema_version',
 }

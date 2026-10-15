@@ -39,6 +39,8 @@ export type AuditAction =
 export interface MeterReading {
   fuelCode: FuelCode
   value: number
+  nozzleIndex?: number
+  nozzleLabel?: string
 }
 
 export interface FuelSale {
@@ -234,6 +236,7 @@ CREATE TABLE IF NOT EXISTS shifts (
   stationId TEXT NOT NULL,
   stationName TEXT NOT NULL,
   status TEXT NOT NULL,
+  assignedNozzles TEXT,
   openedAt TEXT NOT NULL,
   closedAt TEXT,
   openingReadings TEXT NOT NULL,
@@ -356,6 +359,7 @@ CREATE TABLE IF NOT EXISTS pumps (
   companyId TEXT,
   name TEXT NOT NULL,
   fuels TEXT NOT NULL DEFAULT '["PMS","AGO"]',
+  nozzles TEXT,
   active INTEGER NOT NULL DEFAULT 1,
   createdAt TEXT NOT NULL,
   updatedAt TEXT NOT NULL
@@ -407,6 +411,10 @@ function migrateLegacyTables(): void {
     shifts: {
       companyId: 'TEXT',
       companyShortCode: 'TEXT',
+      assignedNozzles: 'TEXT',
+    },
+    pumps: {
+      nozzles: 'TEXT',
     },
   }
 

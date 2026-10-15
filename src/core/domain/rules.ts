@@ -121,13 +121,18 @@ export function validateReadingsSet(readings: MeterReading[]): void {
 export function validateClosingReadings(openings: MeterReading[], closings: MeterReading[]): void {
   validateReadingsSet(openings)
   validateReadingsSet(closings)
-  for (const closing of closings) {
-    const opening = openings.find(o => o.fuelCode === closing.fuelCode)
+  for (let i = 0; i < closings.length; i++) {
+    const closing = closings[i]
+    const opening =
+      (closing.nozzleIndex !== undefined && openings.find(o => o.nozzleIndex === closing.nozzleIndex)) ||
+      (openings[i] && openings[i].fuelCode === closing.fuelCode ? openings[i] : undefined) ||
+      openings.find(o => o.fuelCode === closing.fuelCode)
     if (!opening) continue
     if (closing.value < opening.value) {
+      const nozzleTag = closing.nozzleIndex ? ` (Nozzle ${closing.nozzleIndex})` : ''
       throw new DomainError(
         'CLOSING_BELOW_OPENING',
-        `Closing reading for ${closing.fuelCode} must not be lower than opening reading.`,
+        `Closing reading for ${closing.fuelCode}${nozzleTag} must not be lower than opening reading.`,
         closing.fuelCode,
         { opening: opening.value, closing: closing.value },
       )
@@ -137,9 +142,7 @@ export function validateClosingReadings(openings: MeterReading[], closings: Mete
 
 /**
  * Computes fuel sales (litres + amounts) from opening & closing readings given unit prices.
- */
-/**
- * Computes fuel sales (litres + amounts) from opening & closing readings given unit prices.
+ * Properly aggregates across all nozzles for each fuel product (e.g. Side 1 & Side 2 of a dual-sided pump).
  */
 export function computeFuelSales(
   openings: MeterReading[],
@@ -150,9 +153,19 @@ export function computeFuelSales(
     ? Array.from(new Set(openings.map(o => o.fuelCode)))
     : ALL_FUEL_CODES
   return fuelList.map(fuelCode => {
-    const opening = openings.find(o => o.fuelCode === fuelCode)
-    const closing = closings.find(o => o.fuelCode === fuelCode)
-    const litres = opening && closing ? roundLitres(Math.max(0, closing.value - opening.value)) : 0
+    let totalLitres = 0
+    for (let i = 0; i < closings.length; i++) {
+      const closing = closings[i]
+      if (closing.fuelCode !== fuelCode) continue
+      const opening =
+        (closing.nozzleIndex !== undefined && openings.find(o => o.nozzleIndex === closing.nozzleIndex)) ||
+        (openings[i] && openings[i].fuelCode === closing.fuelCode ? openings[i] : undefined) ||
+        openings.find(o => o.fuelCode === closing.fuelCode)
+      if (opening && closing.value >= opening.value) {
+        totalLitres += closing.value - opening.value
+      }
+    }
+    const litres = roundLitres(Math.max(0, totalLitres))
     const price = prices[fuelCode] ?? resolveUnitPrice([], fuelCode)
     return { fuelCode, litres, amount: saleAmount(litres, price), unitPrice: price }
   })

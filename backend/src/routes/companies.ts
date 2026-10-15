@@ -598,7 +598,7 @@ companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'),
         if (companyId === 'ALL' && requestedStation === 'ALL') {
           deletedCounts.receipts += (db.prepare('DELETE FROM receipts').run()).changes
           deletedCounts.transactions += (db.prepare('DELETE FROM transactions').run()).changes
-          db.prepare('DELETE FROM syncQueue WHERE entityType = "SHIFT"').run()
+          db.prepare("DELETE FROM syncQueue WHERE entityType = 'SHIFT'").run()
           deletedCounts.shifts += (db.prepare('DELETE FROM shifts').run()).changes
         } else if (requestedStation !== 'ALL') {
           const shiftIds = (db.prepare('SELECT id FROM shifts WHERE stationId = ?').all(requestedStation) as Array<{ id: string }>).map(s => s.id)
@@ -606,7 +606,7 @@ companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'),
             const placeholders = shiftIds.map(() => '?').join(',')
             deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
             deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
-            db.prepare(`DELETE FROM syncQueue WHERE entityType = "SHIFT" AND entityId IN (${placeholders})`).run(...shiftIds)
+            db.prepare(`DELETE FROM syncQueue WHERE entityType = 'SHIFT' AND entityId IN (${placeholders})`).run(...shiftIds)
             deletedCounts.shifts += (db.prepare(`DELETE FROM shifts WHERE id IN (${placeholders})`).run(...shiftIds)).changes
           }
         } else {
@@ -616,7 +616,7 @@ companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'),
             const placeholders = shiftIds.map(() => '?').join(',')
             deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
             deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
-            db.prepare(`DELETE FROM syncQueue WHERE entityType = "SHIFT" AND entityId IN (${placeholders})`).run(...shiftIds)
+            db.prepare(`DELETE FROM syncQueue WHERE entityType = 'SHIFT' AND entityId IN (${placeholders})`).run(...shiftIds)
             deletedCounts.shifts += (db.prepare(`DELETE FROM shifts WHERE id IN (${placeholders})`).run(...shiftIds)).changes
           }
         }
@@ -668,15 +668,15 @@ companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'),
         if (companyId === 'ALL' && requestedStation === 'ALL') {
           deletedCounts.attendants += (db.prepare('DELETE FROM attendants').run()).changes
           deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE isSuperAdmin = 0').run()).changes
-          db.prepare('DELETE FROM sessions WHERE role != "superadmin"').run()
+          db.prepare("DELETE FROM sessions WHERE role != 'superadmin'").run()
         } else if (requestedStation !== 'ALL') {
           deletedCounts.attendants += (db.prepare('DELETE FROM attendants WHERE stationId = ?').run(requestedStation)).changes
           deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE stationId = ? AND isSuperAdmin = 0').run(requestedStation)).changes
-          db.prepare('DELETE FROM sessions WHERE stationId = ? AND role != "superadmin"').run(requestedStation)
+          db.prepare("DELETE FROM sessions WHERE stationId = ? AND role != 'superadmin'").run(requestedStation)
         } else {
           deletedCounts.attendants += (db.prepare('DELETE FROM attendants WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').run(companyId, companyId)).changes
           deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND isSuperAdmin = 0').run(companyId, companyId)).changes
-          db.prepare('DELETE FROM sessions WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND role != "superadmin"').run(companyId, companyId)
+          db.prepare("DELETE FROM sessions WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND role != 'superadmin'").run(companyId, companyId)
         }
       }
 

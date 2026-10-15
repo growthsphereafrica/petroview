@@ -24,7 +24,9 @@ export interface BackendLoginResponse {
   fullName: string
   employeeCode: string
   stationId: string | null
+  stationName?: string | null
   companyId: string | null
+  companyName?: string | null
   companyShortCode: string | null
   isSuperAdmin: boolean
   isHeadOffice: boolean
@@ -109,7 +111,9 @@ export interface BackendMeResponse {
   fullName: string
   employeeCode: string
   stationId: string | null
+  stationName?: string | null
   companyId: string | null
+  companyName?: string | null
   companyShortCode: string | null
   isSuperAdmin: boolean
   isHeadOffice: boolean
@@ -117,6 +121,24 @@ export interface BackendMeResponse {
 
 export async function backendGetMe(): Promise<BackendMeResponse> {
   return apiCall<BackendMeResponse>('/api/auth/me')
+}
+
+export async function backendResubmitShift(shiftId: string, payload: {
+  pumpId?: string
+  pumpName?: string
+  openingReadings?: unknown
+  closingReadings?: unknown
+  sales?: unknown
+  expectedTotal?: number
+  payments?: unknown
+  actualTotal?: number
+  variance?: number
+  notes?: string
+}): Promise<{ success: boolean; shift: any }> {
+  return apiCall(`/api/shifts/${encodeURIComponent(shiftId)}/resubmit`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function backendRegister(input: {

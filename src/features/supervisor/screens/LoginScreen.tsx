@@ -49,9 +49,9 @@ export const SupervisorLoginScreen: React.FC = () => {
         fullName: result.fullName,
         employeeCode: result.employeeCode,
         stationId: result.stationId ?? undefined,
-        stationName: result.stationId ? getStationName(result.stationId) : 'Global Enterprise Network',
+        stationName: (result.stationName && result.stationName.trim()) || (result.stationId ? getStationName(result.stationId) : 'Forecourt Station'),
         companyId: result.companyId ?? undefined,
-        companyName: result.companyShortCode || 'PetroView',
+        companyName: (result.companyName && result.companyName.trim()) || result.companyShortCode || 'OMC Enterprise',
         companyShortCode: result.companyShortCode ?? undefined,
       })
       window.location.reload()

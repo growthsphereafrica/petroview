@@ -97,11 +97,20 @@ export const SupervisorConsole: React.FC<{ session: MobileSession; onSignOut: ()
       {/* Header Bar */}
       <View style={[styles.header, { paddingTop: Math.max(insets.top, 16) }]}>
         <View style={{ flex: 1, paddingRight: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <Users size={18} color={colors.emerald} />
-            <Text style={styles.heading} numberOfLines={1}>Supervisor Console</Text>
+          <View style={styles.tenantTag}>
+            <Text style={styles.tenantOmc} numberOfLines={1}>
+              {session.companyName || session.companyShortCode || 'OMC'}
+            </Text>
+            <Text style={styles.tenantSep}>·</Text>
+            <Text style={styles.tenantStation} numberOfLines={1}>
+              {session.stationName || 'Forecourt Station'}
+            </Text>
           </View>
-          <Text style={styles.sub} numberOfLines={1}>{session.fullName} · {session.employeeCode}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Users size={16} color={colors.emerald} />
+            <Text style={styles.heading} numberOfLines={1}>{session.fullName}</Text>
+          </View>
+          <Text style={styles.sub} numberOfLines={1}>Supervisor ({session.employeeCode})</Text>
         </View>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <Pressable onPress={() => setQrOpen(true)} style={styles.iconTopBtn} hitSlop={8}>
@@ -375,7 +384,14 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
         {filtered.map(s => (
           <Pressable key={s.id} onPress={() => setSelected(s)} style={styles.row}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>{s.number}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.rowTitle}>{s.number}</Text>
+                {s.reviewNotes && s.reviewNotes.includes('Resubmitted') && (
+                  <View style={{ backgroundColor: 'rgba(234, 179, 8, 0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 }}>
+                    <Text style={{ color: colors.amber, fontSize: 9, fontWeight: '800' }}>🔄 RESUBMITTED</Text>
+                  </View>
+                )}
+              </View>
               <Text style={styles.rowSub}>{s.attendantName} · {pumpNameFor(s.pumpId)} · {s.stationName}</Text>
               <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '700' }]}>{formatGHS(s.actualTotal)}</Text>
             </View>
@@ -524,8 +540,10 @@ const ShiftDetailModal: React.FC<{
 
             {/* Attendant Notes */}
             {shift.reviewNotes ? (
-              <View style={styles.noteBox}>
-                <Text style={styles.noteTitle}>ATTENDANT HANDOVER NOTE</Text>
+              <View style={[styles.noteBox, shift.reviewNotes.includes('Resubmitted') && { borderColor: colors.amber, borderWidth: 1, backgroundColor: 'rgba(234, 179, 8, 0.08)' }]}>
+                <Text style={[styles.noteTitle, shift.reviewNotes.includes('Resubmitted') && { color: colors.amber }]}>
+                  {shift.reviewNotes.includes('Resubmitted') ? 'ATTENDANT CORRECTION & RESUBMISSION NOTE' : 'ATTENDANT HANDOVER NOTE'}
+                </Text>
                 <Text style={styles.noteBody}>{shift.reviewNotes}</Text>
               </View>
             ) : null}
@@ -981,4 +999,8 @@ const styles = StyleSheet.create({
   decisionBox: { backgroundColor: colors.panel2, borderRadius: 12, padding: 12, marginTop: 8 },
   auditRow: { flexDirection: 'row', justifyContent: 'space-between', marginVertical: 6 },
   auditLabel: { color: colors.textDim, fontSize: 10 },
+  tenantTag: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  tenantOmc: { color: colors.emerald, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  tenantSep: { color: colors.textDim, fontSize: 11 },
+  tenantStation: { color: colors.textDim, fontSize: 11, fontWeight: '600' },
 })

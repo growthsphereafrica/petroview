@@ -261,6 +261,148 @@ export class ShiftService {
     return closed
   }
 
+  async resubmitShift(input: {
+    shiftId: string
+    pumpId?: string
+    openingReadings?: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>
+    closingReadings: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }>
+    notes?: string
+    remittance?: Partial<PaymentsBreakdown>
+  }): Promise<Shift> {
+    const shift = await getShift(input.shiftId)
+    if (!shift) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.')
+    if (shift.status !== 'REJECTED' && shift.status !== 'CLOSED') {
+      throw new DomainError('INVALID_STATE' as any, 'Only rejected or closed shifts can be resubmitted with corrections.')
+    }
+
+    const workingPumpId = input.pumpId || shift.pumpId
+    const workingOpenings = input.openingReadings || shift.openingReadings
+
+    const closing: Record<string, { fuelCode: string; value: number; nozzleIndex?: number; nozzleLabel?: string }> = {}
+    let readingsTotal = 0
+    let meteredSalesTotal = 0
+    const salesByFuel: Record<string, { litres: number; amount: number; unitPrice: number }> = {}
+
+    const dynamicPrices = await mobileProductService.getFuelPrices().catch(() => ({} as Record<string, number>))
+
+    for (const [key, r] of Object.entries(input.closingReadings)) {
+      if (typeof r.value !== 'number') {
+        throw new DomainError('READINGS_EMPTY', `Closing reading required for ${key}.`, r.fuelCode || key)
+      }
+      const openingEntry = workingOpenings[key] ??
+        Object.values(workingOpenings).find((o: any) => o.nozzleIndex === r.nozzleIndex) ??
+        workingOpenings[r.fuelCode]
+      const opening = openingEntry?.value ?? 0
+      if (r.value < 0) {
+        throw new DomainError('READING_NEGATIVE', 'Reading cannot be negative.', r.fuelCode || key)
+      }
+      if (r.value < opening) {
+        throw new DomainError('CLOSING_BELOW_OPENING', 'Closing below opening.', r.fuelCode || key)
+      }
+      closing[key] = {
+        fuelCode: r.fuelCode,
+        value: round2(r.value),
+        nozzleIndex: r.nozzleIndex,
+        nozzleLabel: r.nozzleLabel,
+      }
+      readingsTotal += round2(r.value)
+
+      const litres = round2(r.value - opening)
+      const unitPrice = dynamicPrices[r.fuelCode] ?? PRODUCTION_STATION.fuelPrices[r.fuelCode as keyof typeof PRODUCTION_STATION.fuelPrices] ?? 14.80
+      const amount = round2(litres * unitPrice)
+      meteredSalesTotal = round2(meteredSalesTotal + amount)
+
+      if (!salesByFuel[r.fuelCode]) {
+        salesByFuel[r.fuelCode] = { litres: 0, amount: 0, unitPrice }
+      }
+      salesByFuel[r.fuelCode].litres = round2(salesByFuel[r.fuelCode].litres + litres)
+      salesByFuel[r.fuelCode].amount = round2(salesByFuel[r.fuelCode].amount + amount)
+    }
+
+    const salesList = Object.entries(salesByFuel).map(([fuelCode, s]) => ({
+      fuelCode,
+      litres: s.litres,
+      unitPrice: s.unitPrice,
+      amount: s.amount,
+    }))
+
+    const payments: PaymentsBreakdown = input.remittance
+      ? {
+          CASH: round2(input.remittance.CASH ?? 0),
+          MOMO: round2(input.remittance.MOMO ?? 0),
+          VOUCHER: round2(input.remittance.VOUCHER ?? 0),
+          CREDIT: round2(input.remittance.CREDIT ?? 0),
+        }
+      : (shift.payments as PaymentsBreakdown)
+    const actualTotal = round2(payments.CASH + payments.MOMO + payments.VOUCHER + payments.CREDIT)
+    const variance = round2(actualTotal - meteredSalesTotal)
+    const now = new Date().toISOString()
+    const attendantCorrectionNote = input.notes ? `[Corrected & Resubmitted] ${input.notes}` : '[Resubmitted with corrections]'
+
+    const resubmitted: Shift = {
+      ...shift,
+      pumpId: workingPumpId,
+      openingReadings: workingOpenings,
+      closedAt: now,
+      closingReadings: closing as never,
+      sales: salesList.length > 0 ? (salesList as any) : shift.sales,
+      salesTotal: meteredSalesTotal,
+      payments,
+      actualTotal,
+      readingsTotal,
+      variance,
+      status: 'CLOSED',
+      reviewNotes: attendantCorrectionNote,
+      reviewedBy: null,
+      reviewedAt: null,
+      updatedAt: now,
+      version: shift.version + 1,
+    }
+
+    await saveShift(resubmitted)
+
+    try {
+      const { cloudResubmitShift } = await import('../infra/cloudApi')
+      await cloudResubmitShift(resubmitted.id, {
+        pumpId: resubmitted.pumpId,
+        openingReadings: Object.values(resubmitted.openingReadings ?? {}),
+        closingReadings: Object.values(resubmitted.closingReadings ?? {}),
+        sales: resubmitted.sales,
+        expectedTotal: resubmitted.salesTotal,
+        payments: resubmitted.payments,
+        actualTotal: resubmitted.actualTotal,
+        variance: resubmitted.variance,
+        notes: resubmitted.reviewNotes,
+      })
+      resubmitted.syncStatus = 'SYNCED'
+      await saveShift(resubmitted)
+    } catch {
+      await enqueue({
+        id: uid('sync'),
+        type: 'SHIFT',
+        entityType: 'SHIFT',
+        refId: resubmitted.id,
+        payload: resubmitted,
+        status: 'PENDING',
+        attempts: 0,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+
+    await addAudit({
+      id: uid('audit'),
+      action: 'SHIFT_CLOSED',
+      actorId: shift.attendantId,
+      actorRole: 'ATTENDANT',
+      targetId: resubmitted.id,
+      notes: `${shift.number} corrected & resubmitted with variance GHS ${variance.toFixed(2)}`,
+      timestamp: now,
+    })
+
+    return resubmitted
+  }
+
   async pendingCount(): Promise<number> {
     return pendingSyncCount()
   }

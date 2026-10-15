@@ -65,6 +65,7 @@ export interface CloudAccount {
   stationId: string | null
   stationName?: string
   companyId: string | null
+  companyName?: string
   companyShortCode: string | null
   isSuperAdmin: boolean
   isHeadOffice: boolean
@@ -89,7 +90,9 @@ function isCloudAccount(value: unknown): value is CloudAccount {
     && typeof account.fullName === 'string' && account.fullName.trim().length > 0
     && typeof account.employeeCode === 'string' && account.employeeCode.trim().length > 0
     && (account.stationId === null || typeof account.stationId === 'string')
+    && (account.stationName === undefined || account.stationName === null || typeof account.stationName === 'string')
     && (account.companyId === null || typeof account.companyId === 'string')
+    && (account.companyName === undefined || account.companyName === null || typeof account.companyName === 'string')
     && (account.companyShortCode === null || typeof account.companyShortCode === 'string')
     && typeof account.isSuperAdmin === 'boolean'
     && typeof account.isHeadOffice === 'boolean'
@@ -237,6 +240,125 @@ function toBackendShift(shift: Shift) {
     syncStatus: shift.syncStatus,
     createdAt: shift.openedAt,
     updatedAt: shift.updatedAt,
+  }
+}
+
+export async function cloudResubmitShift(shiftId: string, payload: Record<string, unknown>): Promise<{ ok: boolean; shift?: any; message?: string }> {
+  const base = getCloudApiBase()
+  const token = await getCloudToken()
+  if (!token) return { ok: false, message: 'Unauthenticated' }
+  try {
+    const resp = await fetchWithTimeout(`${base}/api/shifts/${encodeURIComponent(shiftId)}/resubmit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    })
+    const json = await readJson(resp)
+    if (!resp.ok) {
+      return { ok: false, message: errorMessage(json, resp.status) }
+    }
+    return { ok: true, shift: json.shift }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : 'Network error' }
+  }
+}
+
+export async function cloudReviewShift(
+  shiftId: string,
+  status: 'APPROVED' | 'REJECTED',
+  reviewerNotes?: string,
+): Promise<{ ok: boolean; shift?: any; message?: string }> {
+  const base = getCloudApiBase()
+  const token = await getCloudToken()
+  if (!token) return { ok: false, message: 'Unauthenticated' }
+  try {
+    const resp = await fetchWithTimeout(`${base}/api/shifts/${encodeURIComponent(shiftId)}/review`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ status, reviewerNotes }),
+    })
+    const json = await readJson(resp)
+    if (!resp.ok) return { ok: false, message: errorMessage(json, resp.status) }
+    return { ok: true, shift: json.shift }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : 'Network error' }
+  }
+}
+
+export function fromBackendShift(raw: any): Shift {
+  const mapReadings = (readings: any): Record<string, any> => {
+    if (!readings) return {}
+    if (typeof readings === 'object' && !Array.isArray(readings)) {
+      return readings
+    }
+    const result: Record<string, any> = {}
+    if (Array.isArray(readings)) {
+      readings.forEach((r, idx) => {
+        const key = r.key || (r.nozzleIndex != null ? `${r.fuelCode}_${r.nozzleIndex}` : r.fuelCode || `nozzle_${idx}`)
+        result[key] = {
+          fuelCode: r.fuelCode,
+          value: Number(r.value || 0),
+          nozzleIndex: r.nozzleIndex,
+          nozzleLabel: r.nozzleLabel,
+        }
+      })
+    }
+    return result
+  }
+
+  const openingReadings = mapReadings(raw.openingReadings)
+  const closingReadings = raw.closingReadings ? mapReadings(raw.closingReadings) : null
+
+  return {
+    id: raw.id,
+    number: raw.number || `SH-${raw.id.slice(0, 6).toUpperCase()}`,
+    stationId: raw.stationId,
+    stationName: raw.stationName || 'Forecourt Station',
+    attendantId: raw.attendantId,
+    attendantName: raw.attendantName || 'Attendant',
+    pumpId: raw.pumpId,
+    openedAt: raw.openedAt || raw.createdAt || new Date().toISOString(),
+    closedAt: raw.closedAt || null,
+    openingReadings,
+    closingReadings,
+    sales: Array.isArray(raw.sales) ? raw.sales : [],
+    payments: raw.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+    readingsTotal: Number(raw.readingsTotal || raw.salesTotal || 0),
+    salesTotal: Number(raw.salesTotal || raw.expectedTotal || 0),
+    actualTotal: Number(raw.actualTotal || 0),
+    variance: Number(raw.variance || 0),
+    status: raw.status || 'OPEN',
+    reviewNotes: raw.reviewerNotes || raw.reviewNotes || raw.notes || null,
+    reviewedBy: raw.reviewedBy || null,
+    reviewedAt: raw.reviewedAt || null,
+    syncStatus: raw.syncStatus || 'SYNCED',
+    updatedAt: raw.updatedAt || new Date().toISOString(),
+    version: raw.version || 1,
+  }
+}
+
+export async function cloudGetShifts(stationId?: string): Promise<{ ok: boolean; shifts: Shift[]; message?: string }> {
+  const base = getCloudApiBase()
+  const token = await getCloudToken()
+  if (!token) return { ok: false, shifts: [], message: 'Unauthenticated' }
+  try {
+    const url = stationId ? `${base}/api/shifts?station=${encodeURIComponent(stationId)}` : `${base}/api/shifts`
+    const resp = await fetchWithTimeout(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const json = await readJson(resp)
+    if (!resp.ok) return { ok: false, shifts: [], message: errorMessage(json, resp.status) }
+    const rawList = Array.isArray(json) ? json : (Array.isArray((json as any).shifts) ? (json as any).shifts : [])
+    const shifts = rawList.map(fromBackendShift)
+    return { ok: true, shifts }
+  } catch (err) {
+    return { ok: false, shifts: [], message: err instanceof Error ? err.message : 'Network error' }
   }
 }
 

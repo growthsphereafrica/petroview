@@ -20,13 +20,17 @@ import type { MobileSession } from './LoginScreen'
 import { formatGHS, formatLitres, formatDateTime } from '../shared/currencyFormatter'
 import { PRODUCTION_PUMPS, PRODUCTION_STATION, getStationPumps, registerStationPumps, deriveNozzlesForPump, type ProductionPumpConfig, type PumpNozzleConfig } from '../core/domain/config'
 import { mobileProductService } from '../core/services/productService'
-import { cloudGetPumps, pumpNameFor } from '../core/infra/cloudApi'
+import { cloudGetPumps, pumpNameFor, cloudGetShifts } from '../core/infra/cloudApi'
+import { CorrectRejectedShiftModal } from './CorrectRejectedShiftModal'
 
 export const AttendantDashboard: React.FC<{
   session: MobileSession
   onSignOut: () => void
 }> = ({ session, onSignOut }) => {
   const [shift, setShift] = useState<Shift | null>(null)
+  const [rejectedShift, setRejectedShift] = useState<Shift | null>(null)
+  const [correctModal, setCorrectModal] = useState(false)
+  const [successBanner, setSuccessBanner] = useState<string | null>(null)
   const [stationPumps, setStationPumps] = useState<ProductionPumpConfig[]>(() => getStationPumps(session.stationId))
   const [fuelPrices, setFuelPrices] = useState<Record<string, number>>(PRODUCTION_STATION.fuelPrices)
   const [attendantId, setAttendantId] = useState<string | null>(null)
@@ -47,17 +51,29 @@ export const AttendantDashboard: React.FC<{
     let active = true
     async function init() {
       try {
-        const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
-        const [curShift, pending, prices, pumpsRes] = await Promise.all([
-          getActiveShiftForAttendant(session.userId),
+        const { listShifts, saveShift, pendingSyncCount } = await import('../core/infra/repositories')
+        const [pending, prices, pumpsRes, cloudRes] = await Promise.all([
           pendingSyncCount(),
           mobileProductService.getFuelPrices().catch(() => PRODUCTION_STATION.fuelPrices),
           cloudGetPumps(session.stationId, session.companyId).catch(() => null),
+          cloudGetShifts(session.stationId).catch(() => null),
         ])
+
+        if (cloudRes && cloudRes.ok && cloudRes.shifts.length > 0) {
+          for (const cs of cloudRes.shifts) {
+            await saveShift(cs)
+          }
+        }
+
+        const allShifts = await listShifts()
+        const curShift = allShifts.find(s => s.attendantId === session.userId && s.status === 'OPEN') || null
+        const rejShift = allShifts.find(s => s.attendantId === session.userId && s.status === 'REJECTED') || null
+
         if (active) {
           setAttendantId(session.userId)
           setShift(curShift)
-          if (!curShift) {
+          setRejectedShift(rejShift)
+          if (!curShift && !rejShift) {
             setOpenModal(true)
           }
           setPendingCount(pending)
@@ -83,13 +99,25 @@ export const AttendantDashboard: React.FC<{
 
   const refresh = useCallback(async () => {
     if (!attendantId) return
-    const { getActiveShiftForAttendant, pendingSyncCount } = await import('../core/infra/repositories')
-    const [active, pending, pumpsRes] = await Promise.all([
-      getActiveShiftForAttendant(attendantId),
+    const { listShifts, saveShift, pendingSyncCount } = await import('../core/infra/repositories')
+    const [pending, pumpsRes, cloudRes] = await Promise.all([
       pendingSyncCount(),
       cloudGetPumps(session.stationId, session.companyId).catch(() => null),
+      cloudGetShifts(session.stationId).catch(() => null),
     ])
+
+    if (cloudRes && cloudRes.ok && cloudRes.shifts.length > 0) {
+      for (const cs of cloudRes.shifts) {
+        await saveShift(cs)
+      }
+    }
+
+    const allShifts = await listShifts()
+    const active = allShifts.find(s => s.attendantId === attendantId && s.status === 'OPEN') || null
+    const rejShift = allShifts.find(s => s.attendantId === attendantId && s.status === 'REJECTED') || null
+
     setShift(active)
+    setRejectedShift(rejShift)
     setPendingCount(pending)
     if (pumpsRes && pumpsRes.ok && pumpsRes.pumps.length > 0) {
       const mapped: ProductionPumpConfig[] = pumpsRes.pumps.map(p => ({
@@ -121,8 +149,17 @@ export const AttendantDashboard: React.FC<{
         {/* Header */}
         <View style={styles.header}>
           <View style={{ flex: 1, paddingRight: 8 }}>
+            <View style={styles.tenantTag}>
+              <Text style={styles.tenantOmc} numberOfLines={1}>
+                {session.companyName || session.companyShortCode || 'OMC'}
+              </Text>
+              <Text style={styles.tenantSep}>·</Text>
+              <Text style={styles.tenantStation} numberOfLines={1}>
+                {session.stationName || 'Forecourt Station'}
+              </Text>
+            </View>
             <Text style={styles.greeting} numberOfLines={1}>Hello, {session.fullName.split(' ')[0]} 👋</Text>
-            <Text style={styles.subGreeting} numberOfLines={1}>{session.employeeCode} · {session.stationName || 'Forecourt Station'}</Text>
+            <Text style={styles.subGreeting} numberOfLines={1}>{session.employeeCode} · Attendant</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
             <Pressable onPress={onSignOut} style={styles.iconBtn} hitSlop={8}>
@@ -140,6 +177,7 @@ export const AttendantDashboard: React.FC<{
                 await syncNow()
                 const { pendingSyncCount } = await import('../core/infra/repositories')
                 setPendingCount(await pendingSyncCount())
+                await refresh()
                 setSyncing(false)
               }}
               style={styles.iconBtn}
@@ -155,6 +193,47 @@ export const AttendantDashboard: React.FC<{
             </Pressable>
           </View>
         </View>
+
+        {/* Success Banner */}
+        {successBanner && (
+          <View style={styles.successBanner}>
+            <CheckCircle size={15} color={colors.emerald} />
+            <Text style={styles.successBannerText}>{successBanner}</Text>
+          </View>
+        )}
+
+        {/* Manager Rejection Feedback Alert Card */}
+        {rejectedShift && (
+          <Card style={styles.rejectionAlertCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <AlertTriangle size={16} color={colors.rose} />
+                <Text style={styles.rejectionAlertTitle}>SHIFT REJECTED BY MANAGER</Text>
+              </View>
+              <View style={styles.rejectionBadge}>
+                <Text style={styles.rejectionBadgeText}>{rejectedShift.number}</Text>
+              </View>
+            </View>
+
+            <Text style={styles.rejectionAlertMsg}>
+              {rejectedShift.reviewNotes || 'The manager reviewed and rejected your sales entries for this shift. Please start the closing sales process again, pick your pump and nozzle(s), and enter the right figures.'}
+            </Text>
+
+            {rejectedShift.reviewedBy && (
+              <Text style={styles.rejectionAlertMeta}>
+                Reviewed by {rejectedShift.reviewedBy} {rejectedShift.reviewedAt ? `· ${formatDateTime(rejectedShift.reviewedAt)}` : ''}
+              </Text>
+            )}
+
+            <View style={styles.rejectionActionRow}>
+              <PrimaryButton
+                title="🔄 Correct Entries & Resubmit Closing Sales"
+                onPress={() => setCorrectModal(true)}
+                tone="amber"
+              />
+            </View>
+          </Card>
+        )}
 
         {/* Forecourt Attendant Mini Dashboard */}
         <Card style={styles.miniDashboardCard}>
@@ -434,6 +513,32 @@ export const AttendantDashboard: React.FC<{
               remittance,
               notes,
             })
+            await refresh()
+          } catch (e) {
+            const { describeError } = await import('../core/services/shiftService')
+            setError(describeError(e))
+          }
+        }}
+      />
+
+      <CorrectRejectedShiftModal
+        visible={correctModal}
+        shift={rejectedShift}
+        pumps={stationPumps}
+        fuelPrices={fuelPrices}
+        onClose={() => setCorrectModal(false)}
+        onResubmitted={async (resubmitData) => {
+          try {
+            await shiftService.resubmitShift({
+              shiftId: resubmitData.shiftId,
+              pumpId: resubmitData.pumpId,
+              openingReadings: resubmitData.openingReadings,
+              closingReadings: resubmitData.closingReadings,
+              remittance: resubmitData.remittance,
+              notes: resubmitData.notes,
+            })
+            setSuccessBanner(`Shift ${rejectedShift?.number ?? ''} corrected & resubmitted to manager for review.`)
+            setTimeout(() => setSuccessBanner(null), 8000)
             await refresh()
           } catch (e) {
             const { describeError } = await import('../core/services/shiftService')
@@ -1251,4 +1356,17 @@ const styles = StyleSheet.create({
   nozzleSelectChipInactive: { borderColor: colors.border, backgroundColor: colors.panel },
   nozzleSelectChipText: { fontSize: 11, fontWeight: '800' },
   nozzleDot: { width: 7, height: 7, borderRadius: 4, marginRight: 5 },
+  tenantTag: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
+  tenantOmc: { color: colors.emerald, fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
+  tenantSep: { color: colors.textDim, fontSize: 11 },
+  tenantStation: { color: colors.textDim, fontSize: 11, fontWeight: '600' },
+  successBanner: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(34, 197, 94, 0.12)', borderColor: 'rgba(34, 197, 94, 0.3)', borderWidth: 1, borderRadius: 10, padding: 12, marginBottom: 12 },
+  successBannerText: { color: colors.emerald, fontSize: 12, fontWeight: '700', flex: 1 },
+  rejectionAlertCard: { backgroundColor: 'rgba(239, 68, 68, 0.08)', borderColor: 'rgba(239, 68, 68, 0.35)', borderWidth: 1.5, padding: 14, marginBottom: 14 },
+  rejectionAlertTitle: { color: colors.rose, fontSize: 12, fontWeight: '900', letterSpacing: 0.5 },
+  rejectionBadge: { backgroundColor: 'rgba(239, 68, 68, 0.2)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  rejectionBadgeText: { color: colors.rose, fontSize: 10, fontWeight: '800' },
+  rejectionAlertMsg: { color: colors.text, fontSize: 13, lineHeight: 18, marginTop: 4 },
+  rejectionAlertMeta: { color: colors.textDim, fontSize: 11, marginTop: 6, fontStyle: 'italic' },
+  rejectionActionRow: { marginTop: 12 },
 })

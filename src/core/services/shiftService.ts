@@ -414,6 +414,82 @@ export class ShiftService {
     return closed
   }
 
+  async resubmitRejectedShift(input: {
+    shiftId: string
+    pumpId?: string
+    pumpName?: string
+    openingReadings?: MeterReading[]
+    closingReadings: MeterReading[]
+    notes?: string | null
+    remittance?: Partial<PaymentsBreakdown>
+  }): Promise<Shift> {
+    const shift = await shiftRepo.getById(input.shiftId)
+    if (!shift) {
+      throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.', input.shiftId)
+    }
+
+    if (shift.status !== 'REJECTED' && shift.status !== 'CLOSED') {
+      throw new DomainError('INVALID_STATE' as any, 'Only rejected or closed shifts can be resubmitted with corrections.')
+    }
+
+    let workingShift: Shift = { ...shift }
+    if (input.pumpId) {
+      workingShift.pumpId = input.pumpId
+      if (input.pumpName) workingShift.pumpName = input.pumpName
+    }
+    if (input.openingReadings && input.openingReadings.length > 0) {
+      workingShift.openingReadings = input.openingReadings
+    }
+
+    const prices = await productService.getFuelPriceMap(workingShift.companyId)
+    const correctedNotes = input.notes ? `[Corrected & Resubmitted] ${input.notes}` : '[Resubmitted with corrections]'
+    const closed = finalizeClosedShift(workingShift, input.closingReadings, prices as any, correctedNotes, input.remittance)
+
+    const resubmitted: Shift = {
+      ...closed,
+      status: 'CLOSED',
+      syncStatus: 'PENDING',
+      updatedAt: new Date().toISOString(),
+    }
+
+    await shiftRepo.upsert(resubmitted)
+    liveSyncBus.publish({ table: 'SHIFTS', reason: 'UPDATE', key: resubmitted.id })
+
+    try {
+      const { backendResubmitShift } = await import('../../services/backendApiService')
+      await backendResubmitShift(resubmitted.id, {
+        pumpId: resubmitted.pumpId,
+        pumpName: resubmitted.pumpName,
+        openingReadings: resubmitted.openingReadings,
+        closingReadings: resubmitted.closingReadings,
+        sales: resubmitted.sales,
+        expectedTotal: resubmitted.expectedTotal,
+        payments: resubmitted.payments,
+        actualTotal: resubmitted.actualTotal,
+        variance: resubmitted.variance,
+        notes: resubmitted.notes || undefined,
+      })
+      resubmitted.syncStatus = 'SYNCED'
+      await shiftRepo.upsert(resubmitted)
+    } catch {
+      await syncQueueRepo.add({
+        id: `sync-shift-resubmit-${resubmitted.id}-${Date.now()}`,
+        entityType: 'SHIFT',
+        entityId: resubmitted.id,
+        status: 'PENDING',
+        attempts: 0,
+        nextRetryAt: null,
+        lastError: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      liveSyncBus.publish({ table: 'SYNC_QUEUE', reason: 'INSERT', key: `sync-shift-${resubmitted.id}` })
+      syncService.triggerBackgroundSync()
+    }
+
+    return resubmitted
+  }
+
   async listShifts(attendantId: string): Promise<Shift[]> {
     return shiftRepo.listForAttendant(attendantId)
   }

@@ -11,6 +11,8 @@ import {
   cloudListAttendants,
   cloudCreateAttendant,
   cloudDeactivateAttendant,
+  cloudGetShifts,
+  cloudReviewShift,
 } from '../infra/cloudApi'
 import type { AuditEntry, Shift, Attendant } from '../domain/types'
 import {
@@ -35,8 +37,26 @@ export interface Reviewer {
 
 export class SupervisorService {
   async listShifts(): Promise<Shift[]> {
-    const all = await listShifts()
-    return all.slice().sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
+    const local = await listShifts()
+    try {
+      const cloudRes = await cloudGetShifts()
+      if (cloudRes.ok && cloudRes.shifts.length > 0) {
+        for (const cs of cloudRes.shifts) {
+          const existing = local.find(l => l.id === cs.id)
+          if (!existing) {
+            await saveShift(cs)
+            local.push(cs)
+          } else if (new Date(cs.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+            await saveShift(cs)
+            const idx = local.findIndex(l => l.id === cs.id)
+            if (idx >= 0) local[idx] = cs
+          }
+        }
+      }
+    } catch {
+      // offline fallback
+    }
+    return local.slice().sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
   }
 
   async reviewShift(shiftId: string, decision: ReviewDecision, reviewer: Reviewer, notes?: string): Promise<Shift> {
@@ -61,6 +81,12 @@ export class SupervisorService {
     const item = queue.find(i => i.type === 'SHIFT' && i.refId === shiftId)
     if (item) {
       await updateSyncItem({ ...item, payload: reviewed, updatedAt: now })
+    }
+
+    try {
+      await cloudReviewShift(shiftId, decision, notes)
+    } catch {
+      // Offline fallback: will sync when connectivity restored
     }
 
     await addAudit({

@@ -201,3 +201,121 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
   const updated = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id) as ShiftRow
   res.json({ success: true, shift: deserializeShift(updated) })
 })
+
+shiftsRouter.post('/:id/resubmit', authenticate, (req: AuthRequest, res) => {
+  const session = sessionOf(req)
+  const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id) as ScopedShiftRow | undefined
+  if (!shift) {
+    res.status(404).json({ error: 'NOT_FOUND', message: 'Shift not found.' })
+    return
+  }
+  if (session.role === 'attendant' && shift.attendantId !== session.userId) {
+    res.status(403).json({ error: 'FORBIDDEN', message: "You cannot resubmit another attendant's shift." })
+    return
+  }
+  if (session.role === 'supervisor' && shift.stationId !== session.stationId) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot resubmit a shift from another station.' })
+    return
+  }
+  if (!canAccessShift(session, shift)) {
+    res.status(403).json({ error: 'FORBIDDEN', message: 'You cannot access this shift.' })
+    return
+  }
+  if (shift.status !== 'REJECTED' && shift.status !== 'CLOSED') {
+    res.status(409).json({ error: 'INVALID_STATE', message: 'Only rejected or closed shifts can be resubmitted with corrections.' })
+    return
+  }
+
+  const body = (req.body ?? {}) as {
+    pumpId?: string
+    pumpName?: string
+    openingReadings?: unknown
+    closingReadings?: unknown
+    sales?: unknown
+    expectedTotal?: number
+    payments?: unknown
+    actualTotal?: number
+    variance?: number
+    notes?: string
+  }
+
+  const now = new Date().toISOString()
+  const pumpId = typeof body.pumpId === 'string' && body.pumpId.trim() ? body.pumpId.trim() : shift.pumpId
+  const pumpName = typeof body.pumpName === 'string' && body.pumpName.trim() ? body.pumpName.trim() : shift.pumpName
+
+  let openingReadingsStr = shift.openingReadings
+  if (body.openingReadings !== undefined) {
+    openingReadingsStr = typeof body.openingReadings === 'string' ? body.openingReadings : JSON.stringify(body.openingReadings)
+  }
+
+  let closingReadingsStr = shift.closingReadings
+  if (body.closingReadings !== undefined) {
+    closingReadingsStr = typeof body.closingReadings === 'string' ? body.closingReadings : JSON.stringify(body.closingReadings)
+  }
+
+  let salesStr = shift.sales
+  if (body.sales !== undefined) {
+    salesStr = typeof body.sales === 'string' ? body.sales : JSON.stringify(body.sales)
+  }
+
+  let paymentsStr = shift.payments
+  if (body.payments !== undefined) {
+    paymentsStr = typeof body.payments === 'string' ? body.payments : JSON.stringify(body.payments)
+  }
+
+  const expectedTotal = typeof body.expectedTotal === 'number' ? body.expectedTotal : shift.expectedTotal
+  const actualTotal = typeof body.actualTotal === 'number' ? body.actualTotal : shift.actualTotal
+  const variance = typeof body.variance === 'number' ? body.variance : Math.round((actualTotal - expectedTotal) * 100) / 100
+  const userNotes = typeof body.notes === 'string' ? body.notes.trim() : ''
+  const combinedNotes = userNotes ? `[Corrected & Resubmitted] ${userNotes}` : (shift.notes ? `${shift.notes} [Resubmitted with corrections]` : '[Resubmitted with corrections]')
+
+  db.prepare(`
+    UPDATE shifts
+    SET pumpId = ?,
+        pumpName = ?,
+        openingReadings = ?,
+        closingReadings = ?,
+        sales = ?,
+        expectedTotal = ?,
+        payments = ?,
+        actualTotal = ?,
+        variance = ?,
+        notes = ?,
+        status = 'CLOSED',
+        syncStatus = 'SYNCED',
+        updatedAt = ?
+    WHERE id = ?
+  `).run(
+    pumpId,
+    pumpName,
+    openingReadingsStr,
+    closingReadingsStr,
+    salesStr,
+    expectedTotal,
+    paymentsStr,
+    actualTotal,
+    variance,
+    combinedNotes,
+    now,
+    shift.id,
+  )
+
+  db.prepare(`
+    INSERT INTO audit_log (id, action, actorId, actorName, actorRole, targetId, targetDescription, notes, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    newToken(),
+    'SHIFT_RESUBMITTED',
+    session.userId,
+    session.fullName,
+    session.role.toUpperCase(),
+    shift.id,
+    `Shift ${shift.number} (${shift.attendantName}) - Corrected & Resubmitted`,
+    `Prior rejection note: "${shift.reviewerNotes || 'None'}". Attendant note: "${userNotes || 'None'}"`,
+    now,
+  )
+
+  const updated = db.prepare('SELECT * FROM shifts WHERE id = ?').get(shift.id) as ShiftRow
+  res.json({ success: true, shift: deserializeShift(updated) })
+})
+

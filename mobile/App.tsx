@@ -57,6 +57,7 @@ export default function App() {
           stationId: auth.session.stationId,
           stationName: auth.session.stationName,
           companyId: auth.session.companyId,
+          companyName: auth.session.companyName,
           companyShortCode: auth.session.companyShortCode,
         })
       }

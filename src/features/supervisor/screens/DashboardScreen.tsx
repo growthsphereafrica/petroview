@@ -24,7 +24,7 @@ export const SupervisorDashboardScreen: React.FC<{
   onGoToPrices: () => void
   onOpenShift: (shiftId: string) => void
 }> = ({ onGoToShifts, onGoToAttendants, onGoToSync, onGoToSettings, onGoToAudit, onGoToTankReadings, onGoToExpenses, onGoToPumps, onGoToPrices, onOpenShift }) => {
-  const { supervisor, signOut } = useSupervisorSession()
+  const { supervisor, session, signOut } = useSupervisorSession()
   const { shifts, stats, pendingSync, loading, pushSync } = useSupervisorData()
   const [tankReadingCount, setTankReadingCount] = useState(0)
   const [expensesToday, setExpensesToday] = useState(0)
@@ -67,11 +67,16 @@ export const SupervisorDashboardScreen: React.FC<{
             {supervisor?.fullName.split(' ').map(n => n[0]).join('').slice(0, 2)}
           </div>
           <div>
-            <p className="text-[10px] font-mono text-slate-500 uppercase">{supervisor?.employeeCode}</p>
-            <p className="text-sm font-extrabold text-white">{supervisor?.fullName}</p>
-            <p className="text-[10px] text-orange-400 font-medium">
-              {supervisor ? getStationName(supervisor.stationId) : ''} · Supervisor Hub
-            </p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-black uppercase tracking-wider text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded border border-orange-500/20">
+                {session?.companyName || supervisor?.companyName || supervisor?.companyShortCode || 'OMC'}
+              </span>
+              <span className="text-[10px] text-slate-300 font-semibold truncate max-w-[200px]">
+                {session?.stationName || supervisor?.stationName || (supervisor ? getStationName(supervisor.stationId) : 'Station Forecourt')}
+              </span>
+            </div>
+            <p className="text-sm font-extrabold text-white mt-0.5 leading-tight">{supervisor?.fullName}</p>
+            <p className="text-[10px] font-mono text-slate-500 uppercase">{supervisor?.employeeCode} · Station Manager / Supervisor</p>
           </div>
         </div>
         <div className="flex items-center gap-1.5">

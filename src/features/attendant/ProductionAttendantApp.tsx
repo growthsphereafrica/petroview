@@ -13,10 +13,11 @@ import { MeterReadingsScreen } from './screens/MeterReadingsScreen'
 import { SalesScreen } from './screens/SalesScreen'
 import { ReceiptCaptureScreen } from './screens/ReceiptCaptureScreen'
 import { ClosingReadingsScreen } from './screens/ClosingReadingsScreen'
+import { CorrectRejectedShiftScreen } from './screens/CorrectRejectedShiftScreen'
 import { ShiftSummaryScreen } from './screens/ShiftSummaryScreen'
 import { SyncScreen } from './screens/SyncScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
-import type { MeterReading } from '../../core/domain/types'
+import type { MeterReading, Shift } from '../../core/domain/types'
 
 type Screen =
   | 'dashboard'
@@ -25,6 +26,7 @@ type Screen =
   | 'sales'
   | 'receipts'
   | 'closing'
+  | 'correct_shift'
   | 'summary'
   | 'sync'
   | 'settings'
@@ -40,32 +42,26 @@ const ShiftNavigator: React.FC = () => {
   const [screen, setScreen] = useState<Screen>('start_shift')
   const [pendingPumpId, setPendingPumpId] = useState<string | null>(null)
   const [pendingNozzleIndices, setPendingNozzleIndices] = useState<number[] | null>(null)
+  const [correctingShift, setCorrectingShift] = useState<Shift | null>(null)
   const { attendant } = useAttendantSession()
-  const { activeShift, openShift, toast, dismissToast, loading: shiftLoading } = useShift()
+  const { activeShift, shifts, openShift, toast, dismissToast, loading: shiftLoading } = useShift()
   const go = (s: Screen) => setScreen(s)
 
+  const hasRejectedShift = shifts.some(s => s.status === 'REJECTED')
+
   // When an attendant signs in:
-  // - If no active shift, the first thing they see is to select pump & nozzle ('start_shift')
+  // - If they have a rejected shift, show the dashboard with the rejection feedback & correction button
   // - If an active shift is already running, show the active shift dashboard with closing option ('dashboard')
+  // - If no active or rejected shift, the first thing they see is to select pump & nozzle ('start_shift')
   useEffect(() => {
     if (!shiftLoading) {
-      if (activeShift) {
+      if (activeShift || hasRejectedShift) {
         setScreen(prev => (prev === 'start_shift' ? 'dashboard' : prev))
       } else {
         setScreen(prev => (prev === 'dashboard' ? 'start_shift' : prev))
       }
     }
-  }, [shiftLoading, activeShift])
-
-  const dashboard = (
-    <DashboardScreen
-      onGoToStartShift={() => go('start_shift')}
-      onGoToTransactions={() => go('dashboard')}
-      onGoToClose={() => go('closing')}
-      onGoToSync={() => go('sync')}
-      onGoToSettings={() => go('settings')}
-    />
-  )
+  }, [shiftLoading, activeShift, hasRejectedShift])
 
   const handleStartShiftNext = (pumpId: string, nozzleIndices: number[]) => {
     setPendingPumpId(pumpId)
@@ -80,6 +76,22 @@ const ShiftNavigator: React.FC = () => {
   }
 
   const handleClosed = () => go('summary')
+
+  const handleGoToCorrectShift = (s: Shift) => {
+    setCorrectingShift(s)
+    go('correct_shift')
+  }
+
+  const dashboard = (
+    <DashboardScreen
+      onGoToStartShift={() => go('start_shift')}
+      onGoToTransactions={() => go('dashboard')}
+      onGoToClose={() => go('closing')}
+      onGoToCorrectShift={handleGoToCorrectShift}
+      onGoToSync={() => go('sync')}
+      onGoToSettings={() => go('settings')}
+    />
+  )
 
   return (
     <div className="relative h-full">
@@ -104,6 +116,17 @@ const ShiftNavigator: React.FC = () => {
 
       {screen === 'closing' && activeShift && (
         <ClosingReadingsScreen onBack={() => go('dashboard')} onClosed={handleClosed} />
+      )}
+
+      {screen === 'correct_shift' && correctingShift && (
+        <CorrectRejectedShiftScreen
+          shift={correctingShift}
+          onBack={() => go('dashboard')}
+          onDone={() => {
+            setCorrectingShift(null)
+            go('dashboard')
+          }}
+        />
       )}
 
       {screen === 'summary' && <ShiftSummaryScreen onBack={() => go('dashboard')} onDone={() => go('start_shift')} />}

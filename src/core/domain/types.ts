@@ -126,7 +126,9 @@ export interface Attendant {
   pinHash: string
   pumpId: string | null
   stationId: string
+  stationName?: string
   companyId?: string
+  companyName?: string
   companyShortCode?: string
   phone?: string
   approvalStatus: ApprovalStatus
@@ -145,7 +147,9 @@ export interface AttendantSession {
   employeeCode: string
   fullName: string
   stationId?: string
+  stationName?: string
   companyId?: string
+  companyName?: string
   createdAt: string
   expiresAt: string
 }
@@ -157,7 +161,9 @@ export interface Supervisor {
   pinSalt: string
   pinHash: string
   stationId: string
+  stationName?: string
   companyId?: string
+  companyName?: string
   companyShortCode?: string
   phone?: string
   isHeadOffice?: boolean
@@ -178,7 +184,9 @@ export interface SupervisorSession {
   employeeCode: string
   fullName: string
   stationId: string
+  stationName?: string
   companyId?: string
+  companyName?: string
   isHeadOffice?: boolean
   isSuperAdmin?: boolean
   createdAt: string

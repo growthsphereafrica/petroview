@@ -22,6 +22,7 @@ const AUTO_SYNC_INTERVAL_MS = 5_000
 interface SessionContextValue {
   ready: boolean
   supervisor: Supervisor | null
+  session: UnifiedSession | null
   signingIn: boolean
   signIn: (employeeCode: string, pin: string) => Promise<void>
   signOut: () => Promise<void>
@@ -31,17 +32,19 @@ const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
 export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; session?: UnifiedSession | null }> = ({
   children,
-  session,
+  session: propSession,
 }) => {
   const [ready, setReady] = useState(false)
   const [supervisor, setSupervisor] = useState<Supervisor | null>(null)
+  const [activeSession, setActiveSession] = useState<UnifiedSession | null>(propSession || null)
   const signingIn = false
 
   useEffect(() => {
     let cancelled = false
     async function restore() {
       try {
-        const activeUni = session || loadUnifiedSession()
+        const activeUni = propSession || loadUnifiedSession()
+        setActiveSession(activeUni)
         if (!activeUni || (activeUni.role !== 'supervisor' && activeUni.role !== 'headoffice')) return
         let sup = await supervisorRepo.findByEmployeeCode(activeUni.employeeCode)
         if (!sup) {
@@ -52,7 +55,9 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; se
             pinSalt: 'synced_session',
             pinHash: 'synced_session',
             stationId: activeUni.stationId || '',
+            stationName: activeUni.stationName,
             companyId: activeUni.companyId,
+            companyName: activeUni.companyName,
             companyShortCode: activeUni.companyShortCode,
             isHeadOffice: activeUni.role === 'headoffice',
             isSuperAdmin: false,
@@ -65,11 +70,14 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; se
             createdAt: new Date().toISOString(),
           }
           await prodDb.supervisors.put(sup)
-        } else if (activeUni.stationId && sup.stationId !== activeUni.stationId) {
-          sup.stationId = activeUni.stationId
-          if (activeUni.companyId) sup.companyId = activeUni.companyId
-          if (activeUni.companyShortCode) sup.companyShortCode = activeUni.companyShortCode
-          await prodDb.supervisors.put(sup)
+        } else {
+          let updated = false
+          if (activeUni.stationId && sup.stationId !== activeUni.stationId) { sup.stationId = activeUni.stationId; updated = true }
+          if (activeUni.stationName && sup.stationName !== activeUni.stationName) { sup.stationName = activeUni.stationName; updated = true }
+          if (activeUni.companyId && sup.companyId !== activeUni.companyId) { sup.companyId = activeUni.companyId; updated = true }
+          if (activeUni.companyName && sup.companyName !== activeUni.companyName) { sup.companyName = activeUni.companyName; updated = true }
+          if (activeUni.companyShortCode && sup.companyShortCode !== activeUni.companyShortCode) { sup.companyShortCode = activeUni.companyShortCode; updated = true }
+          if (updated) await prodDb.supervisors.put(sup)
         }
         if (!cancelled) setSupervisor(sup)
       } finally {
@@ -80,7 +88,7 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; se
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [propSession])
 
   const signIn = useCallback(async () => {
     throw new Error('Use the unified gateway to sign in.')
@@ -90,10 +98,11 @@ export const SupervisorSessionProvider: React.FC<{ children: React.ReactNode; se
     await backendLogout()
     clearUnifiedSession()
     setSupervisor(null)
+    setActiveSession(null)
     window.location.reload()
   }, [])
 
-  const value = useMemo(() => ({ ready, supervisor, signingIn, signIn, signOut }), [ready, supervisor, signingIn, signIn, signOut])
+  const value = useMemo(() => ({ ready, supervisor, session: activeSession, signingIn, signIn, signOut }), [ready, supervisor, activeSession, signingIn, signIn, signOut])
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
 }
 

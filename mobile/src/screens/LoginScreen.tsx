@@ -16,6 +16,7 @@ export interface MobileSession {
   stationId: string
   stationName?: string
   companyId: string
+  companyName?: string
   companyShortCode: string | null
 }
 
@@ -50,6 +51,7 @@ export const LoginScreen: React.FC<{ onAuthenticated: (s: MobileSession) => void
         stationId: session.stationId,
         stationName: session.stationName,
         companyId: session.companyId,
+        companyName: session.companyName,
         companyShortCode: session.companyShortCode,
       })
     } catch (e) {

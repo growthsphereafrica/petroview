@@ -24,6 +24,7 @@ const AUTO_SYNC_INTERVAL_MS = 15_000
 interface SessionContextValue {
   ready: boolean
   attendant: Attendant | null
+  session: UnifiedSession | null
   signingIn: boolean
   signIn: (employeeCode: string, pin: string) => Promise<void>
   signOut: () => Promise<void>
@@ -33,17 +34,19 @@ const SessionContext = createContext<SessionContextValue | undefined>(undefined)
 
 export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; session?: UnifiedSession | null }> = ({
   children,
-  session,
+  session: propSession,
 }) => {
   const [ready, setReady] = useState(false)
   const [attendant, setAttendant] = useState<Attendant | null>(null)
+  const [activeSession, setActiveSession] = useState<UnifiedSession | null>(propSession || null)
   const signingIn = false
 
   useEffect(() => {
     let cancelled = false
     async function restore() {
       try {
-        const activeUni = session || loadUnifiedSession()
+        const activeUni = propSession || loadUnifiedSession()
+        setActiveSession(activeUni)
         if (!activeUni || activeUni.role !== 'attendant') return
         let att = await attendantRepo.findByEmployeeCode(activeUni.employeeCode)
         if (!att) {
@@ -54,8 +57,10 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
             pinSalt: 'synced_session',
             pinHash: 'synced_session',
             stationId: activeUni.stationId || '',
+            stationName: activeUni.stationName,
             pumpId: null,
             companyId: activeUni.companyId,
+            companyName: activeUni.companyName,
             companyShortCode: activeUni.companyShortCode,
             approvalStatus: 'APPROVED',
             approvedAt: activeUni.expiresAt,
@@ -66,11 +71,14 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
             createdAt: new Date().toISOString(),
           }
           await prodDb.attendants.put(att)
-        } else if (activeUni.stationId && att.stationId !== activeUni.stationId) {
-          att.stationId = activeUni.stationId
-          if (activeUni.companyId) att.companyId = activeUni.companyId
-          if (activeUni.companyShortCode) att.companyShortCode = activeUni.companyShortCode
-          await prodDb.attendants.put(att)
+        } else {
+          let updated = false
+          if (activeUni.stationId && att.stationId !== activeUni.stationId) { att.stationId = activeUni.stationId; updated = true }
+          if (activeUni.stationName && att.stationName !== activeUni.stationName) { att.stationName = activeUni.stationName; updated = true }
+          if (activeUni.companyId && att.companyId !== activeUni.companyId) { att.companyId = activeUni.companyId; updated = true }
+          if (activeUni.companyName && att.companyName !== activeUni.companyName) { att.companyName = activeUni.companyName; updated = true }
+          if (activeUni.companyShortCode && att.companyShortCode !== activeUni.companyShortCode) { att.companyShortCode = activeUni.companyShortCode; updated = true }
+          if (updated) await prodDb.attendants.put(att)
         }
         if (!cancelled) setAttendant(att)
       } catch (err) {
@@ -85,7 +93,7 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
     return () => {
       cancelled = true
     }
-  }, [session])
+  }, [propSession])
 
   const signIn = useCallback(async () => {
     throw new Error('Use the unified gateway to sign in.')
@@ -95,12 +103,13 @@ export const AttendantSessionProvider: React.FC<{ children: React.ReactNode; ses
     await backendLogout()
     clearUnifiedSession()
     setAttendant(null)
+    setActiveSession(null)
     window.location.reload()
   }, [])
 
   const value = useMemo(
-    () => ({ ready, attendant, signingIn, signIn, signOut }),
-    [ready, attendant, signingIn, signIn, signOut],
+    () => ({ ready, attendant, session: activeSession, signingIn, signIn, signOut }),
+    [ready, attendant, activeSession, signingIn, signIn, signOut],
   )
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
@@ -129,6 +138,15 @@ interface ShiftContextValue {
   updateSale: (txId: string, updates: { fuelCode?: Shift['sales'][number]['fuelCode']; litres?: number; method?: 'CASH' | 'MOMO' | 'VOUCHER' | 'CREDIT'; unitPrice?: number }) => Promise<void>
   deleteSale: (txId: string) => Promise<void>
   closeShift: (input: { closingReadings: Shift['closingReadings']; notes?: string; remittance?: Partial<Shift['payments']> }) => Promise<void>
+  resubmitShift: (input: {
+    shiftId: string
+    pumpId?: string
+    pumpName?: string
+    openingReadings?: Shift['openingReadings']
+    closingReadings: Shift['closingReadings']
+    notes?: string
+    remittance?: Partial<Shift['payments']>
+  }) => Promise<void>
   refresh: () => Promise<void>
   pushSync: () => Promise<void>
   pendingCount: number
@@ -286,6 +304,32 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
     [activeShift, notify, refresh],
   )
 
+  const resubmitShift = useCallback(
+    async (input: {
+      shiftId: string
+      pumpId?: string
+      pumpName?: string
+      openingReadings?: Shift['openingReadings']
+      closingReadings: Shift['closingReadings']
+      notes?: string
+      remittance?: Partial<Shift['payments']>
+    }) => {
+      const resubmitted = await shiftService.resubmitRejectedShift({
+        shiftId: input.shiftId,
+        pumpId: input.pumpId,
+        pumpName: input.pumpName,
+        openingReadings: input.openingReadings,
+        closingReadings: input.closingReadings,
+        notes: input.notes,
+        remittance: input.remittance,
+      })
+      setShifts(prev => prev.map(s => (s.id === resubmitted.id ? resubmitted : s)))
+      await refresh()
+      notify(`Shift ${resubmitted.number} corrected and resubmitted for manager review.`, 'success')
+    },
+    [notify, refresh],
+  )
+
   const pushSync = useCallback(async () => {
     const result = await syncService.runPendingSync(true)
     setPendingCount(await syncService.pendingCount())
@@ -317,11 +361,12 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       updateSale,
       deleteSale,
       closeShift,
+      resubmitShift,
       refresh,
       pushSync,
       pendingCount,
     }),
-    [loading, activeShift, shifts, toast, openShift, recordSale, updateSale, deleteSale, closeShift, refresh, pushSync, pendingCount],
+    [loading, activeShift, shifts, toast, openShift, recordSale, updateSale, deleteSale, closeShift, resubmitShift, refresh, pushSync, pendingCount],
   )
 
   return <ShiftContext.Provider value={value}>{children}</ShiftContext.Provider>

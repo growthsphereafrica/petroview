@@ -34,9 +34,37 @@ function employeeCodePrefixPattern(shortCode: string): string {
 
 function stationNameFor(stationId: string | null): string | null {
   if (!stationId) return null
-  const station = db.prepare('SELECT name FROM companyStations WHERE id = ? AND active = 1').get(stationId) as { name: string } | undefined
-  return station?.name ?? null
+  const station = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?)) AND active = 1').get(stationId, stationId) as { name: string } | undefined
+  if (station?.name) return station.name
+  const fallback = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?))').get(stationId, stationId) as { name: string } | undefined
+  return fallback?.name ?? null
 }
+
+function companyNameFor(companyId: string | null, companyShortCode: string | null, stationId: string | null = null): string | null {
+  if (companyId) {
+    const comp = db.prepare('SELECT name FROM companies WHERE (UPPER(id) = UPPER(?) OR UPPER(shortCode) = UPPER(?)) AND active = 1').get(companyId, companyId) as { name: string } | undefined
+    if (comp?.name) return comp.name
+    const compFallback = db.prepare('SELECT name FROM companies WHERE (UPPER(id) = UPPER(?) OR UPPER(shortCode) = UPPER(?))').get(companyId, companyId) as { name: string } | undefined
+    if (compFallback?.name) return compFallback.name
+  }
+  if (companyShortCode) {
+    const comp = db.prepare('SELECT name FROM companies WHERE UPPER(shortCode) = UPPER(?) AND active = 1').get(companyShortCode) as { name: string } | undefined
+    if (comp?.name) return comp.name
+    const compFallback = db.prepare('SELECT name FROM companies WHERE UPPER(shortCode) = UPPER(?)').get(companyShortCode) as { name: string } | undefined
+    if (compFallback?.name) return compFallback.name
+  }
+  if (stationId) {
+    const comp = db.prepare(`
+      SELECT c.name FROM companies c
+      JOIN companyStations cs ON cs.companyId = c.id
+      WHERE (UPPER(cs.id) = UPPER(?) OR UPPER(cs.code) = UPPER(?))
+      LIMIT 1
+    `).get(stationId, stationId) as { name: string } | undefined
+    if (comp?.name) return comp.name
+  }
+  return null
+}
+
 
 interface RegistrationScope {
   stationId: string | null
@@ -149,6 +177,7 @@ authRouter.post('/login', async (req, res) => {
   const createdAt = new Date().toISOString()
   const expiresAt = sessionExpiry()
   const stationName = stationNameFor(account.stationId)
+  const companyName = companyNameFor(account.companyId, account.companyShortCode, account.stationId)
 
   let resolvedFullName = account.fullName
   if (account.isHeadOffice) {
@@ -175,6 +204,7 @@ authRouter.post('/login', async (req, res) => {
     stationId: account.stationId,
     stationName,
     companyId: account.companyId,
+    companyName,
     companyShortCode: account.companyShortCode,
     isSuperAdmin: !!row.isSuperAdmin,
     isHeadOffice: !!row.isHeadOffice,
@@ -251,6 +281,7 @@ authRouter.get('/me', authenticate, (req: AuthRequest, res) => {
     stationId: s.stationId,
     stationName: stationNameFor(s.stationId),
     companyId: s.companyId,
+    companyName: companyNameFor(s.companyId, s.companyShortCode, s.stationId),
     companyShortCode: s.companyShortCode,
     isSuperAdmin: s.role === 'superadmin',
     isHeadOffice: s.role === 'headoffice',

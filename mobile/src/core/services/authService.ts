@@ -26,6 +26,8 @@ function isStoredSession(value: unknown): value is AuthenticatedCloudSession {
     && typeof session.stationId === 'string' && session.stationId.length > 0
     && typeof session.companyId === 'string' && session.companyId.length > 0
     && (session.companyShortCode === null || typeof session.companyShortCode === 'string')
+    && (session.companyName === undefined || session.companyName === null || typeof session.companyName === 'string')
+    && (session.stationName === undefined || session.stationName === null || typeof session.stationName === 'string')
     && typeof session.expiresAt === 'string'
     && Number.isFinite(Date.parse(session.expiresAt))
 }

@@ -4,20 +4,24 @@
  */
 
 import React from 'react'
-import { CalendarClock, Flame, LogOut, PlusCircle, RefreshCw, Settings, Wifi } from 'lucide-react'
+import { AlertOctagon, CalendarClock, Flame, LogOut, MessageSquare, PlusCircle, RefreshCw, RotateCcw, Settings, Wifi } from 'lucide-react'
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, StatusBar, TappableRow } from '../ui'
 import { formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
+import { getStationName } from '../../../core/domain/config'
+import type { Shift } from '../../../core/domain/types'
 
 export const DashboardScreen: React.FC<{
   onGoToStartShift: () => void
   onGoToTransactions: () => void
   onGoToClose: () => void
+  onGoToCorrectShift?: (shift: Shift) => void
   onGoToSync: () => void
   onGoToSettings: () => void
-}> = ({ onGoToStartShift, onGoToTransactions, onGoToClose, onGoToSync, onGoToSettings }) => {
-  const { attendant, signOut } = useAttendantSession()
+}> = ({ onGoToStartShift, onGoToTransactions, onGoToClose, onGoToCorrectShift, onGoToSync, onGoToSettings }) => {
+  const { attendant, session, signOut } = useAttendantSession()
   const { activeShift, shifts, pendingCount, loading } = useShift()
+  const rejectedShift = shifts.find(s => s.status === 'REJECTED')
 
   return (
     <div className="h-full flex flex-col bg-[#090d16] overflow-y-auto">
@@ -28,8 +32,16 @@ export const DashboardScreen: React.FC<{
             {attendant?.fullName.split(' ').map(n => n[0]).join('').slice(0, 2)}
           </div>
           <div>
-            <p className="text-[10px] font-mono text-slate-500 uppercase">{attendant?.employeeCode}</p>
-            <p className="text-sm font-extrabold text-white">{attendant?.fullName}</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] font-black uppercase tracking-wider text-orange-400 bg-orange-500/10 px-1.5 py-0.5 rounded border border-orange-500/20">
+                {session?.companyName || attendant?.companyName || attendant?.companyShortCode || 'OMC'}
+              </span>
+              <span className="text-[10px] text-slate-300 font-semibold truncate max-w-[160px]">
+                {session?.stationName || attendant?.stationName || (attendant?.stationId ? getStationName(attendant.stationId) : 'Forecourt')}
+              </span>
+            </div>
+            <p className="text-sm font-extrabold text-white mt-0.5 leading-tight">{attendant?.fullName}</p>
+            <p className="text-[10px] font-mono text-slate-500 uppercase">{attendant?.employeeCode} · Forecourt Attendant</p>
           </div>
         </div>
         <div className="flex items-center gap-1.5">
@@ -63,6 +75,51 @@ export const DashboardScreen: React.FC<{
       </div>
 
       <div className="flex-1 px-4 py-4 flex flex-col gap-4 max-w-md w-full mx-auto">
+        {/* Manager Rejection Feedback Alert Card */}
+        {rejectedShift && (
+          <div className="rounded-2xl border-2 border-rose-500/60 bg-gradient-to-b from-rose-950/70 to-slate-900/95 p-4 shadow-xl shadow-rose-950/60 flex flex-col gap-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="p-1.5 rounded-lg bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                  <AlertOctagon className="w-5 h-5 text-rose-400" />
+                </span>
+                <div>
+                  <h3 className="text-xs font-black uppercase tracking-wide text-rose-400">
+                    Shift Sales Rejected by Manager
+                  </h3>
+                  <p className="text-[11px] font-bold text-white mt-0.5">
+                    {rejectedShift.number} · {rejectedShift.pumpName}
+                  </p>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-rose-500/30 text-rose-200 border border-rose-500/40 animate-pulse">
+                Action Required
+              </span>
+            </div>
+
+            {rejectedShift.reviewerNotes && (
+              <div className="rounded-xl bg-slate-950/80 border border-rose-500/30 p-3">
+                <p className="text-[10px] uppercase font-bold text-rose-400 flex items-center gap-1 mb-1">
+                  <MessageSquare className="w-3.5 h-3.5" /> Manager Feedback / Reason:
+                </p>
+                <p className="text-xs text-rose-100 font-medium italic leading-relaxed">
+                  "{rejectedShift.reviewerNotes}"
+                </p>
+              </div>
+            )}
+
+            <p className="text-[11px] text-slate-300 leading-snug">
+              Your sales entries for this shift were rejected. Please review the manager's feedback, verify your pump & nozzle selection, and enter the corrected opening/closing figures to resubmit.
+            </p>
+
+            <button
+              onClick={() => onGoToCorrectShift ? onGoToCorrectShift(rejectedShift) : onGoToClose()}
+              className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-rose-600 via-orange-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white font-extrabold text-xs flex items-center justify-center gap-2 shadow-lg shadow-rose-950/60 transition active:scale-[0.99]"
+            >
+              <RotateCcw className="w-4 h-4" /> Correct Entries & Resubmit Closing Sales
+            </button>
+          </div>
+        )}
         {/* Active shift banner */}
         {loading ? (
           <Card className="p-5 flex items-center gap-3">

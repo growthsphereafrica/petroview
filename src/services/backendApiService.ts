@@ -349,6 +349,73 @@ export async function backendDeleteCompany(companyId: string): Promise<{ success
   })
 }
 
+export interface CompanyDataStats {
+  companyId: string
+  stationId: string
+  companyName: string
+  companyShortCode: string
+  stationName?: string
+  shiftsCount: number
+  transactionsCount: number
+  receiptsCount: number
+  expensesCount: number
+  tankReadingsCount: number
+  attendantsCount: number
+  supervisorsCount: number
+  pumpsCount: number
+  productsCount: number
+  stationsCount: number
+}
+
+export interface CleanDataScopes {
+  shifts?: boolean
+  sales?: boolean
+  expenses?: boolean
+  tankReadings?: boolean
+  staff?: boolean
+  pumps?: boolean
+  products?: boolean
+  stations?: boolean
+  company?: boolean
+}
+
+export interface CleanDataResponse {
+  success: boolean
+  message: string
+  deletedCounts: {
+    shifts: number
+    transactions: number
+    receipts: number
+    expenses: number
+    tankReadings: number
+    attendants: number
+    supervisors: number
+    pumps: number
+    products: number
+    stations: number
+    company: number
+  }
+}
+
+export async function backendGetCompanyDataStats(companyId: string, stationId?: string): Promise<CompanyDataStats> {
+  const qs = stationId && stationId !== 'ALL' ? `?stationId=${encodeURIComponent(stationId)}` : ''
+  return apiCall<CompanyDataStats>(`/api/companies/${encodeURIComponent(companyId)}/data-stats${qs}`)
+}
+
+export async function backendCleanCompanyData(
+  companyId: string,
+  payload: {
+    stationId?: string
+    scopes: CleanDataScopes
+    purgeAllOperational?: boolean
+  },
+): Promise<CleanDataResponse> {
+  return apiCall<CleanDataResponse>(`/api/companies/${encodeURIComponent(companyId)}/clean-data`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 
 export async function backendGetTankReadings(stationId?: string, days?: number): Promise<{ count: number; readings: Array<Record<string, unknown>> }> {
   const params = new URLSearchParams()

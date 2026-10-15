@@ -18,6 +18,11 @@ import {
   backendUpdateCompany,
   backendUpdateStation,
   backendResetPin,
+  backendGetCompanyDataStats,
+  backendCleanCompanyData,
+  type CompanyDataStats,
+  type CleanDataScopes,
+  type CleanDataResponse,
 } from '../../services/backendApiService'
 
 export interface CreateCompanyInput {
@@ -442,6 +447,142 @@ export class CompanyService {
       await backendDeleteStation(station.companyId, stationId)
     }
     await prodDb.companyStations.delete(stationId)
+  }
+
+  /**
+   * Fetches data statistics (record counts) for an OMC or specific station
+   * to preview impact before cleaning.
+   */
+  async getCompanyDataStats(companyId: string, stationId?: string): Promise<CompanyDataStats> {
+    return backendGetCompanyDataStats(companyId, stationId)
+  }
+
+  /**
+   * Cleans or deletes data for a specific OMC or OMC and its stations globally.
+   * Performs the atomic deletion on the live SQLite backend, cascades locally in Dexie,
+   * invalidates live caches, and broadcasts on the live sync bus.
+   */
+  async cleanCompanyData(
+    companyId: string,
+    payload: {
+      stationId?: string
+      scopes: CleanDataScopes
+      purgeAllOperational?: boolean
+    },
+  ): Promise<CleanDataResponse> {
+    // 1. Live Backend API execution (Global on SQLite server)
+    const res = await backendCleanCompanyData(companyId, payload)
+
+    // 2. Local Dexie Cascade Purge for offline resilience & immediate UI reflection
+    const stId = payload.stationId && payload.stationId !== 'ALL' ? payload.stationId : null
+    const { scopes, purgeAllOperational } = payload
+
+    try {
+      // Shifts & Sales & Receipts
+      if (scopes.shifts || purgeAllOperational) {
+        const shifts = await prodDb.shifts.toArray()
+        const targetShiftIds = shifts
+          .filter(s => {
+            if (companyId !== 'ALL' && s.companyId && s.companyId !== companyId) return false
+            if (stId && s.stationId !== stId) return false
+            return true
+          })
+          .map(s => s.id)
+
+        for (const id of targetShiftIds) {
+          await prodDb.shifts.delete(id)
+          await prodDb.transactions.where('shiftId').equals(id).delete()
+          await prodDb.receipts.where('shiftId').equals(id).delete()
+        }
+      } else if (scopes.sales) {
+        const shifts = await prodDb.shifts.toArray()
+        const targetShiftIds = shifts
+          .filter(s => {
+            if (companyId !== 'ALL' && s.companyId && s.companyId !== companyId) return false
+            if (stId && s.stationId !== stId) return false
+            return true
+          })
+          .map(s => s.id)
+
+        for (const id of targetShiftIds) {
+          await prodDb.transactions.where('shiftId').equals(id).delete()
+          await prodDb.receipts.where('shiftId').equals(id).delete()
+        }
+      }
+
+      // Expenses
+      if (scopes.expenses || purgeAllOperational) {
+        const expenses = await prodDb.expenses.toArray()
+        for (const exp of expenses) {
+          if (companyId !== 'ALL' && exp.companyId && exp.companyId !== companyId) continue
+          if (stId && exp.stationId !== stId) continue
+          await prodDb.expenses.delete(exp.id)
+        }
+      }
+
+      // Tank Readings
+      if (scopes.tankReadings || purgeAllOperational) {
+        const readings = await prodDb.tankReadings.toArray()
+        for (const r of readings) {
+          if (companyId !== 'ALL' && (r as any).companyId && (r as any).companyId !== companyId) continue
+          if (stId && r.stationId !== stId) continue
+          await prodDb.tankReadings.delete(r.id)
+        }
+      }
+
+      // Staff (preserves Super Admin)
+      if (scopes.staff) {
+        const attendants = await prodDb.attendants.toArray()
+        for (const a of attendants) {
+          if (companyId !== 'ALL' && a.companyId && a.companyId !== companyId) continue
+          if (stId && a.stationId !== stId) continue
+          await prodDb.attendants.delete(a.id)
+        }
+        const supervisors = await prodDb.supervisors.toArray()
+        for (const s of supervisors) {
+          if (s.isSuperAdmin || s.employeeCode === 'SUPER-ADMIN') continue
+          if (companyId !== 'ALL' && s.companyId && s.companyId !== companyId) continue
+          if (stId && s.stationId !== stId) continue
+          await prodDb.supervisors.delete(s.id)
+        }
+      }
+
+      // Stations
+      if (scopes.stations) {
+        if (stId) {
+          await prodDb.companyStations.delete(stId)
+        } else if (companyId !== 'ALL') {
+          await prodDb.companyStations.where('companyId').equals(companyId).delete()
+        }
+      }
+
+      // Company
+      if (scopes.company && companyId !== 'ALL') {
+        await prodDb.companies.delete(companyId)
+      }
+    } catch {
+      // Local Dexie best-effort cleanup
+    }
+
+    // 3. Audit log in local repo
+    await auditLogRepo.add({
+      id: `audit-${crypto.randomUUID()}`,
+      action: 'OMC_DATA_CLEANSED' as any,
+      actorId: 'super-admin',
+      actorName: 'Super Admin',
+      actorRole: 'SUPERVISOR',
+      targetId: companyId,
+      targetDescription: `Cleaned data for ${companyId} [Station: ${payload.stationId || 'ALL'}]`,
+      notes: JSON.stringify(res.deletedCounts),
+      timestamp: new Date().toISOString(),
+    })
+
+    // 4. Broadcast on LiveSyncBus so all open views immediately update globally
+    liveSyncBus.publish({ table: 'SHIFTS', reason: 'DELETE', key: companyId })
+    liveSyncBus.publish({ table: 'EXPENSES', reason: 'DELETE', key: companyId })
+    liveSyncBus.publish({ table: 'COMPANIES', reason: 'DELETE', key: companyId })
+
+    return res
   }
 }
 

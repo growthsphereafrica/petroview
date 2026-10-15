@@ -453,3 +453,295 @@ companiesRouter.delete('/:id', authenticate, requireRole('superadmin'), (req: Au
   }
   res.json({ success: true, message: `Company ${row.name} (${row.shortCode}) deleted successfully.` })
 })
+
+// ==========================================
+// SUPER SUPER ADMIN: DATA CLEANING & PURGING
+// ==========================================
+
+companiesRouter.get('/:id/data-stats', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  const companyId = req.params.id
+  const stationId = typeof req.query.stationId === 'string' && req.query.stationId.trim() ? req.query.stationId.trim() : 'ALL'
+
+  let targetStationIds: string[] = []
+  let companyName = 'All Companies'
+  let companyShortCode = 'ALL'
+
+  if (companyId !== 'ALL') {
+    const comp = db.prepare('SELECT id, name, shortCode FROM companies WHERE id = ?').get(companyId) as { id: string; name: string; shortCode: string } | undefined
+    if (!comp) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found.' })
+      return
+    }
+    companyName = comp.name
+    companyShortCode = comp.shortCode
+    const stRows = db.prepare('SELECT id FROM companyStations WHERE companyId = ?').all(companyId) as Array<{ id: string }>
+    targetStationIds = stRows.map(s => s.id)
+    if (stationId !== 'ALL') {
+      targetStationIds = targetStationIds.filter(id => id === stationId)
+    }
+  } else {
+    if (stationId !== 'ALL') {
+      targetStationIds = [stationId]
+    } else {
+      const stRows = db.prepare('SELECT id FROM companyStations').all() as Array<{ id: string }>
+      targetStationIds = stRows.map(s => s.id)
+    }
+  }
+
+  let stationName: string | undefined
+  if (stationId !== 'ALL') {
+    const stRow = db.prepare('SELECT name FROM companyStations WHERE id = ?').get(stationId) as { name: string } | undefined
+    stationName = stRow?.name
+  }
+
+  let shiftsCount = 0
+  let transactionsCount = 0
+  let receiptsCount = 0
+  let expensesCount = 0
+  let tankReadingsCount = 0
+  let attendantsCount = 0
+  let supervisorsCount = 0
+  let pumpsCount = 0
+  let productsCount = 0
+
+  if (companyId === 'ALL' && stationId === 'ALL') {
+    shiftsCount = (db.prepare('SELECT count(*) as c FROM shifts').get() as { c: number }).c
+    transactionsCount = (db.prepare('SELECT count(*) as c FROM transactions').get() as { c: number }).c
+    receiptsCount = (db.prepare('SELECT count(*) as c FROM receipts').get() as { c: number }).c
+    expensesCount = (db.prepare('SELECT count(*) as c FROM station_expenses').get() as { c: number }).c
+    tankReadingsCount = (db.prepare('SELECT count(*) as c FROM tankReadings').get() as { c: number }).c
+    attendantsCount = (db.prepare('SELECT count(*) as c FROM attendants').get() as { c: number }).c
+    supervisorsCount = (db.prepare('SELECT count(*) as c FROM supervisors WHERE isSuperAdmin = 0').get() as { c: number }).c
+    pumpsCount = (db.prepare('SELECT count(*) as c FROM pumps').get() as { c: number }).c
+    productsCount = (db.prepare('SELECT count(*) as c FROM products').get() as { c: number }).c
+  } else if (stationId !== 'ALL') {
+    shiftsCount = (db.prepare('SELECT count(*) as c FROM shifts WHERE stationId = ?').get(stationId) as { c: number }).c
+    transactionsCount = (db.prepare('SELECT count(*) as c FROM transactions WHERE shiftId IN (SELECT id FROM shifts WHERE stationId = ?)').get(stationId) as { c: number }).c
+    receiptsCount = (db.prepare('SELECT count(*) as c FROM receipts WHERE shiftId IN (SELECT id FROM shifts WHERE stationId = ?)').get(stationId) as { c: number }).c
+    expensesCount = (db.prepare('SELECT count(*) as c FROM station_expenses WHERE stationId = ?').get(stationId) as { c: number }).c
+    tankReadingsCount = (db.prepare('SELECT count(*) as c FROM tankReadings WHERE stationId = ?').get(stationId) as { c: number }).c
+    attendantsCount = (db.prepare('SELECT count(*) as c FROM attendants WHERE stationId = ?').get(stationId) as { c: number }).c
+    supervisorsCount = (db.prepare('SELECT count(*) as c FROM supervisors WHERE stationId = ? AND isSuperAdmin = 0').get(stationId) as { c: number }).c
+    pumpsCount = (db.prepare('SELECT count(*) as c FROM pumps WHERE stationId = ?').get(stationId) as { c: number }).c
+    productsCount = companyId !== 'ALL' ? (db.prepare('SELECT count(*) as c FROM products WHERE companyId = ?').get(companyId) as { c: number }).c : 0
+  } else {
+    shiftsCount = (db.prepare(`SELECT count(*) as c FROM shifts WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)`).get(companyId, companyId) as { c: number }).c
+    transactionsCount = (db.prepare(`SELECT count(*) as c FROM transactions WHERE shiftId IN (SELECT id FROM shifts WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?))`).get(companyId, companyId) as { c: number }).c
+    receiptsCount = (db.prepare(`SELECT count(*) as c FROM receipts WHERE shiftId IN (SELECT id FROM shifts WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?))`).get(companyId, companyId) as { c: number }).c
+    expensesCount = (db.prepare(`SELECT count(*) as c FROM station_expenses WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)`).get(companyId, companyId) as { c: number }).c
+    tankReadingsCount = (db.prepare(`SELECT count(*) as c FROM tankReadings WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)`).get(companyId, companyId) as { c: number }).c
+    attendantsCount = (db.prepare(`SELECT count(*) as c FROM attendants WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)`).get(companyId, companyId) as { c: number }).c
+    supervisorsCount = (db.prepare(`SELECT count(*) as c FROM supervisors WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND isSuperAdmin = 0`).get(companyId, companyId) as { c: number }).c
+    pumpsCount = (db.prepare(`SELECT count(*) as c FROM pumps WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)`).get(companyId, companyId) as { c: number }).c
+    productsCount = (db.prepare('SELECT count(*) as c FROM products WHERE companyId = ?').get(companyId) as { c: number }).c
+  }
+
+  res.json({
+    companyId,
+    stationId,
+    companyName,
+    companyShortCode,
+    stationName,
+    shiftsCount,
+    transactionsCount,
+    receiptsCount,
+    expensesCount,
+    tankReadingsCount,
+    attendantsCount,
+    supervisorsCount,
+    pumpsCount,
+    productsCount,
+    stationsCount: targetStationIds.length,
+  })
+})
+
+companiesRouter.post('/:id/clean-data', authenticate, requireRole('superadmin'), (req: AuthRequest, res) => {
+  const companyId = req.params.id
+  const body = (req.body ?? {}) as Record<string, unknown>
+  const requestedStation = typeof body.stationId === 'string' && body.stationId.trim() ? body.stationId.trim() : 'ALL'
+  const scopes = (body.scopes ?? {}) as Record<string, boolean>
+  const purgeAllOperational = Boolean(body.purgeAllOperational)
+
+  let companyName = 'All Companies'
+  let companyShortCode = 'ALL'
+
+  if (companyId !== 'ALL') {
+    const comp = db.prepare('SELECT id, name, shortCode FROM companies WHERE id = ?').get(companyId) as { id: string; name: string; shortCode: string } | undefined
+    if (!comp) {
+      res.status(404).json({ error: 'NOT_FOUND', message: 'Company not found.' })
+      return
+    }
+    companyName = comp.name
+    companyShortCode = comp.shortCode
+  }
+
+  const deletedCounts = {
+    shifts: 0,
+    transactions: 0,
+    receipts: 0,
+    expenses: 0,
+    tankReadings: 0,
+    attendants: 0,
+    supervisors: 0,
+    pumps: 0,
+    products: 0,
+    stations: 0,
+    company: 0,
+  }
+
+  const now = new Date().toISOString()
+
+  try {
+    db.transaction(() => {
+      // 1. Shifts & Sales & Receipts
+      if (scopes.shifts || purgeAllOperational) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.receipts += (db.prepare('DELETE FROM receipts').run()).changes
+          deletedCounts.transactions += (db.prepare('DELETE FROM transactions').run()).changes
+          db.prepare('DELETE FROM syncQueue WHERE entityType = "SHIFT"').run()
+          deletedCounts.shifts += (db.prepare('DELETE FROM shifts').run()).changes
+        } else if (requestedStation !== 'ALL') {
+          const shiftIds = (db.prepare('SELECT id FROM shifts WHERE stationId = ?').all(requestedStation) as Array<{ id: string }>).map(s => s.id)
+          if (shiftIds.length > 0) {
+            const placeholders = shiftIds.map(() => '?').join(',')
+            deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            db.prepare(`DELETE FROM syncQueue WHERE entityType = "SHIFT" AND entityId IN (${placeholders})`).run(...shiftIds)
+            deletedCounts.shifts += (db.prepare(`DELETE FROM shifts WHERE id IN (${placeholders})`).run(...shiftIds)).changes
+          }
+        } else {
+          // Whole company
+          const shiftIds = (db.prepare('SELECT id FROM shifts WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').all(companyId, companyId) as Array<{ id: string }>).map(s => s.id)
+          if (shiftIds.length > 0) {
+            const placeholders = shiftIds.map(() => '?').join(',')
+            deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            db.prepare(`DELETE FROM syncQueue WHERE entityType = "SHIFT" AND entityId IN (${placeholders})`).run(...shiftIds)
+            deletedCounts.shifts += (db.prepare(`DELETE FROM shifts WHERE id IN (${placeholders})`).run(...shiftIds)).changes
+          }
+        }
+      } else if (scopes.sales) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.receipts += (db.prepare('DELETE FROM receipts').run()).changes
+          deletedCounts.transactions += (db.prepare('DELETE FROM transactions').run()).changes
+        } else if (requestedStation !== 'ALL') {
+          const shiftIds = (db.prepare('SELECT id FROM shifts WHERE stationId = ?').all(requestedStation) as Array<{ id: string }>).map(s => s.id)
+          if (shiftIds.length > 0) {
+            const placeholders = shiftIds.map(() => '?').join(',')
+            deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+          }
+        } else {
+          const shiftIds = (db.prepare('SELECT id FROM shifts WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').all(companyId, companyId) as Array<{ id: string }>).map(s => s.id)
+          if (shiftIds.length > 0) {
+            const placeholders = shiftIds.map(() => '?').join(',')
+            deletedCounts.receipts += (db.prepare(`DELETE FROM receipts WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+            deletedCounts.transactions += (db.prepare(`DELETE FROM transactions WHERE shiftId IN (${placeholders})`).run(...shiftIds)).changes
+          }
+        }
+      }
+
+      // 2. Station Expenses
+      if (scopes.expenses || purgeAllOperational) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.expenses += (db.prepare('DELETE FROM station_expenses').run()).changes
+        } else if (requestedStation !== 'ALL') {
+          deletedCounts.expenses += (db.prepare('DELETE FROM station_expenses WHERE stationId = ?').run(requestedStation)).changes
+        } else {
+          deletedCounts.expenses += (db.prepare('DELETE FROM station_expenses WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').run(companyId, companyId)).changes
+        }
+      }
+
+      // 3. Tank Readings
+      if (scopes.tankReadings || purgeAllOperational) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.tankReadings += (db.prepare('DELETE FROM tankReadings').run()).changes
+        } else if (requestedStation !== 'ALL') {
+          deletedCounts.tankReadings += (db.prepare('DELETE FROM tankReadings WHERE stationId = ?').run(requestedStation)).changes
+        } else {
+          deletedCounts.tankReadings += (db.prepare('DELETE FROM tankReadings WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').run(companyId, companyId)).changes
+        }
+      }
+
+      // 4. Staff Accounts
+      if (scopes.staff) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.attendants += (db.prepare('DELETE FROM attendants').run()).changes
+          deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE isSuperAdmin = 0').run()).changes
+          db.prepare('DELETE FROM sessions WHERE role != "superadmin"').run()
+        } else if (requestedStation !== 'ALL') {
+          deletedCounts.attendants += (db.prepare('DELETE FROM attendants WHERE stationId = ?').run(requestedStation)).changes
+          deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE stationId = ? AND isSuperAdmin = 0').run(requestedStation)).changes
+          db.prepare('DELETE FROM sessions WHERE stationId = ? AND role != "superadmin"').run(requestedStation)
+        } else {
+          deletedCounts.attendants += (db.prepare('DELETE FROM attendants WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').run(companyId, companyId)).changes
+          deletedCounts.supervisors += (db.prepare('DELETE FROM supervisors WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND isSuperAdmin = 0').run(companyId, companyId)).changes
+          db.prepare('DELETE FROM sessions WHERE (companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)) AND role != "superadmin"').run(companyId, companyId)
+        }
+      }
+
+      // 5. Pumps & Nozzles
+      if (scopes.pumps) {
+        if (companyId === 'ALL' && requestedStation === 'ALL') {
+          deletedCounts.pumps += (db.prepare('DELETE FROM pumps').run()).changes
+        } else if (requestedStation !== 'ALL') {
+          deletedCounts.pumps += (db.prepare('DELETE FROM pumps WHERE stationId = ?').run(requestedStation)).changes
+        } else {
+          deletedCounts.pumps += (db.prepare('DELETE FROM pumps WHERE companyId = ? OR stationId IN (SELECT id FROM companyStations WHERE companyId = ?)').run(companyId, companyId)).changes
+        }
+      }
+
+      // 6. Custom Products
+      if (scopes.products) {
+        if (companyId === 'ALL') {
+          deletedCounts.products += (db.prepare('DELETE FROM products').run()).changes
+        } else {
+          deletedCounts.products += (db.prepare('DELETE FROM products WHERE companyId = ?').run(companyId)).changes
+        }
+      }
+
+      // 7. Stations
+      if (scopes.stations) {
+        if (requestedStation !== 'ALL') {
+          deletedCounts.stations += (db.prepare('DELETE FROM companyStations WHERE id = ?').run(requestedStation)).changes
+          db.prepare('DELETE FROM sessions WHERE stationId = ?').run(requestedStation)
+        } else if (companyId !== 'ALL') {
+          deletedCounts.stations += (db.prepare('DELETE FROM companyStations WHERE companyId = ?').run(companyId)).changes
+          db.prepare('DELETE FROM sessions WHERE companyId = ?').run(companyId)
+        }
+      }
+
+      // 8. Entire Company Tenant (Cascade all + delete company row)
+      if (scopes.company && companyId !== 'ALL') {
+        deletedCounts.company += (db.prepare('DELETE FROM companies WHERE id = ?').run(companyId)).changes
+        db.prepare('DELETE FROM sessions WHERE companyId = ?').run(companyId)
+      }
+
+      const activeScopes = Object.keys(scopes).filter(k => (scopes as any)[k])
+      if (purgeAllOperational) activeScopes.unshift('purgeAllOperational')
+
+      audit(
+        req,
+        'OMC_DATA_CLEANSED',
+        companyId,
+        `Cleaned data for ${companyName} (${companyShortCode}) [Station: ${requestedStation}]`,
+        `Scopes: ${activeScopes.join(', ')}`,
+        { companyId, stationId: requestedStation, scopes, purgeAllOperational, deletedCounts },
+        now,
+      )
+    })()
+  } catch (error) {
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: error instanceof Error ? error.message : 'Failed to clean data.',
+    })
+    return
+  }
+
+  res.json({
+    success: true,
+    message: `Data cleaning completed globally for ${companyName}.`,
+    deletedCounts,
+  })
+})
+

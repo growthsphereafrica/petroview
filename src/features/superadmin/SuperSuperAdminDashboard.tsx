@@ -36,6 +36,8 @@ import {
   Zap,
   Tag,
   PackagePlus,
+  Check,
+  AlertTriangle,
 } from 'lucide-react'
 import { companyService } from '../../core/services/companyService'
 import { supervisorService } from '../../core/services/supervisorService'
@@ -45,9 +47,10 @@ import { Badge, Card, StatusBar } from '../shared/ui'
 import { formatDateTime, formatGHS } from '../../utils/currencyFormatter'
 import { GHANA_REGIONS, getStationName } from '../../core/domain/config'
 import type { Company, CompanyStation, Attendant, Supervisor, Product, ProductCategory } from '../../core/domain/types'
+import type { CompanyDataStats, CleanDataScopes, CleanDataResponse } from '../../services/backendApiService'
 import { PumpsManagementView } from '../shared/PumpsManagementView'
 
-type SuperAdminTab = 'companies' | 'staff' | 'products' | 'pumps' | 'telemetry'
+type SuperAdminTab = 'companies' | 'staff' | 'products' | 'pumps' | 'cleanup' | 'telemetry'
 
 export const SuperSuperAdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<SuperAdminTab>('companies')
@@ -152,6 +155,148 @@ export const SuperSuperAdminDashboard: React.FC = () => {
     active: boolean
   } | null>(null)
   const [editStaffBusy, setEditStaffBusy] = useState(false)
+
+  // Data Cleaning & Purge State (Super Admin)
+  const [cleanupCompanyId, setCleanupCompanyId] = useState<string>('')
+  const [cleanupStationId, setCleanupStationId] = useState<string>('ALL')
+  const [cleanupStats, setCleanupStats] = useState<CompanyDataStats | null>(null)
+  const [cleanupStatsLoading, setCleanupStatsLoading] = useState(false)
+  const [cleanupPreset, setCleanupPreset] = useState<'operational' | 'custom' | 'full'>('operational')
+  const [cleanupScopes, setCleanupScopes] = useState<CleanDataScopes>({
+    shifts: true,
+    sales: true,
+    expenses: true,
+    tankReadings: true,
+    staff: false,
+    pumps: false,
+    products: false,
+    stations: false,
+    company: false,
+  })
+  const [confirmPhrase, setConfirmPhrase] = useState('')
+  const [isCleaningBusy, setIsCleaningBusy] = useState(false)
+  const [lastCleanResult, setLastCleanResult] = useState<CleanDataResponse | null>(null)
+
+  const loadCleanupStats = async (compId: string, stnId: string = 'ALL') => {
+    if (!compId) {
+      setCleanupStats(null)
+      return
+    }
+    setCleanupStatsLoading(true)
+    try {
+      const stats = await companyService.getCompanyDataStats(compId, stnId)
+      setCleanupStats(stats)
+    } catch {
+      setCleanupStats(null)
+    } finally {
+      setCleanupStatsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === 'cleanup' && companies.length > 0) {
+      const targetId = cleanupCompanyId || companies[0].id
+      if (!cleanupCompanyId) setCleanupCompanyId(targetId)
+      void loadCleanupStats(targetId, cleanupStationId)
+    }
+  }, [activeTab, cleanupCompanyId, cleanupStationId, companies])
+
+  const handleSelectCleanupPreset = (preset: 'operational' | 'custom' | 'full') => {
+    setCleanupPreset(preset)
+    if (preset === 'operational') {
+      setCleanupScopes({
+        shifts: true,
+        sales: true,
+        expenses: true,
+        tankReadings: true,
+        staff: false,
+        pumps: false,
+        products: false,
+        stations: false,
+        company: false,
+      })
+    } else if (preset === 'full') {
+      setCleanupScopes({
+        shifts: true,
+        sales: true,
+        expenses: true,
+        tankReadings: true,
+        staff: true,
+        pumps: true,
+        products: true,
+        stations: true,
+        company: cleanupStationId === 'ALL',
+      })
+    }
+  }
+
+  const handleOpenCleanupForCompany = (comp: Company, stnId: string = 'ALL') => {
+    setCleanupCompanyId(comp.id)
+    setCleanupStationId(stnId)
+    setConfirmPhrase('')
+    setLastCleanResult(null)
+    setCleanupPreset('operational')
+    setCleanupScopes({
+      shifts: true,
+      sales: true,
+      expenses: true,
+      tankReadings: true,
+      staff: false,
+      pumps: false,
+      products: false,
+      stations: false,
+      company: false,
+    })
+    setActiveTab('cleanup')
+    void loadCleanupStats(comp.id, stnId)
+  }
+
+  const handleExecuteCleanData = async () => {
+    if (!cleanupCompanyId) return
+    const targetComp = companies.find(c => c.id === cleanupCompanyId)
+    const expectedConfirm = targetComp ? targetComp.shortCode : 'DELETE'
+    const inputUpper = confirmPhrase.trim().toUpperCase()
+    if (inputUpper !== expectedConfirm.toUpperCase() && inputUpper !== 'DELETE') {
+      alert(`To confirm data deletion, please type "${expectedConfirm}" or "DELETE" in the confirmation box.`)
+      return
+    }
+
+    const hasAnyScope = Object.values(cleanupScopes).some(Boolean) || cleanupPreset === 'operational'
+    if (!hasAnyScope) {
+      alert('Please select at least one data category to clean.')
+      return
+    }
+
+    const targetDesc = targetComp
+      ? `${targetComp.name} (${targetComp.shortCode})${cleanupStationId !== 'ALL' ? ` · Station: ${stationsMap[cleanupCompanyId]?.find(s => s.id === cleanupStationId)?.name || cleanupStationId}` : ' (All Stations)'}`
+      : 'All OMCs'
+
+    if (!window.confirm(`⚠️ WARNING: YOU ARE ABOUT TO PERMANENTLY ERASE LIVE DATA FOR:\n${targetDesc}\n\nThis will purge data globally on the central database and forecourt stations. Are you completely sure you want to proceed?`)) {
+      return
+    }
+
+    setIsCleaningBusy(true)
+    try {
+      const res = await companyService.cleanCompanyData(cleanupCompanyId, {
+        stationId: cleanupStationId,
+        scopes: cleanupScopes,
+        purgeAllOperational: cleanupPreset === 'operational',
+      })
+
+      setLastCleanResult(res)
+      setActionNotice({
+        text: `Data cleaned globally on live server for ${targetComp?.name || cleanupCompanyId}!`,
+        type: 'success',
+      })
+      setConfirmPhrase('')
+      void loadData()
+      void loadCleanupStats(cleanupCompanyId, cleanupStationId)
+    } catch (err: any) {
+      alert(err.message || 'Failed to clean data.')
+    } finally {
+      setIsCleaningBusy(false)
+    }
+  }
 
   const loadData = async () => {
     setRefreshing(true)
@@ -694,6 +839,24 @@ export const SuperSuperAdminDashboard: React.FC = () => {
               <Fuel className="w-3.5 h-3.5" />
               <span>Pumps & Nozzles</span>
             </button>
+
+            <button
+              onClick={() => {
+                setActiveTab('cleanup')
+                if (!cleanupCompanyId && companies.length > 0) {
+                  setCleanupCompanyId(companies[0].id)
+                  void loadCleanupStats(companies[0].id, cleanupStationId)
+                }
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition shrink-0 ${
+                activeTab === 'cleanup'
+                  ? 'bg-gradient-to-r from-rose-600 to-red-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-rose-400'
+              }`}
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+              <span>Clean / Purge Data</span>
+            </button>
           </div>
 
           <button
@@ -818,6 +981,14 @@ export const SuperSuperAdminDashboard: React.FC = () => {
                         </div>
 
                         <div className="flex items-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenCleanupForCompany(comp)}
+                            className="px-2 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:text-rose-300 hover:bg-rose-500/20 transition text-[10px] font-bold flex items-center gap-1"
+                            title={`Clean or purge operational data for ${comp.name}`}
+                          >
+                            <ShieldAlert className="w-3.5 h-3.5" />
+                            <span>Clean Data</span>
+                          </button>
                           <button
                             onClick={() => handleOpenEditCompany(comp)}
                             className="p-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition"
@@ -1254,6 +1425,507 @@ export const SuperSuperAdminDashboard: React.FC = () => {
               availableProducts={products}
               isSuperAdmin={true}
             />
+          </div>
+        )}
+
+        {/* ----------------- TAB 5: DATA CLEANING & GLOBAL PURGE (SUPER ADMIN) ----------------- */}
+        {activeTab === 'cleanup' && (
+          <div className="flex flex-col gap-6">
+            {/* Header Alert Card */}
+            <div className="p-5 rounded-3xl bg-gradient-to-br from-rose-950/40 via-slate-900 to-slate-900 border border-rose-500/30 shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 p-6 opacity-10 pointer-events-none">
+                <ShieldAlert className="w-32 h-32 text-rose-500" />
+              </div>
+              <div className="flex items-start gap-4 relative z-10">
+                <div className="w-12 h-12 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0 shadow-lg">
+                  <ShieldAlert className="w-6 h-6" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 flex-wrap mb-1">
+                    <span className="text-[10px] font-mono font-black uppercase px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                      Tier 1 Global Data Hygiene
+                    </span>
+                    <span className="text-[10px] font-mono font-bold text-slate-400">
+                      ACID Live Database Purge
+                    </span>
+                  </div>
+                  <h3 className="text-lg font-black text-white">OMC & Station Data Cleaning Console</h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                    Clean operational records (shifts, meter readings, fuel sales, expenses, and tank dippings) or execute tenant resets for any specific OMC or station branch. Deletions execute globally on the central database and immediately purge cached records across active devices and forecourts.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Last Execution Result Notice */}
+            {lastCleanResult && (
+              <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 shadow-lg flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400" />
+                    <span className="text-sm font-extrabold text-white">Global Data Cleanse Succeeded!</span>
+                  </div>
+                  <button onClick={() => setLastCleanResult(null)} className="text-slate-400 hover:text-white text-xs">✕ Dismiss</button>
+                </div>
+                <p className="text-xs text-emerald-300/90">{lastCleanResult.message}</p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 gap-2 mt-2 pt-2 border-t border-emerald-500/20 text-[11px] font-mono">
+                  {Object.entries(lastCleanResult.deletedCounts)
+                    .filter(([_, cnt]) => cnt > 0)
+                    .map(([key, cnt]) => (
+                      <div key={key} className="bg-emerald-950/50 p-2 rounded-xl border border-emerald-500/20">
+                        <span className="text-emerald-400 font-bold block capitalize">{key}</span>
+                        <span className="text-white font-extrabold text-xs">{cnt} purged</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+
+            {/* Step 1: Select OMC and Station Scope */}
+            <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Building2 className="w-4 h-4 text-orange-400" />
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider">1. Select Target OMC & Station Scope</h4>
+                </div>
+                <button
+                  onClick={() => loadCleanupStats(cleanupCompanyId, cleanupStationId)}
+                  disabled={cleanupStatsLoading || !cleanupCompanyId}
+                  className="text-xs font-bold text-orange-400 hover:text-orange-300 flex items-center gap-1.5 transition disabled:opacity-50"
+                  title="Reload Live Record Counts"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${cleanupStatsLoading ? 'animate-spin' : ''}`} />
+                  <span>Refresh Counts</span>
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                    Target Oil Marketing Company (OMC)
+                  </label>
+                  <select
+                    value={cleanupCompanyId}
+                    onChange={e => {
+                      const newId = e.target.value
+                      setCleanupCompanyId(newId)
+                      setCleanupStationId('ALL')
+                      setConfirmPhrase('')
+                      void loadCleanupStats(newId, 'ALL')
+                    }}
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2.5 text-xs font-bold text-white focus:border-orange-500 outline-none cursor-pointer"
+                  >
+                    <option value="" disabled>-- Select Company --</option>
+                    {companies.map(c => (
+                      <option key={c.id} value={c.id} className="bg-slate-900 text-white">
+                        {c.name} ({c.shortCode})
+                      </option>
+                    ))}
+                    <option value="ALL" className="bg-slate-900 text-rose-400 font-bold">
+                      ⚠️ ALL OMCs (Global Platform Wipe)
+                    </option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1.5">
+                    Target Station Branch
+                  </label>
+                  <select
+                    value={cleanupStationId}
+                    onChange={e => {
+                      const newStnId = e.target.value
+                      setCleanupStationId(newStnId)
+                      setConfirmPhrase('')
+                      void loadCleanupStats(cleanupCompanyId, newStnId)
+                    }}
+                    disabled={!cleanupCompanyId || cleanupCompanyId === 'ALL'}
+                    className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2.5 text-xs font-bold text-white focus:border-orange-500 outline-none cursor-pointer disabled:opacity-40"
+                  >
+                    <option value="ALL">🏢 All Station Branches in this OMC</option>
+                    {(stationsMap[cleanupCompanyId] || []).map(st => (
+                      <option key={st.id} value={st.id} className="bg-slate-900 text-white">
+                        {st.name} ({st.code}) — {st.region}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 2: Live Server Inventory (Impact Preview) */}
+            <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex flex-col gap-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-amber-400" />
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                    2. Live Server Data Inventory for Scope
+                  </h4>
+                </div>
+                {cleanupStatsLoading && (
+                  <span className="text-[11px] font-mono text-orange-400 flex items-center gap-1.5">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Querying central SQLite…
+                  </span>
+                )}
+              </div>
+
+              {cleanupStats ? (
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Shifts</span>
+                    <span className="text-lg font-mono font-black text-white mt-1">{cleanupStats.shiftsCount}</span>
+                    <span className="text-[9px] text-slate-500">Forecourt sessions</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Sales</span>
+                    <span className="text-lg font-mono font-black text-amber-400 mt-1">{cleanupStats.transactionsCount}</span>
+                    <span className="text-[9px] text-slate-500">Transactions</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Receipts</span>
+                    <span className="text-lg font-mono font-black text-cyan-400 mt-1">{cleanupStats.receiptsCount}</span>
+                    <span className="text-[9px] text-slate-500">Payment receipts</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Expenses</span>
+                    <span className="text-lg font-mono font-black text-rose-400 mt-1">{cleanupStats.expensesCount}</span>
+                    <span className="text-[9px] text-slate-500">Station expenditures</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Tank Dips</span>
+                    <span className="text-lg font-mono font-black text-blue-400 mt-1">{cleanupStats.tankReadingsCount}</span>
+                    <span className="text-[9px] text-slate-500">Dipping records</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Staff</span>
+                    <span className="text-lg font-mono font-black text-emerald-400 mt-1">
+                      {cleanupStats.attendantsCount + cleanupStats.supervisorsCount}
+                    </span>
+                    <span className="text-[9px] text-slate-500">Attendants & Managers</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Pumps</span>
+                    <span className="text-lg font-mono font-black text-orange-400 mt-1">{cleanupStats.pumpsCount}</span>
+                    <span className="text-[9px] text-slate-500">Dispensers</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 flex flex-col justify-between">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Stations</span>
+                    <span className="text-lg font-mono font-black text-violet-400 mt-1">{cleanupStats.stationsCount}</span>
+                    <span className="text-[9px] text-slate-500">Branches</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-6 text-center text-xs text-slate-500 italic bg-slate-950/60 rounded-xl border border-slate-800">
+                  Select an OMC to preview live database records.
+                </div>
+              )}
+            </div>
+
+            {/* Step 3: Choose What to Clean / Purge */}
+            <div className="p-5 rounded-2xl bg-slate-900/90 border border-slate-800 shadow-xl flex flex-col gap-4">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Trash2 className="w-4 h-4 text-rose-400" />
+                  <h4 className="text-xs font-black text-white uppercase tracking-wider">3. Choose What Data to Clean / Delete</h4>
+                </div>
+                <span className="text-[10px] font-bold text-slate-400">Select Preset or Granular Categories</span>
+              </div>
+
+              {/* Cleaning Presets */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleSelectCleanupPreset('operational')}
+                  className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                    cleanupPreset === 'operational'
+                      ? 'bg-rose-500/15 border-rose-500 shadow-md ring-1 ring-rose-500/30'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
+                        RECOMMENDED
+                      </span>
+                      {cleanupPreset === 'operational' && <Check className="w-4 h-4 text-rose-400" />}
+                    </div>
+                    <span className="text-xs font-bold text-white block">Clean Slate Reset</span>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Wipes all shifts, sales, receipts, expenses, and tank dips. Keeps logins, stations, and dispensers intact.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCleanupPreset('custom')
+                    setCleanupScopes({
+                      shifts: true,
+                      sales: true,
+                      expenses: false,
+                      tankReadings: false,
+                      staff: false,
+                      pumps: false,
+                      products: false,
+                      stations: false,
+                      company: false,
+                    })
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                    cleanupPreset === 'custom' && cleanupScopes.shifts && cleanupScopes.sales && !cleanupScopes.expenses
+                      ? 'bg-rose-500/15 border-rose-500 shadow-md ring-1 ring-rose-500/30'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                        SALES ONLY
+                      </span>
+                      {cleanupPreset === 'custom' && cleanupScopes.shifts && cleanupScopes.sales && !cleanupScopes.expenses && (
+                        <Check className="w-4 h-4 text-rose-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold text-white block">Shifts & Sales Only</span>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Clears shift records and fuel transactions only. Preserves expenses, dips, staff, and pumps.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectCleanupPreset('custom')}
+                  className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                    cleanupPreset === 'custom' && (cleanupScopes.expenses || cleanupScopes.staff || cleanupScopes.pumps)
+                      ? 'bg-rose-500/15 border-rose-500 shadow-md ring-1 ring-rose-500/30'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-blue-500/20 text-blue-300">
+                        GRANULAR
+                      </span>
+                      {cleanupPreset === 'custom' && (cleanupScopes.expenses || cleanupScopes.staff || cleanupScopes.pumps) && (
+                        <Check className="w-4 h-4 text-rose-400" />
+                      )}
+                    </div>
+                    <span className="text-xs font-bold text-white block">Custom Selection</span>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Pick and choose exact individual data categories to delete using checkboxes below.
+                    </p>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleSelectCleanupPreset('full')}
+                  className={`p-3.5 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                    cleanupPreset === 'full'
+                      ? 'bg-rose-500/15 border-rose-500 shadow-md ring-1 ring-rose-500/30'
+                      : 'bg-slate-950 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-500/30 text-rose-300">
+                        FULL PURGE
+                      </span>
+                      {cleanupPreset === 'full' && <Check className="w-4 h-4 text-rose-400" />}
+                    </div>
+                    <span className="text-xs font-bold text-white block">Tenant Total Purge</span>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Completely deletes operational data, staff, pumps, stations, and the company registry entry.
+                    </p>
+                  </div>
+                </button>
+              </div>
+
+              {/* Granular Checkboxes Grid */}
+              <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 flex flex-col gap-3">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Active Deletion Scopes:
+                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 text-xs">
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.shifts || cleanupPreset === 'operational')}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, shifts: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-white font-bold">Shifts & Meter Readings</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.sales || cleanupScopes.shifts || cleanupPreset === 'operational')}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, sales: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-white font-bold">Fuel Sales & Transactions</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.expenses || cleanupPreset === 'operational')}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, expenses: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-white font-bold">Station Expenses</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.tankReadings || cleanupPreset === 'operational')}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, tankReadings: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-white font-bold">Tank Dipping Readings</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.staff)}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, staff: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-rose-300 font-bold">Staff Accounts (Attendants/Managers)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.pumps)}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, pumps: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-rose-300 font-bold">Dispenser Pumps & Nozzles</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.products)}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, products: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-rose-300 font-bold">Custom Products & Pricing Catalog</span>
+                  </label>
+
+                  <label className="flex items-center gap-2.5 p-2 rounded-lg bg-slate-900 border border-slate-800 hover:border-slate-700 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(cleanupScopes.stations)}
+                      onChange={e => {
+                        setCleanupPreset('custom')
+                        setCleanupScopes(prev => ({ ...prev, stations: e.target.checked }))
+                      }}
+                      className="rounded accent-rose-500 w-4 h-4"
+                    />
+                    <span className="text-rose-400 font-bold">Station Branch Record(s)</span>
+                  </label>
+
+                  {cleanupStationId === 'ALL' && cleanupCompanyId !== 'ALL' && (
+                    <label className="flex items-center gap-2.5 p-2 rounded-lg bg-rose-950/30 border border-rose-500/30 hover:border-rose-500/50 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(cleanupScopes.company)}
+                        onChange={e => {
+                          setCleanupPreset('custom')
+                          setCleanupScopes(prev => ({ ...prev, company: e.target.checked }))
+                        }}
+                        className="rounded accent-rose-500 w-4 h-4"
+                      />
+                      <span className="text-rose-400 font-black">OMC Tenant Registry Entry</span>
+                    </label>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Step 4: Confirmation & Execution Bar */}
+            <div className="p-5 rounded-2xl bg-slate-900/90 border border-rose-500/30 shadow-2xl flex flex-col gap-4">
+              <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+                <AlertTriangle className="w-5 h-5 text-rose-400 shrink-0" />
+                <h4 className="text-xs font-black text-white uppercase tracking-wider">
+                  4. Authorize Global Purge
+                </h4>
+              </div>
+
+              <div className="rounded-xl bg-rose-500/10 border border-rose-500/20 p-3 text-xs text-rose-300 leading-relaxed">
+                <strong>Irreversible Action:</strong> Once confirmed, matching records are permanently purged from the live SQLite backend database and all connected station caches. There is no undo.
+              </div>
+
+              {(() => {
+                const targetComp = companies.find(c => c.id === cleanupCompanyId)
+                const expectedWord = targetComp ? targetComp.shortCode : 'DELETE'
+                const isMatched = confirmPhrase.trim().toUpperCase() === expectedWord.toUpperCase() || confirmPhrase.trim().toUpperCase() === 'DELETE'
+
+                return (
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-end justify-between gap-4">
+                    <div className="flex-1">
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase mb-1">
+                        Type <span className="text-orange-400 font-mono font-black">{expectedWord}</span> or <span className="text-rose-400 font-mono font-black">DELETE</span> to authorize:
+                      </label>
+                      <input
+                        type="text"
+                        value={confirmPhrase}
+                        onChange={e => setConfirmPhrase(e.target.value)}
+                        placeholder={`Type "${expectedWord}" or "DELETE"`}
+                        className="w-full rounded-xl bg-slate-950 border border-slate-800 px-3 py-2.5 text-xs font-mono font-bold text-white focus:border-rose-500 outline-none"
+                      />
+                    </div>
+
+                    <button
+                      type="button"
+                      disabled={!isMatched || !cleanupCompanyId || isCleaningBusy}
+                      onClick={handleExecuteCleanData}
+                      className="px-6 py-3 rounded-xl bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-500 hover:to-red-500 text-white font-black text-xs transition shadow-lg shadow-rose-950/60 disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+                    >
+                      {isCleaningBusy ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Purging Central Database…</span>
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="w-4 h-4" />
+                          <span>Execute Global Data Clean</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )
+              })()}
+            </div>
           </div>
         )}
       </div>

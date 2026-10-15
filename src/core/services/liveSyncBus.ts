@@ -7,7 +7,18 @@
 
 import { useEffect } from 'react'
 
-export type LiveTable = 'SHIFTS' | 'ATTENDANTS' | 'SUPERVISORS' | 'TRANSACTIONS' | 'RECEIPTS' | 'SYNC_QUEUE' | 'AUDIT_LOG' | 'COMPANIES' | 'COMPANY_STATIONS'
+export type LiveTable =
+  | 'SHIFTS'
+  | 'ATTENDANTS'
+  | 'SUPERVISORS'
+  | 'TRANSACTIONS'
+  | 'RECEIPTS'
+  | 'SYNC_QUEUE'
+  | 'AUDIT_LOG'
+  | 'COMPANIES'
+  | 'COMPANY_STATIONS'
+  | 'EXPENSES'
+  | 'TANK_READINGS'
 
 export interface LiveChangeEvent {
   table: LiveTable

@@ -32,12 +32,20 @@ function employeeCodePrefixPattern(shortCode: string): string {
   return `${prefix ? `${prefix}[0-9]` : '%'}${prefix ? '%' : ''}`
 }
 
-function stationNameFor(stationId: string | null): string | null {
-  if (!stationId) return null
-  const station = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?)) AND active = 1').get(stationId, stationId) as { name: string } | undefined
-  if (station?.name) return station.name
-  const fallback = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?))').get(stationId, stationId) as { name: string } | undefined
-  return fallback?.name ?? null
+function stationNameFor(stationId: string | null, companyId: string | null = null): string | null {
+  if (stationId) {
+    const station = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?)) AND active = 1').get(stationId, stationId) as { name: string } | undefined
+    if (station?.name) return station.name
+    const fallback = db.prepare('SELECT name FROM companyStations WHERE (UPPER(id) = UPPER(?) OR UPPER(code) = UPPER(?))').get(stationId, stationId) as { name: string } | undefined
+    if (fallback?.name) return fallback.name
+  }
+  if (companyId) {
+    const stn = db.prepare('SELECT name FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY createdAt ASC LIMIT 1').get(companyId) as { name: string } | undefined
+    if (stn?.name) return stn.name
+    const fallback = db.prepare('SELECT name FROM companyStations WHERE companyId = ? ORDER BY createdAt ASC LIMIT 1').get(companyId) as { name: string } | undefined
+    if (fallback?.name) return fallback.name
+  }
+  return null
 }
 
 function companyNameFor(companyId: string | null, companyShortCode: string | null, stationId: string | null = null): string | null {
@@ -176,7 +184,7 @@ authRouter.post('/login', async (req, res) => {
   const token = newToken()
   const createdAt = new Date().toISOString()
   const expiresAt = sessionExpiry()
-  const stationName = stationNameFor(account.stationId)
+  const stationName = stationNameFor(account.stationId, account.companyId)
   const companyName = companyNameFor(account.companyId, account.companyShortCode, account.stationId)
 
   let resolvedFullName = account.fullName
@@ -279,7 +287,7 @@ authRouter.get('/me', authenticate, (req: AuthRequest, res) => {
     employeeCode: s.employeeCode,
     fullName,
     stationId: s.stationId,
-    stationName: stationNameFor(s.stationId),
+    stationName: stationNameFor(s.stationId, s.companyId),
     companyId: s.companyId,
     companyName: companyNameFor(s.companyId, s.companyShortCode, s.stationId),
     companyShortCode: s.companyShortCode,

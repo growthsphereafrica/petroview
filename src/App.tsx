@@ -15,6 +15,7 @@ import {
 } from './features/unified/UnifiedLoginScreen'
 import { backendGetMe, backendLogout } from './services/backendApiService'
 import { syncService } from './core/services/syncService'
+import { getStationName } from './core/domain/config'
 import {
   Smartphone,
   Building2,
@@ -85,9 +86,24 @@ const MainAppLayout: React.FC = () => {
           (!identity.companyId || !session.companyId || identity.companyId === session.companyId)
         if (!matches) throw new Error('Session identity mismatch')
         if (cancelled) return
-        const refreshed = { ...session, stationId: identity.stationId ?? session.stationId, companyId: identity.companyId ?? session.companyId }
+        const refreshed: UnifiedSession = {
+          ...session,
+          stationId: identity.stationId ?? session.stationId,
+          companyId: identity.companyId ?? session.companyId,
+          stationName: (identity.stationName && identity.stationName.trim()) || session.stationName,
+          companyName: (identity.companyName && identity.companyName.trim()) || session.companyName,
+          companyShortCode: identity.companyShortCode ?? session.companyShortCode,
+        }
         saveUnifiedSession(refreshed)
-        setSession(current => current && current.stationId === refreshed.stationId && current.companyId === refreshed.companyId ? current : refreshed)
+        setSession(current =>
+          current &&
+          current.stationId === refreshed.stationId &&
+          current.companyId === refreshed.companyId &&
+          current.stationName === refreshed.stationName &&
+          current.companyName === refreshed.companyName
+            ? current
+            : refreshed,
+        )
         void syncService.retryUnauthorizedOnLogin()
       } catch {
         if (cancelled) return
@@ -163,26 +179,26 @@ const MainAppLayout: React.FC = () => {
                 ? 'hover:border-orange-500/80 cursor-pointer group'
                 : 'cursor-default pointer-events-none'
             }`}
-            title={session.role === 'superadmin' ? 'Global Platform Owner · Switch/inspect tenant' : 'Assigned Enterprise OMC'}
+            title={session.role === 'superadmin' ? 'Global Platform Owner · Switch/inspect tenant' : 'Assigned Enterprise OMC & Branch'}
           >
             <span
               className="w-2.5 h-2.5 rounded-full ring-2 ring-orange-500/30 shrink-0"
               style={{ backgroundColor: session.role === 'superadmin' ? '#F43F5E' : activeCompany.primaryColor }}
             />
             <div className="leading-tight min-w-0">
-              <span className="text-[9px] font-mono font-bold text-orange-500 block uppercase truncate">
+              <span className="text-[9px] font-mono font-bold text-orange-500 block uppercase truncate max-w-[120px] sm:max-w-[200px]">
                 {session.role === 'superadmin'
                   ? 'Master Console'
-                  : session.role === 'headoffice'
-                  ? session.companyShortCode || 'Enterprise Network'
-                  : activeCompany.shortCode}
+                  : session.companyName || session.companyShortCode || activeCompany.name}
               </span>
-              <span className={`text-xs font-bold truncate max-w-[100px] sm:max-w-none block ${
+              <span className={`text-xs font-bold truncate max-w-[120px] sm:max-w-[240px] block ${
                 theme === 'light' ? 'text-slate-900' : 'text-white'
               }`}>
                 {session.role === 'superadmin'
                   ? 'All Registered OMCs'
-                  : session.companyName || session.stationName || activeStation.name}
+                  : session.role === 'headoffice'
+                  ? 'All Stations & Branches'
+                  : session.stationName || (session.stationId ? getStationName(session.stationId) : null) || activeStation.name || 'Forecourt Branch'}
               </span>
             </div>
             {session.role === 'superadmin' && (
@@ -251,6 +267,7 @@ const MainAppLayout: React.FC = () => {
                 theme === 'light' ? 'text-slate-500' : 'text-slate-400'
               }`}>
                 <span className="text-orange-500 font-bold">{session.employeeCode}</span> · {roleLabel}
+                {session.stationName ? ` · ${session.stationName}` : session.stationId ? ` · ${getStationName(session.stationId)}` : ''}
               </p>
             </div>
 

@@ -83,6 +83,21 @@ export function getUsableAccountScope(table: 'attendants' | 'supervisors', id: s
     companyShortCode = company.shortCode
   }
 
+  if (table === 'attendants' && companyId && !stationId) {
+    const stn = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY createdAt ASC LIMIT 1').get(companyId) as { id: string } | undefined
+    if (stn?.id) {
+      stationId = stn.id
+      db.prepare('UPDATE attendants SET stationId = ? WHERE id = ?').run(stationId, id)
+    }
+  }
+  if (table === 'supervisors' && user.isSuperAdmin !== 1 && user.isHeadOffice !== 1 && companyId && !stationId) {
+    const stn = db.prepare('SELECT id FROM companyStations WHERE companyId = ? AND active = 1 ORDER BY createdAt ASC LIMIT 1').get(companyId) as { id: string } | undefined
+    if (stn?.id) {
+      stationId = stn.id
+      db.prepare('UPDATE supervisors SET stationId = ? WHERE id = ?').run(stationId, id)
+    }
+  }
+
   if (table === 'attendants' && (!companyId || !stationId)) return null
   if (table === 'supervisors' && user.isSuperAdmin !== 1 && user.isHeadOffice !== 1 && (!companyId || !stationId)) return null
   if (table === 'supervisors' && user.isHeadOffice === 1 && !companyId) return null

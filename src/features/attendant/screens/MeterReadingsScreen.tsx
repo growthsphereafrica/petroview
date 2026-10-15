@@ -99,7 +99,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({
         setLoadingDefaults(true)
         try {
           const allShifts = await shiftRepo.listAll()
-          // Find the most recent closed shift for this pump that has closing readings
+          // Find closed shifts for this pump
           const prevShifts = allShifts.filter(
             s =>
               (s.pumpId === pumpId || (s.pumpName && pump.name && s.pumpName === pump.name)) &&
@@ -107,25 +107,42 @@ export const MeterReadingsScreen: React.FC<Props> = ({
               s.closingReadings.length > 0 &&
               (s.status === 'CLOSED' || s.status === 'APPROVED' || s.status === 'REJECTED'),
           )
-          const latestClosed = prevShifts.sort((a, b) =>
+          prevShifts.sort((a, b) =>
             new Date(b.closedAt || b.openedAt).getTime() - new Date(a.closedAt || a.openedAt).getTime(),
-          )[0]
+          )
 
-          if (!cancelled && latestClosed && latestClosed.closingReadings?.length) {
-            let filledCount = 0
-            for (const n of activeNozzles) {
-              const match =
-                latestClosed.closingReadings.find(r => r.nozzleIndex === n.nozzleIndex) ||
-                (latestClosed.closingReadings[n.nozzleIndex - 1]?.fuelCode === n.fuelCode ? latestClosed.closingReadings[n.nozzleIndex - 1] : undefined) ||
-                latestClosed.closingReadings.find(r => r.fuelCode === n.fuelCode)
-              if (match && match.value > 0) {
+          let filledCount = 0
+          const filledShifts: string[] = []
+
+          // Each nozzle is independent: find the newest closed shift that specifically operated this nozzle
+          for (const n of activeNozzles) {
+            for (const s of prevShifts) {
+              const match = s.closingReadings.find(r => {
+                // Must match the exact nozzle index
+                if (r.nozzleIndex !== undefined && r.nozzleIndex !== null) {
+                  return Number(r.nozzleIndex) === Number(n.nozzleIndex)
+                }
+                // Or match nozzle label if index is omitted
+                if (r.nozzleLabel && n.name) {
+                  return r.nozzleLabel.trim().toUpperCase() === n.name.trim().toUpperCase()
+                }
+                return false
+              })
+
+              if (match && Number(match.value) > 0) {
                 initial[n.nozzleIndex] = String(match.value)
                 filledCount += 1
+                const sName = s.number || s.id
+                if (sName && !filledShifts.includes(sName)) {
+                  filledShifts.push(sName)
+                }
+                break // Found the most recent closing reading specifically for this nozzle!
               }
             }
-            if (filledCount > 0) {
-              setAutoFilledShift(latestClosed.number || latestClosed.id)
-            }
+          }
+
+          if (!cancelled && filledCount > 0) {
+            setAutoFilledShift(filledShifts.join(', '))
           }
         } catch {
           // fallback to blank for manual first-time entry
@@ -195,7 +212,7 @@ export const MeterReadingsScreen: React.FC<Props> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
             <p className="text-[11px] text-emerald-300 font-medium">
               Opening stock auto-filled from closing readings of Shift{' '}
-              <span className="font-bold text-white">{autoFilledShift}</span>.
+              <span className="font-bold text-white font-mono">{autoFilledShift}</span>. Each nozzle retains its own unique meter reading.
             </p>
           </div>
         )}

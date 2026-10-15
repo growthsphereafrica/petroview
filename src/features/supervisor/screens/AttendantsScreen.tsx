@@ -119,7 +119,8 @@ export const SupervisorAttendantsScreen: React.FC<{
   const [editBusy, setEditBusy] = useState(false)
 
   const stationId = supervisor?.stationId || ''
-  const stationName = supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Forecourt'
+  const stationName = supervisor?.stationName || (supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Forecourt')
+  const companyName = supervisor?.companyName || supervisor?.companyShortCode || 'OMC Enterprise'
 
   // Fetch summary data & expenses for this station
   const loadStationSummary = useMemo(
@@ -340,7 +341,7 @@ export const SupervisorAttendantsScreen: React.FC<{
       <StatusBar online />
       <ScreenHeader
         title="Attendant Operations"
-        subtitle={stationName}
+        subtitle={`${companyName} · ${stationName}`}
         onBack={onBack}
         right={
           <div className="flex items-center gap-1.5 print:hidden">

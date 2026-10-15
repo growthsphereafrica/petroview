@@ -666,37 +666,54 @@ const OpenShiftModal: React.FC<{
       try {
         const { listShifts } = await import('../core/infra/repositories')
         const all = await listShifts()
-        const closed = all
+        const prevShifts = all
           .filter(
-            s =>
+            (s: any) =>
               s.pumpId === pumpId &&
               s.closingReadings &&
               Object.keys(s.closingReadings).length > 0 &&
               (s.status === 'CLOSED' || s.status === 'APPROVED' || s.status === 'REJECTED'),
           )
           .sort(
-            (a, b) =>
+            (a: any, b: any) =>
               new Date(b.closedAt || b.openedAt).getTime() - new Date(a.closedAt || a.openedAt).getTime(),
-          )[0]
+          )
 
         if (active) {
           const init: Record<number, string> = {}
           let filled = false
-          const closedReadings = closed?.closingReadings ? Object.values(closed.closingReadings) : []
+          const sourceShifts: string[] = []
+
           derivedNozzles.forEach((noz) => {
-            const matched = closedReadings.find((cr: any) => cr.nozzleIndex === noz.nozzleIndex) || closedReadings[noz.nozzleIndex - 1]
-            if (matched && typeof matched.value === 'number') {
-              init[noz.nozzleIndex] = String(matched.value)
-              filled = true
-            } else if (closed?.closingReadings?.[noz.fuelCode]?.value) {
-              init[noz.nozzleIndex] = String(closed.closingReadings[noz.fuelCode].value)
-              filled = true
-            } else {
+            let nozzleFilled = false
+            for (const s of prevShifts) {
+              const closedReadings = s.closingReadings ? Object.values(s.closingReadings) : []
+              const matched = closedReadings.find((cr: any) => {
+                if (cr.nozzleIndex !== undefined && cr.nozzleIndex !== null) {
+                  return Number(cr.nozzleIndex) === Number(noz.nozzleIndex)
+                }
+                if (cr.nozzleLabel && (noz as any).name) {
+                  return String(cr.nozzleLabel).trim().toUpperCase() === String((noz as any).name).trim().toUpperCase()
+                }
+                return false
+              }) as any
+
+              if (matched && typeof matched.value === 'number' && matched.value > 0) {
+                init[noz.nozzleIndex] = String(matched.value)
+                filled = true
+                nozzleFilled = true
+                if (s.number && !sourceShifts.includes(s.number)) {
+                  sourceShifts.push(s.number)
+                }
+                break
+              }
+            }
+            if (!nozzleFilled) {
               init[noz.nozzleIndex] = ''
             }
           })
           setReadings(init)
-          setAutoFilled(filled ? closed.number : null)
+          setAutoFilled(filled ? (sourceShifts.join(', ') || 'Previous Shift') : null)
         }
       } catch {
         if (active) {

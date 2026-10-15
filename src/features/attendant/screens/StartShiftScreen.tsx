@@ -4,6 +4,7 @@ import { Card, ScreenHeader } from '../ui'
 import {
   PRODUCTION_PUMPS,
   getStationPumps,
+  getStationName,
   registerStationPumps,
   deriveNozzlesForPump,
   FUEL_META,
@@ -67,25 +68,26 @@ export const StartShiftScreen: React.FC<{
 
   const [selectedNozzleIndices, setSelectedNozzleIndices] = useState<number[]>([])
 
-  // Reset selected nozzles when selected pump changes
+  // Reset selected nozzles to empty when selected pump changes — attendant must explicitly select their nozzle(s)
   useEffect(() => {
-    if (availableNozzles.length > 0) {
-      setSelectedNozzleIndices(availableNozzles.map(n => n.nozzleIndex))
-    }
-  }, [selected, availableNozzles])
+    setSelectedNozzleIndices([])
+  }, [selected])
 
   const toggleNozzle = (nozzleIndex: number) => {
     setSelectedNozzleIndices(prev => {
       if (prev.includes(nozzleIndex)) {
-        if (prev.length === 1) return prev // keep at least 1 nozzle selected
         return prev.filter(x => x !== nozzleIndex)
       }
       return [...prev, nozzleIndex].sort((a, b) => a - b)
     })
   }
 
-  const selectAllNozzles = () => {
-    setSelectedNozzleIndices(availableNozzles.map(n => n.nozzleIndex))
+  const toggleAllNozzles = () => {
+    if (selectedNozzleIndices.length === availableNozzles.length) {
+      setSelectedNozzleIndices([])
+    } else {
+      setSelectedNozzleIndices(availableNozzles.map(n => n.nozzleIndex))
+    }
   }
 
   return (
@@ -150,10 +152,10 @@ export const StartShiftScreen: React.FC<{
               {availableNozzles.length > 1 && (
                 <button
                   type="button"
-                  onClick={selectAllNozzles}
+                  onClick={toggleAllNozzles}
                   className="text-[10px] font-bold text-orange-400 hover:text-orange-300 px-2 py-1 rounded bg-slate-800 border border-slate-700/80 transition shrink-0"
                 >
-                  Select All
+                  {selectedNozzleIndices.length === availableNozzles.length ? 'Deselect All' : 'Select All'}
                 </button>
               )}
             </div>
@@ -203,16 +205,38 @@ export const StartShiftScreen: React.FC<{
             </div>
 
             {selectedNozzleIndices.length === 0 && (
-              <p className="text-[11px] font-bold text-rose-400">Please select at least one nozzle.</p>
+              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-2.5 flex items-center gap-2">
+                <span className="text-sm">⚠️</span>
+                <p className="text-[11px] font-bold text-amber-300">
+                  Tap your assigned nozzle(s) above to select them before opening shift.
+                </p>
+              </div>
             )}
           </div>
         )}
 
-        <Card className="p-3.5 border-slate-800/80">
-          <p className="text-[10px] font-bold uppercase tracking-wide text-slate-500 mb-1">Signed In Attendant</p>
-          <p className="text-xs text-slate-300">
-            <span className="font-bold text-white">{attendant?.fullName}</span> ({attendant?.employeeCode})
-          </p>
+        <Card className="p-3.5 border-slate-800/80 bg-slate-900/60">
+          <div className="flex items-center justify-between gap-2 mb-2 pb-2 border-b border-slate-800/80">
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-wider text-orange-400 font-mono">
+                {attendant?.companyName || attendant?.companyShortCode || 'OMC Enterprise'}
+              </p>
+              <p className="text-xs font-bold text-white flex items-center gap-1 mt-0.5">
+                <span className="text-orange-500">📍</span>
+                {attendant?.stationName || (attendant?.stationId ? getStationName(attendant.stationId) : 'Forecourt Branch')}
+              </p>
+            </div>
+            <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 border border-slate-700 text-slate-300 uppercase">
+              Assigned Branch
+            </span>
+          </div>
+
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-slate-400">Signed In Attendant:</span>
+            <span className="text-slate-200">
+              <span className="font-bold text-white">{attendant?.fullName}</span> ({attendant?.employeeCode})
+            </span>
+          </div>
         </Card>
 
         <button
@@ -222,7 +246,7 @@ export const StartShiftScreen: React.FC<{
         >
           {selectedNozzleIndices.length > 0
             ? `Continue to Opening Readings (${selectedNozzleIndices.length} Nozzle${selectedNozzleIndices.length > 1 ? 's' : ''})`
-            : 'Select a Nozzle to Continue'}
+            : 'Select Your Assigned Nozzle(s) to Continue'}
         </button>
       </div>
     </div>

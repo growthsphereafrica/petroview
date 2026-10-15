@@ -84,20 +84,20 @@ const SupervisorNavigator: React.FC = () => {
           <StatusBar online />
           <ScreenHeader
             title="Forecourt Pumps & Nozzles"
-            subtitle={`${supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch'} · Nozzle & Dispenser Layout`}
+            subtitle={`${supervisor?.stationName || (supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch')} · Nozzle & Dispenser Layout`}
             onBack={() => go('dashboard')}
           />
           <div className="flex-1 px-4 py-4 max-w-5xl w-full mx-auto">
             <PumpsManagementView
               companyId={supervisor?.companyId}
-              companyName={supervisor?.companyShortCode || 'Station'}
+              companyName={supervisor?.companyName || supervisor?.companyShortCode || 'Station'}
               userRole="supervisor"
               userStationId={supervisor?.stationId}
               availableProducts={availableProducts}
               stations={[
                 {
                   id: supervisor?.stationId || 'stn-01',
-                  name: supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch',
+                  name: supervisor?.stationName || (supervisor?.stationId ? getStationName(supervisor.stationId) : 'Station Branch'),
                 },
               ]}
             />

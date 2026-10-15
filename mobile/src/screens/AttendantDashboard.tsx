@@ -10,7 +10,7 @@ import {
   Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag, Building2 } from 'lucide-react-native'
+import { Fuel, Banknote, LogOut, RefreshCw, QrCode, Droplets, DollarSign, Zap, Calculator, Lock, AlertTriangle, CheckCircle, Check, Tag, Building2, Clock, ChevronRight } from 'lucide-react-native'
 import { colors } from '../theme'
 import { Card, PrimaryButton, StyledTextInput } from '../components/ui'
 import { QrSyncSheet } from '../components/QrSyncSheet'
@@ -23,6 +23,7 @@ import { PRODUCTION_PUMPS, PRODUCTION_STATION, getStationPumps, registerStationP
 import { mobileProductService } from '../core/services/productService'
 import { cloudGetPumps, pumpNameFor, cloudGetShifts } from '../core/infra/cloudApi'
 import { CorrectRejectedShiftModal } from './CorrectRejectedShiftModal'
+import { AttendantHistoryModal } from './AttendantHistoryModal'
 
 export const AttendantDashboard: React.FC<{
   session: MobileSession
@@ -31,6 +32,8 @@ export const AttendantDashboard: React.FC<{
   const [shift, setShift] = useState<Shift | null>(null)
   const [rejectedShift, setRejectedShift] = useState<Shift | null>(null)
   const [correctModal, setCorrectModal] = useState(false)
+  const [historyModal, setHistoryModal] = useState(false)
+  const [historyShifts, setHistoryShifts] = useState<Shift[]>([])
   const [successBanner, setSuccessBanner] = useState<string | null>(null)
   const [stationPumps, setStationPumps] = useState<ProductionPumpConfig[]>(() => getStationPumps(session.stationId))
   const [fuelPrices, setFuelPrices] = useState<Record<string, number>>(PRODUCTION_STATION.fuelPrices)
@@ -119,11 +122,13 @@ export const AttendantDashboard: React.FC<{
 
     const allShifts = await listShifts()
     allShifts.sort((a, b) => new Date(b.openedAt).getTime() - new Date(a.openedAt).getTime())
-    const active = allShifts.find(s => s.attendantId === attendantId && s.status === 'OPEN') || null
-    const rejShift = allShifts.find(s => s.attendantId === attendantId && s.status === 'REJECTED') || null
+    const myShifts = allShifts.filter(s => s.attendantId === attendantId)
+    const active = myShifts.find(s => s.status === 'OPEN') || null
+    const rejShift = myShifts.find(s => s.status === 'REJECTED') || null
 
     setShift(active)
     setRejectedShift(rejShift)
+    setHistoryShifts(myShifts)
     if (rejShift && !active) {
       setCorrectModal(true)
       setOpenModal(false)
@@ -191,24 +196,15 @@ export const AttendantDashboard: React.FC<{
               <QrCode size={16} color={colors.violet} />
             </Pressable>
             <Pressable
-              onPress={async () => {
-                setSyncing(true)
-                await syncNow()
-                const { pendingSyncCount } = await import('../core/infra/repositories')
-                setPendingCount(await pendingSyncCount())
-                await refresh()
-                setSyncing(false)
-              }}
-              style={styles.iconBtn}
-              disabled={syncing}
+              onPress={() => setHistoryModal(true)}
+              style={[
+                styles.iconBtn,
+                { backgroundColor: 'rgba(249, 115, 22, 0.15)', borderColor: 'rgba(249, 115, 22, 0.35)' },
+              ]}
               hitSlop={8}
             >
-              {syncing ? (
-                <ActivityIndicator size="small" color={colors.emerald} />
-              ) : (
-                <RefreshCw size={16} color={pendingCount ? colors.amber : colors.textDim} />
-              )}
-              <Text style={styles.iconBtnText}>{pendingCount} pending</Text>
+              <Clock size={16} color={colors.amber} />
+              <Text style={[styles.iconBtnText, { color: colors.amber, fontWeight: '800' }]}>History</Text>
             </Pressable>
           </View>
         </View>
@@ -470,6 +466,34 @@ export const AttendantDashboard: React.FC<{
           <Text style={styles.emptyText}>No sales recorded yet for this shift.</Text>
         )}
 
+        {/* Shift History & Reconciliation Access */}
+        <Pressable
+          onPress={() => setHistoryModal(true)}
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: '#0f172a',
+            borderRadius: 14,
+            padding: 14,
+            marginTop: 12,
+            marginBottom: 12,
+            borderWidth: 1,
+            borderColor: 'rgba(249, 115, 22, 0.35)',
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            <View style={{ width: 36, height: 36, borderRadius: 10, backgroundColor: 'rgba(249, 115, 22, 0.15)', alignItems: 'center', justifyContent: 'center' }}>
+              <Clock size={18} color={colors.amber} />
+            </View>
+            <View>
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '800' }}>Shift Submissions History</Text>
+              <Text style={{ color: colors.textDim, fontSize: 11, marginTop: 1 }}>{historyShifts.length} past shifts · Receipts & Remittances</Text>
+            </View>
+          </View>
+          <ChevronRight size={18} color={colors.textDim} />
+        </Pressable>
+
         {/* Sign out */}
         <Pressable onPress={onSignOut} style={[styles.signOut, { marginBottom: Math.max(insets.bottom, 16) }]} disabled={!!shift}>
           <LogOut size={14} color={shift ? colors.textFaint : colors.rose} />
@@ -518,6 +542,7 @@ export const AttendantDashboard: React.FC<{
               pumpId,
               openingReadings,
             })
+            try { await syncNow() } catch {}
             await refresh()
           } catch (e) {
             const { describeError } = await import('../core/services/shiftService')
@@ -568,6 +593,7 @@ export const AttendantDashboard: React.FC<{
               remittance,
               notes,
             })
+            try { await syncNow() } catch {}
             await refresh()
           } catch (e) {
             const { describeError } = await import('../core/services/shiftService')
@@ -592,6 +618,7 @@ export const AttendantDashboard: React.FC<{
               remittance: resubmitData.remittance,
               notes: resubmitData.notes,
             })
+            try { await syncNow() } catch {}
             setSuccessBanner(`Shift ${rejectedShift?.number ?? ''} corrected & resubmitted to manager for review.`)
             setTimeout(() => setSuccessBanner(null), 8000)
             await refresh()
@@ -599,6 +626,17 @@ export const AttendantDashboard: React.FC<{
             const { describeError } = await import('../core/services/shiftService')
             setError(describeError(e))
           }
+        }}
+      />
+
+      <AttendantHistoryModal
+        visible={historyModal}
+        shifts={historyShifts}
+        attendantName={session.fullName}
+        onClose={() => setHistoryModal(false)}
+        onCorrectShift={s => {
+          setRejectedShift(s)
+          setCorrectModal(true)
         }}
       />
 

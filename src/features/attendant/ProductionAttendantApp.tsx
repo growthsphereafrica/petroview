@@ -15,6 +15,7 @@ import { ReceiptCaptureScreen } from './screens/ReceiptCaptureScreen'
 import { ClosingReadingsScreen } from './screens/ClosingReadingsScreen'
 import { CorrectRejectedShiftScreen } from './screens/CorrectRejectedShiftScreen'
 import { ShiftSummaryScreen } from './screens/ShiftSummaryScreen'
+import { ShiftHistoryScreen } from './screens/ShiftHistoryScreen'
 import { SyncScreen } from './screens/SyncScreen'
 import { SettingsScreen } from './screens/SettingsScreen'
 import type { MeterReading, Shift } from '../../core/domain/types'
@@ -28,6 +29,7 @@ type Screen =
   | 'closing'
   | 'correct_shift'
   | 'summary'
+  | 'history'
   | 'sync'
   | 'settings'
 
@@ -100,6 +102,7 @@ const ShiftNavigator: React.FC = () => {
       onGoToTransactions={() => go('dashboard')}
       onGoToClose={() => go('closing')}
       onGoToCorrectShift={handleGoToCorrectShift}
+      onGoToHistory={() => go('history')}
       onGoToSync={() => go('sync')}
       onGoToSettings={() => go('settings')}
     />
@@ -142,6 +145,13 @@ const ShiftNavigator: React.FC = () => {
       )}
 
       {screen === 'summary' && <ShiftSummaryScreen onBack={() => go('dashboard')} onDone={() => go('start_shift')} />}
+
+      {screen === 'history' && (
+        <ShiftHistoryScreen
+          onBack={() => go('dashboard')}
+          onCorrectShift={handleGoToCorrectShift}
+        />
+      )}
 
       {screen === 'sync' && <SyncScreen onBack={() => go('dashboard')} />}
 

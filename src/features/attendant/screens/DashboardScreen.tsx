@@ -4,7 +4,7 @@
  */
 
 import React from 'react'
-import { AlertOctagon, CalendarClock, Flame, LogOut, MessageSquare, PlusCircle, RefreshCw, RotateCcw, Settings, Wifi } from 'lucide-react'
+import { AlertOctagon, CalendarClock, Flame, History, LogOut, MessageSquare, PlusCircle, RefreshCw, RotateCcw, Settings, Wifi } from 'lucide-react'
 import { useAttendantSession, useShift } from '../providers'
 import { Badge, Card, StatusBar, TappableRow } from '../ui'
 import { formatDateTime, formatGHS, formatTimeOnly } from '../../../utils/currencyFormatter'
@@ -16,9 +16,10 @@ export const DashboardScreen: React.FC<{
   onGoToTransactions: () => void
   onGoToClose: () => void
   onGoToCorrectShift?: (shift: Shift) => void
-  onGoToSync: () => void
+  onGoToHistory?: () => void
+  onGoToSync?: () => void
   onGoToSettings: () => void
-}> = ({ onGoToStartShift, onGoToTransactions, onGoToClose, onGoToCorrectShift, onGoToSync, onGoToSettings }) => {
+}> = ({ onGoToStartShift, onGoToTransactions, onGoToClose, onGoToCorrectShift, onGoToHistory, onGoToSync, onGoToSettings }) => {
   const { attendant, session, signOut } = useAttendantSession()
   const { activeShift, shifts, pendingCount, loading } = useShift()
   const rejectedShift = shifts.find(s => s.status === 'REJECTED')
@@ -45,18 +46,16 @@ export const DashboardScreen: React.FC<{
           </div>
         </div>
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={onGoToSync}
-            className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-orange-400 transition relative"
-            title="Sync"
-          >
-            <Wifi className="w-4 h-4" />
-            {pendingCount > 0 && (
-              <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-orange-500 text-slate-950 text-[9px] font-black flex items-center justify-center animate-pulse">
-                {pendingCount}
-              </span>
-            )}
-          </button>
+          {onGoToHistory && (
+            <button
+              onClick={onGoToHistory}
+              className="px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300 hover:text-orange-400 transition flex items-center gap-1.5 text-xs font-bold"
+              title="Shift & Submission History"
+            >
+              <History className="w-4 h-4 text-orange-400" />
+              <span className="hidden sm:inline">History</span>
+            </button>
+          )}
           <button
             onClick={onGoToSettings}
             className="p-2 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white transition"
@@ -233,24 +232,31 @@ export const DashboardScreen: React.FC<{
         {/* Recent shifts */}
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Your Shifts</h4>
-            <button onClick={onGoToSync} className="text-[11px] text-orange-400 hover:text-orange-300 font-bold flex items-center gap-1 transition">
-              <RefreshCw className="w-3 h-3" /> Sync
-            </button>
+            <h4 className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Recent Shift Submissions</h4>
+            {onGoToHistory && (
+              <button
+                onClick={onGoToHistory}
+                className="text-[11px] text-orange-400 hover:text-orange-300 font-bold flex items-center gap-1 transition"
+              >
+                <span>View All History</span>
+                <History className="w-3 h-3" />
+              </button>
+            )}
           </div>
           <Card className="divide-y divide-slate-800/70 overflow-hidden">
             {shifts.length === 0 ? (
               <p className="px-4 py-5 text-xs text-slate-500 text-center">No shifts yet. Start your first one.</p>
             ) : (
               shifts.slice(0, 4).map(s => (
-                <TappableRow
-                  key={s.id}
-                  title={s.number}
-                  subtitle={`${s.pumpName} · ${formatTimeOnly(s.openedAt)}`}
-                  value={formatGHS(s.actualTotal)}
-                  accent={s.status === 'OPEN' ? '#F97316' : '#6366f1'}
-                  icon={<CalendarClock className="w-4 h-4" />}
-                />
+                <div key={s.id} onClick={onGoToHistory} className="cursor-pointer">
+                  <TappableRow
+                    title={s.number}
+                    subtitle={`${s.pumpName} · ${formatTimeOnly(s.openedAt)}`}
+                    value={formatGHS(s.actualTotal)}
+                    accent={s.status === 'OPEN' ? '#F97316' : '#6366f1'}
+                    icon={<CalendarClock className="w-4 h-4" />}
+                  />
+                </div>
               ))
             )}
           </Card>

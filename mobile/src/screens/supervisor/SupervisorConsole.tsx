@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useState, useMemo } from 'react'
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import {
@@ -358,18 +358,123 @@ const QuickRow: React.FC<{ icon: React.ReactNode; title: string; subtitle: strin
 
 // ---- Tab 2: Shifts ---------------------------------------------------------
 
+type DateFilter = 'ALL' | 'TODAY' | 'YESTERDAY' | 'WEEK' | 'MONTH'
+
+const DATE_CHIPS: { key: DateFilter; label: string }[] = [
+  { key: 'ALL', label: 'All Time' },
+  { key: 'TODAY', label: 'Today' },
+  { key: 'YESTERDAY', label: 'Yesterday' },
+  { key: 'WEEK', label: '7 Days' },
+  { key: 'MONTH', label: 'Month' },
+]
+
+function isShiftToday(iso: string): boolean {
+  const d = new Date(iso)
+  const today = new Date()
+  return (
+    d.getFullYear() === today.getFullYear() &&
+    d.getMonth() === today.getMonth() &&
+    d.getDate() === today.getDate()
+  )
+}
+
+function isShiftYesterday(iso: string): boolean {
+  const d = new Date(iso)
+  const yesterday = new Date()
+  yesterday.setDate(yesterday.getDate() - 1)
+  return (
+    d.getFullYear() === yesterday.getFullYear() &&
+    d.getMonth() === yesterday.getMonth() &&
+    d.getDate() === yesterday.getDate()
+  )
+}
+
+function isShiftWithinDays(iso: string, days: number): boolean {
+  const d = new Date(iso).getTime()
+  const now = Date.now()
+  return now - d <= days * 24 * 60 * 60 * 1000
+}
+
+function isShiftSameMonth(iso: string): boolean {
+  const d = new Date(iso)
+  const now = new Date()
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()
+}
+
 const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: () => void }> = ({
   shifts,
   session,
   onChanged,
 }) => {
   const [filter, setFilter] = useState<'ALL' | Shift['status']>('ALL')
+  const [dateFilter, setDateFilter] = useState<DateFilter>('ALL')
   const [selected, setSelected] = useState<Shift | null>(null)
-  const filtered = filter === 'ALL' ? shifts : shifts.filter(s => s.status === filter)
+
+  const filtered = useMemo(() => {
+    return shifts.filter(s => {
+      const matchStatus = filter === 'ALL' || s.status === filter
+      const date = s.closedAt || s.openedAt
+      let matchDate = true
+      if (dateFilter === 'TODAY') matchDate = isShiftToday(date)
+      else if (dateFilter === 'YESTERDAY') matchDate = isShiftYesterday(date)
+      else if (dateFilter === 'WEEK') matchDate = isShiftWithinDays(date, 7)
+      else if (dateFilter === 'MONTH') matchDate = isShiftSameMonth(date)
+      return matchStatus && matchDate
+    })
+  }, [shifts, filter, dateFilter])
+
+  // Station Daily Reconciliation Aggregates
+  const reconciliation = useMemo(() => {
+    let expectedTotal = 0
+    let actualTotal = 0
+    let cashTotal = 0
+    let momoTotal = 0
+    let totalLitres = 0
+
+    for (const s of filtered) {
+      expectedTotal += s.salesTotal || 0
+      actualTotal += s.actualTotal || 0
+      cashTotal += s.payments?.CASH || 0
+      momoTotal += (s.payments?.MOMO || 0) + (s.payments?.VOUCHER || 0)
+      if (Array.isArray(s.sales)) {
+        for (const sale of s.sales) {
+          totalLitres += Number(sale.litres || 0)
+        }
+      }
+    }
+
+    const netVariance = actualTotal - expectedTotal
+    return { count: filtered.length, expectedTotal, actualTotal, cashTotal, momoTotal, totalLitres, netVariance }
+  }, [filtered])
 
   return (
     <View>
-      <Text style={styles.sectionTitle}>SHIFTS</Text>
+      <Text style={styles.sectionTitle}>SHIFT & RECONCILIATION REGISTER</Text>
+
+      {/* Date Filter Chips */}
+      <View style={[styles.chips, { marginBottom: 6 }]}>
+        {DATE_CHIPS.map(f => (
+          <Pressable
+            key={f.key}
+            onPress={() => setDateFilter(f.key)}
+            style={[
+              styles.chip,
+              dateFilter === f.key && { backgroundColor: colors.amber, borderColor: colors.amber },
+            ]}
+          >
+            <Text
+              style={[
+                styles.chipText,
+                dateFilter === f.key && { color: '#04130d', fontWeight: '900' },
+              ]}
+            >
+              {f.label}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
+
+      {/* Status Filter Chips */}
       <View style={styles.chips}>
         {(['ALL', 'CLOSED', 'OPEN', 'APPROVED', 'REJECTED'] as const).map(f => (
           <Pressable key={f} onPress={() => setFilter(f)} style={[styles.chip, filter === f && styles.chipActive]}>
@@ -379,9 +484,59 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
           </Pressable>
         ))}
       </View>
+
+      {/* Station Daily Reconciliation Summary Card */}
+      <Card style={[styles.listCard, { padding: 14, marginBottom: 12, backgroundColor: '#0e172a' }]}>
+        <Text style={{ color: colors.textDim, fontSize: 9, fontWeight: '900', letterSpacing: 0.5 }}>
+          STATION FORECOURT RECONCILIATION ({DATE_CHIPS.find(d => d.key === dateFilter)?.label})
+        </Text>
+        <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900', marginTop: 2, marginBottom: 8 }}>
+          {formatGHS(reconciliation.actualTotal)}
+          <Text style={{ fontSize: 11, color: colors.textDim, fontWeight: '600' }}> remitted ({reconciliation.count} shifts)</Text>
+        </Text>
+
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingTop: 6, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.08)' }}>
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: 'rgba(0,0,0,0.3)', padding: 7, borderRadius: 8 }}>
+            <Text style={{ color: colors.textDim, fontSize: 10 }}>💵 Total Cash</Text>
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800', marginTop: 1 }}>{formatGHS(reconciliation.cashTotal)}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: 'rgba(0,0,0,0.3)', padding: 7, borderRadius: 8 }}>
+            <Text style={{ color: colors.blue, fontSize: 10 }}>📱 MoMo / POS</Text>
+            <Text style={{ color: colors.blue, fontSize: 11, fontWeight: '800', marginTop: 1 }}>{formatGHS(reconciliation.momoTotal)}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: 'rgba(0,0,0,0.3)', padding: 7, borderRadius: 8 }}>
+            <Text style={{ color: colors.textDim, fontSize: 10 }}>⛽ Expected (Meters)</Text>
+            <Text style={{ color: '#fff', fontSize: 11, fontWeight: '800', marginTop: 1 }}>{formatGHS(reconciliation.expectedTotal)}</Text>
+          </View>
+          <View style={{ flex: 1, minWidth: '45%', backgroundColor: 'rgba(0,0,0,0.3)', padding: 7, borderRadius: 8 }}>
+            <Text style={{ color: colors.textDim, fontSize: 10 }}>⚖️ Station Variance</Text>
+            <Text
+              style={{
+                fontSize: 11,
+                fontWeight: '800',
+                marginTop: 1,
+                color:
+                  reconciliation.netVariance === 0
+                    ? colors.emerald
+                    : reconciliation.netVariance > 0
+                    ? colors.blue
+                    : colors.rose,
+              }}
+            >
+              {reconciliation.netVariance === 0 ? 'Balanced' : formatGHS(reconciliation.netVariance, { showSign: true })}
+            </Text>
+          </View>
+        </View>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, paddingTop: 6, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.06)' }}>
+          <Text style={{ color: colors.textDim, fontSize: 10 }}>Volume Sold:</Text>
+          <Text style={{ color: colors.amber, fontWeight: '800', fontSize: 10 }}>{formatLitres(reconciliation.totalLitres)} Litres</Text>
+        </View>
+      </Card>
+
       <Card style={styles.listCard}>
         {filtered.length === 0 && <Text style={styles.empty}>No shifts in this view.</Text>}
-        {filtered.map(s => (
+        {filtered.map((s: Shift) => (
           <Pressable key={s.id} onPress={() => setSelected(s)} style={styles.row}>
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
@@ -394,10 +549,15 @@ const ShiftsTab: React.FC<{ shifts: Shift[]; session: MobileSession; onChanged: 
               </View>
               <Text style={[styles.rowSub, { color: colors.text, fontWeight: '700' }]}>Attendant: {s.attendantName}</Text>
               <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '600', marginTop: 1 }]}>
-                {s.pumpName || pumpNameFor(s.pumpId)} · Nozzles: {formatShiftNozzles(s)}
+                {s.pumpName || pumpNameFor(s.pumpId)} · Nozzles: {formatShiftNozzles(s as any)}
               </Text>
               <Text style={[styles.rowSub, { fontSize: 10, color: colors.textDim }]}>{s.stationName}</Text>
-              <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '800', marginTop: 2 }]}>{formatGHS(s.actualTotal)}</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 2, alignItems: 'center' }}>
+                <Text style={[styles.rowSub, { color: colors.emerald, fontWeight: '800' }]}>{formatGHS(s.actualTotal)}</Text>
+                <Text style={[styles.rowSub, { fontSize: 10, color: s.variance === 0 ? colors.emerald : s.variance > 0 ? colors.blue : colors.rose }]}>
+                  Var: {formatGHS(s.variance, { showSign: true })}
+                </Text>
+              </View>
             </View>
             <Badge tone={toneFor(s.status)}>{labelFor(s.status)}</Badge>
           </Pressable>
@@ -468,7 +628,7 @@ const ShiftDetailModal: React.FC<{
                   Attendant: {shift.attendantName}
                 </Text>
                 <Text style={[styles.modalSub, { color: colors.emerald, fontWeight: '600', marginTop: 1 }]}>
-                  Dispenser: {shift.pumpName || pumpNameFor(shift.pumpId)} · Nozzles: {formatShiftNozzles(shift)}
+                  Dispenser: {shift.pumpName || pumpNameFor(shift.pumpId)} · Nozzles: {formatShiftNozzles(shift as any)}
                 </Text>
                 <Text style={[styles.modalSub, { fontSize: 10, color: colors.textDim }]}>
                   {shift.stationName}

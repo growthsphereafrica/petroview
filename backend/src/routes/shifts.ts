@@ -61,7 +61,7 @@ shiftsRouter.get('/', authenticate, (req: AuthRequest, res) => {
     }
     stationId = session.stationId
     companyId = null
-    attendantId = null
+    attendantId = requestedAttendant || null
   } else if (session.role === 'headoffice') {
     if (!session.companyId) {
       res.status(403).json({ error: 'FORBIDDEN', message: 'Your account is not assigned to a company.' })
@@ -72,6 +72,7 @@ shiftsRouter.get('/', authenticate, (req: AuthRequest, res) => {
       return
     }
     companyId = session.companyId
+    attendantId = requestedAttendant || null
   } else if (session.role === 'attendant') {
     // An attendant must ALWAYS be able to view their own shifts to check status and handle rejections
     attendantId = session.userId
@@ -84,6 +85,7 @@ shiftsRouter.get('/', authenticate, (req: AuthRequest, res) => {
   } else {
     stationId = stationId === 'ALL' ? null : stationId
     companyId = companyId === 'ALL' ? null : companyId
+    attendantId = requestedAttendant || null
   }
 
   const stationError = validateStationScope(req, stationId, companyId)
@@ -109,6 +111,17 @@ shiftsRouter.get('/', authenticate, (req: AuthRequest, res) => {
   if (attendantId) {
     conditions.push('attendantId = @attendantId')
     params.attendantId = attendantId
+  }
+
+  const fromDate = typeof req.query.from === 'string' && req.query.from.trim() ? req.query.from.trim() : null
+  const toDate = typeof req.query.to === 'string' && req.query.to.trim() ? req.query.to.trim() : null
+  if (fromDate) {
+    conditions.push('openedAt >= @fromDate')
+    params.fromDate = fromDate
+  }
+  if (toDate) {
+    conditions.push('openedAt <= @toDate')
+    params.toDate = toDate
   }
   const requestedLimit = Number(req.query.limit ?? 500)
   const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(Math.floor(requestedLimit), 1), 2000) : 500

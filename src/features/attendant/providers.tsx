@@ -240,6 +240,9 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       try {
         const shift = await shiftService.openShift({ attendant, pumpId: input.pumpId, openingReadings: input.openingReadings })
         setActiveShift(shift)
+        try {
+          await syncService.runPendingSync(true)
+        } catch { /* offline fallback */ }
         notify(`Shift ${shift.number} opened for Pump ${input.pumpId.replace('pump-', '')}`, 'success')
       } catch (err) {
         notify(describeError(err), 'error')
@@ -323,8 +326,11 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
       const closed = await shiftService.closeShift(activeShift, input.closingReadings, input.notes ?? null, input.remittance)
       setActiveShift(null)
       setShifts(prev => prev.map(s => (s.id === closed.id ? closed : s)))
+      try {
+        await syncService.runPendingSync(true)
+      } catch { /* offline fallback */ }
       await refresh()
-      notify(`Shift ${closed.number} closed and queued for sync.`, 'success')
+      notify(`Shift ${closed.number} closed and submitted directly to supervisor for review.`, 'success')
     },
     [activeShift, notify, refresh],
   )
@@ -349,8 +355,11 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
         remittance: input.remittance,
       })
       setShifts(prev => prev.map(s => (s.id === resubmitted.id ? resubmitted : s)))
+      try {
+        await syncService.runPendingSync(true)
+      } catch { /* offline fallback */ }
       await refresh()
-      notify(`Shift ${resubmitted.number} corrected and resubmitted for manager review.`, 'success')
+      notify(`Shift ${resubmitted.number} corrected and resubmitted directly for manager review.`, 'success')
     },
     [notify, refresh],
   )

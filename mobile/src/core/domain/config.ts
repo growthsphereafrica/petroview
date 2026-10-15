@@ -69,8 +69,8 @@ export interface ShiftNozzleDetail {
  */
 export function formatShiftNozzles(shift: {
   assignedNozzles?: string[] | number[]
-  openingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any>
-  closingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any>
+  openingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any> | null
+  closingReadings?: Array<{ nozzleLabel?: string; nozzleIndex?: number; fuelCode?: string }> | Record<string, any> | null
 }): string {
   if (Array.isArray(shift.assignedNozzles) && shift.assignedNozzles.length > 0) {
     return shift.assignedNozzles.map(String).join(', ')

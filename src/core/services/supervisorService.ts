@@ -148,37 +148,76 @@ export class SupervisorService {
 
       for (const s of remoteShifts) {
         if (!s || !s.id) continue
-        const local = await prodDb.shifts.get(s.id)
-        // Never overwrite a local shift that has uncommitted pending mutations in syncQueue
-        if (!local || local.syncStatus !== 'PENDING') {
-          await prodDb.shifts.put({
-            id: s.id,
-            number: s.number,
-            attendantId: s.attendantId,
-            attendantName: s.attendantName,
-            pumpId: s.pumpId,
-            pumpName: s.pumpName,
-            stationId: s.stationId,
-            stationName: s.stationName,
-            companyId: s.companyId,
-            companyShortCode: s.companyShortCode,
-            status: s.status,
-            openedAt: s.openedAt,
-            closedAt: s.closedAt,
-            openingReadings: s.openingReadings || [],
-            closingReadings: s.closingReadings || [],
-            sales: s.sales || [],
-            expectedTotal: s.expectedTotal || 0,
-            payments: s.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
-            actualTotal: s.actualTotal || 0,
-            variance: s.variance || 0,
-            notes: s.notes,
-            reviewerNotes: s.reviewerNotes,
-            syncStatus: 'SYNCED',
-            createdAt: s.createdAt || s.openedAt,
-            updatedAt: s.updatedAt || s.openedAt,
-          })
+        await prodDb.shifts.put({
+          id: s.id,
+          number: s.number,
+          attendantId: s.attendantId,
+          attendantName: s.attendantName,
+          pumpId: s.pumpId,
+          pumpName: s.pumpName,
+          stationId: s.stationId,
+          stationName: s.stationName,
+          companyId: s.companyId,
+          companyShortCode: s.companyShortCode,
+          status: s.status,
+          openedAt: s.openedAt,
+          closedAt: s.closedAt,
+          openingReadings: s.openingReadings || [],
+          closingReadings: s.closingReadings || [],
+          sales: s.sales || [],
+          expectedTotal: s.expectedTotal || 0,
+          payments: s.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+          actualTotal: s.actualTotal || 0,
+          variance: s.variance || 0,
+          notes: s.notes,
+          reviewerNotes: s.reviewerNotes,
+          reviewedBy: s.reviewedBy,
+          reviewedAt: s.reviewedAt,
+          assignedNozzles: s.assignedNozzles,
+          syncStatus: 'SYNCED',
+          createdAt: s.createdAt || s.openedAt,
+          updatedAt: s.updatedAt || s.openedAt,
+        })
+      }
+
+      if (remoteShifts.length > 0) {
+        const serverMapped: Shift[] = remoteShifts.map((s: any) => ({
+          id: s.id,
+          number: s.number,
+          attendantId: s.attendantId,
+          attendantName: s.attendantName,
+          pumpId: s.pumpId,
+          pumpName: s.pumpName,
+          stationId: s.stationId,
+          stationName: s.stationName,
+          companyId: s.companyId,
+          companyShortCode: s.companyShortCode,
+          status: s.status as ShiftStatus,
+          openedAt: s.openedAt,
+          closedAt: s.closedAt,
+          openingReadings: s.openingReadings || [],
+          closingReadings: s.closingReadings || [],
+          sales: s.sales || [],
+          expectedTotal: s.expectedTotal || 0,
+          payments: s.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+          actualTotal: s.actualTotal || 0,
+          variance: s.variance || 0,
+          notes: s.notes,
+          reviewerNotes: s.reviewerNotes,
+          reviewedBy: s.reviewedBy,
+          reviewedAt: s.reviewedAt,
+          assignedNozzles: s.assignedNozzles,
+          syncStatus: 'SYNCED',
+          createdAt: s.createdAt || s.openedAt,
+          updatedAt: s.updatedAt || s.openedAt,
+        }))
+        if (stationId) {
+          return serverMapped.filter(s => s.stationId === stationId)
         }
+        if (isHeadOffice && companyId) {
+          return serverMapped.filter(s => (s as any).companyId === companyId || (s as any).companyShortCode === companyId)
+        }
+        return isHeadOffice ? serverMapped : []
       }
     } catch (err) {
       console.warn('[supervisorService] Fallback to local DB for shifts:', err)
@@ -225,35 +264,25 @@ export class SupervisorService {
     if (verdict === 'REJECTED' && !notes.trim()) {
       throw new DomainError('SHIFT_NOT_REVIEWABLE', 'A note is required when rejecting a shift.')
     }
+
+    // Direct push to backend first: server is the single global source of truth!
+    const { backendReviewShift } = await import('../../services/backendApiService')
+    const { uploadEntityToCloud } = await import('../../services/cloudApiService')
+    await backendReviewShift(shiftId, verdict, notes.trim(), shift)
+
+    // Once server confirms review, update local repository & cache
     const updated = await shiftRepo.review(shiftId, verdict, notes.trim() || `Reviewed by supervisor`)
     if (!updated) throw new DomainError('SHIFT_NOT_FOUND', 'Shift not found.')
-
-    // 1. Enqueue to durable sync queue for guaranteed zero-loss delivery
-    await syncQueueRepo.add({
-      id: `sq-${crypto.randomUUID()}`,
-      entityType: 'SHIFT',
-      entityId: shiftId,
-      status: 'PENDING',
-      attempts: 0,
-      nextRetryAt: null,
-      lastError: null,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+    await prodDb.shifts.update(shiftId, {
+      status: verdict,
+      reviewerNotes: notes.trim(),
+      reviewedBy: reviewer?.fullName || reviewer?.id || 'Supervisor',
+      reviewedAt: new Date().toISOString(),
+      syncStatus: 'SYNCED',
     })
-
-    // 2. Direct push to backend for real-time reflection across HQ & Super Admin
     try {
-      const { backendReviewShift } = await import('../../services/backendApiService')
-      const { uploadEntityToCloud } = await import('../../services/cloudApiService')
-      await backendReviewShift(shiftId, verdict, notes.trim(), updated)
-      try {
-        await uploadEntityToCloud('SHIFT', shiftId)
-      } catch { /* will retry in queue */ }
-      await prodDb.shifts.update(shiftId, { syncStatus: 'SYNCED' })
-    } catch (pushErr) {
-      console.warn('[supervisorService] Immediate shift review upload warning, queued in background:', pushErr)
-      void syncService.runPendingSync()
-    }
+      await uploadEntityToCloud('SHIFT', shiftId)
+    } catch { /* best effort */ }
 
     await auditLogRepo.add({
       id: `audit-${crypto.randomUUID()}`,

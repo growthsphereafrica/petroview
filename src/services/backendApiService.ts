@@ -515,11 +515,22 @@ export async function backendReviewShift(
   verdict: 'APPROVED' | 'REJECTED',
   notes?: string,
   shift?: any,
-): Promise<{ id: string; status: string }> {
-  return apiCall(`/api/sync/shifts/${shiftId}/review`, {
-    method: 'POST',
-    body: JSON.stringify({ verdict, notes, shift }),
-  })
+): Promise<{ id: string; status: string; shift?: any }> {
+  const payload = { verdict, status: verdict, notes, reviewerNotes: notes, shift }
+  try {
+    return await apiCall(`/api/sync/shifts/${encodeURIComponent(shiftId)}/review`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    })
+  } catch (err: any) {
+    if (err?.message && (err.message.includes('404') || err.message.includes('Not Found'))) {
+      return await apiCall(`/api/shifts/${encodeURIComponent(shiftId)}/review`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      })
+    }
+    throw err
+  }
 }
 
 export async function backendGetAttendants(companyId?: string, stationId?: string): Promise<{ count: number; attendants: Array<Record<string, unknown>> }> {

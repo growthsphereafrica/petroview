@@ -855,8 +855,8 @@ function meterReadingsMatch(aStr: unknown, bStr: unknown): boolean {
 })
 
 syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const body = (req.body ?? {}) as { verdict?: string; notes?: string; shift?: Record<string, unknown> }
-  const verdict = String(body.verdict ?? '').toUpperCase()
+  const body = (req.body ?? {}) as { verdict?: string; notes?: string; status?: string; reviewerNotes?: string; shift?: Record<string, unknown> }
+  const verdict = String(body.verdict || body.status || '').toUpperCase()
   if (verdict !== 'APPROVED' && verdict !== 'REJECTED') {
     res.status(400).json({ error: 'BAD_REQUEST', message: 'verdict must be APPROVED or REJECTED.' })
     return
@@ -900,7 +900,9 @@ syncRouter.post('/shifts/:id/review', authenticate, requireRole('supervisor', 'h
     }
   }
 
-  const notes = typeof body.notes === 'string' ? body.notes.trim().slice(0, 2000) : null
+  const notes = typeof body.notes === 'string'
+    ? body.notes.trim().slice(0, 2000)
+    : (typeof body.reviewerNotes === 'string' ? body.reviewerNotes.trim().slice(0, 2000) : null)
   const reviewResult = db.transaction(() => {
     const result = db.prepare("UPDATE shifts SET status = ?, reviewerNotes = ?, reviewedBy = ?, reviewedAt = ?, syncStatus = 'SYNCED', updatedAt = ? WHERE id = ? AND (status = 'CLOSED' OR status = 'REJECTED')").run(verdict, notes, session.fullName || session.userId, now, now, shift.id)
     if (result.changes !== 1) return false

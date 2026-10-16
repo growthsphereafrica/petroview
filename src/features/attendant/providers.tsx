@@ -170,51 +170,67 @@ export const ShiftProvider: React.FC<{ children: React.ReactNode; attendant: Att
     }
     try {
       // 1. Fetch remote shifts from backend to get supervisor review decisions (REJECTED/APPROVED)
+      let serverShifts: Shift[] = []
+      let serverFetchSucceeded = false
       try {
         const remote = await backendGetShifts()
         if (remote && Array.isArray(remote.shifts)) {
-          for (const s of remote.shifts) {
-            if (s && s.id) {
-              const local = await shiftRepo.getById(s.id as string)
-              if (local) {
-                // If remote shift has a supervisor review verdict (REJECTED or APPROVED),
-                // it ALWAYS takes precedence over local state so attendant sees rejections immediately!
-                if (s.status === 'REJECTED' || s.status === 'APPROVED') {
-                  // Proceed to apply supervisor review verdict
-                } else {
-                  if (local.syncStatus === 'PENDING') continue
-                  if (local.status === 'CLOSED' && s.status === 'OPEN') continue
-                  if (local.status === 'CLOSED' && s.status === 'CLOSED' && (!s.closingReadings || (s.closingReadings as any[]).length === 0)) continue
-                }
-              }
-              const merged: Shift = {
-                ...(local || {}),
-                ...(s as unknown as Shift),
-                status: s.status as ShiftStatus,
-                reviewerNotes: (s.reviewerNotes as string) || local?.reviewerNotes || null,
-                reviewedBy: (s.reviewedBy as string) || local?.reviewedBy || null,
-                reviewedAt: (s.reviewedAt as string) || local?.reviewedAt || null,
-                closingReadings: (s.closingReadings && (s.closingReadings as any[]).length > 0) ? (s.closingReadings as any) : (local?.closingReadings || []),
-                syncStatus: 'SYNCED',
-              }
-              await shiftRepo.upsert(merged)
-            }
+          serverFetchSucceeded = true
+          serverShifts = remote.shifts.map((s: any) => ({
+            id: s.id,
+            number: s.number,
+            attendantId: s.attendantId,
+            attendantName: s.attendantName,
+            pumpId: s.pumpId,
+            pumpName: s.pumpName,
+            stationId: s.stationId,
+            stationName: s.stationName,
+            companyId: s.companyId,
+            companyShortCode: s.companyShortCode,
+            status: s.status as ShiftStatus,
+            openedAt: s.openedAt,
+            closedAt: s.closedAt,
+            openingReadings: s.openingReadings || [],
+            closingReadings: s.closingReadings || [],
+            sales: s.sales || [],
+            expectedTotal: s.expectedTotal || 0,
+            payments: s.payments || { CASH: 0, MOMO: 0, VOUCHER: 0, CREDIT: 0 },
+            actualTotal: s.actualTotal || 0,
+            variance: s.variance || 0,
+            notes: s.notes,
+            reviewerNotes: s.reviewerNotes,
+            reviewedBy: s.reviewedBy,
+            reviewedAt: s.reviewedAt,
+            assignedNozzles: s.assignedNozzles,
+            syncStatus: 'SYNCED',
+            createdAt: s.createdAt || s.openedAt,
+            updatedAt: s.updatedAt || s.openedAt,
+          }))
+
+          for (const s of serverShifts) {
+            await shiftRepo.upsert(s)
           }
         }
       } catch (cloudErr) {
         // Offline / network failure: gracefully fall back to local IndexedDB
       }
 
-      const [current, history] = await Promise.all([
-        shiftService.getActiveShift(attendant.id),
-        shiftService.listShifts(attendant.id),
-      ])
-      setActiveShift(current)
-      setShifts(history)
+      if (serverFetchSucceeded) {
+        // Direct server storage: no delay, globally synchronized
+        const attendantShifts = serverShifts.filter(s => s.attendantId === attendant.id)
+        const active = attendantShifts.find(s => s.status === 'OPEN') || null
+        setActiveShift(active)
+        setShifts(attendantShifts)
+      } else {
+        const [current, history] = await Promise.all([
+          shiftService.getActiveShift(attendant.id),
+          shiftService.listShifts(attendant.id),
+        ])
+        setActiveShift(current)
+        setShifts(history)
+      }
       setPendingCount(await syncService.pendingCount())
     } catch (err) {
-      // Never leave `loading` true: a rejected read used to strand the
-      // attendant on a permanent spinner with no way forward.
       console.error('[shift] refresh failed', err)
     } finally {
       setLoading(false)

@@ -146,13 +146,25 @@ shiftsRouter.get('/:id', authenticate, (req: AuthRequest, res) => {
 })
 
 shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headoffice', 'superadmin'), (req: AuthRequest, res) => {
-  const body = (req.body ?? {}) as { status?: string; reviewerNotes?: string }
-  const status = String(body.status ?? '').toUpperCase()
+  const body = (req.body ?? {}) as { status?: string; reviewerNotes?: string; verdict?: string; notes?: string; shift?: Record<string, unknown> }
+  const rawStatus = body.status || body.verdict || ''
+  const status = String(rawStatus).toUpperCase()
   if (!['APPROVED', 'REJECTED', 'REVIEWED'].includes(status)) {
     res.status(400).json({ error: 'BAD_REQUEST', message: 'Valid status (APPROVED, REJECTED, REVIEWED) is required.' })
     return
   }
-  const shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id) as ScopedShiftRow | undefined
+  let shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id) as ScopedShiftRow | undefined
+  if (!shift && body.shift && typeof body.shift === 'object') {
+    const { validateShiftData } = require('./sync')
+    const validated = validateShiftData(sessionOf(req), { ...body.shift, status: 'CLOSED', closedAt: body.shift.closedAt ?? new Date().toISOString() }, true)
+    if (validated.id === req.params.id) {
+      try {
+        const { insertShift } = require('./sync')
+        insertShift.run(validated)
+        shift = db.prepare('SELECT * FROM shifts WHERE id = ?').get(req.params.id) as ScopedShiftRow
+      } catch { /* proceed */ }
+    }
+  }
   if (!shift) {
     res.status(404).json({ error: 'NOT_FOUND', message: 'Shift not found.' })
     return
@@ -178,7 +190,9 @@ shiftsRouter.post('/:id/review', authenticate, requireRole('supervisor', 'headof
       return
     }
   }
-  const reviewerNotes = typeof body.reviewerNotes === 'string' ? body.reviewerNotes.trim().slice(0, 1000) : null
+  const reviewerNotes = typeof body.reviewerNotes === 'string'
+    ? body.reviewerNotes.trim().slice(0, 2000)
+    : (typeof body.notes === 'string' ? body.notes.trim().slice(0, 2000) : null)
   const now = new Date().toISOString()
   const reviewerName = sessionOf(req).fullName || sessionOf(req).userId
   const applied = db.prepare(`

@@ -13,12 +13,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@esbuild/win32-x64": "0.28.2",
     "better-sqlite3": "^11.10.0",
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.0",
-    "helmet": "^8.3.0"
+    "helmet": "^8.3.0",
+    "master-view": "file:.."
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

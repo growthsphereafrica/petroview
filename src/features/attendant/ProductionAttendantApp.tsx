@@ -52,7 +52,7 @@ const ShiftNavigator: React.FC = () => {
   const hasRejectedShift = Boolean(rejectedShift)
 
   const go = (s: Screen) => {
-    if (hasRejectedShift && (s === 'start_shift' || s === 'opening_readings' || s === 'closing' || s === 'sales' || s === 'receipts')) {
+    if (hasRejectedShift && (s === 'start_shift' || s === 'opening_readings' || s === 'closing' || s === 'sales' || s === 'receipts' || s === 'dashboard')) {
       if (rejectedShift) setCorrectingShift(rejectedShift)
       setScreen('correct_shift')
       return
